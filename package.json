@@ -1,0 +1,19 @@
+{
+  "name": "stockscan",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Node.js server that scrapes SEC Inline XBRL filings and serves the primary financial statements as JSON",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "build:web": "npm --prefix web run build",
+    "postinstall": "npm --prefix web install"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "express": "^4.21.0"
+  }
+}
