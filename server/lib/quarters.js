@@ -15,13 +15,13 @@ const QUARTERS = ['Q1', 'Q2', 'Q3'];
 const TYPES = ['balance_sheet', 'income_statement', 'comprehensive_income', 'cash_flow'];
 const DAY = 86400000;
 
-const dimKey = (dims) =>
+export const dimKey = (dims) =>
   Object.entries(dims)
     .sort()
     .map(([k, v]) => `${k}=${v}`)
     .join('|');
-const near = (a, b, days = 4) => !!a && !!b && Math.abs(new Date(a) - new Date(b)) <= days * DAY;
-const months = (start, end) => Math.round((new Date(end) - new Date(start)) / DAY / 30.4375);
+export const near = (a, b, days = 4) => !!a && !!b && Math.abs(new Date(a) - new Date(b)) <= days * DAY;
+export const months = (start, end) => Math.round((new Date(end) - new Date(start)) / DAY / 30.4375);
 
 // currency amounts subtract exactly; per-share amounts only approximately
 // (weighted shares differ by period); share counts and ratios not at all.
@@ -32,13 +32,13 @@ function subtractability(unit) {
   return 'exact';
 }
 
-function statementOf(data, type) {
+export function statementOf(data, type) {
   if (!data) return null;
   if (type === 'comprehensive_income') return data.allStatements.find((s) => s.type === type && !s.parenthetical) || null;
   return data.statements[type];
 }
 
-function findColumn(stmt, { dims, instant, end, start, monthsLen }) {
+export function findColumn(stmt, { dims, instant, end, start, monthsLen }) {
   if (!stmt) return null;
   return (
     stmt.columns.find((c) => {
@@ -55,7 +55,7 @@ function findColumn(stmt, { dims, instant, end, start, monthsLen }) {
 // Filers occasionally switch concepts between filings (e.g. Alphabet moved
 // from RevenueFromContractWithCustomerExcludingAssessedTax to Revenues in
 // 2025), so fall back on the row label and a few known synonyms.
-const SYNONYMS = [
+export const SYNONYMS = [
   ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax', 'us-gaap:SalesRevenueNet'],
   ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsAndServicesSold'],
   ['us-gaap:PropertyPlantAndEquipmentNet', 'us-gaap:PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization'],
@@ -257,4 +257,84 @@ export async function buildQuarterly(client, company, year) {
     allStatements: all,
     stats: { facts: Object.values(docs).reduce((n, d) => n + d.stats.facts, 0), contexts: 0, statementRoles: all.length },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Generic per-year extraction used by the indicators page: every undimensioned
+// numeric fact of the flow statements and the balance sheet, per quarter.
+// Works with any subset of {Q1, Q2, Q3, FY}; Q4 flows need FY plus a cumulative
+// nine-month figure (Q3 YTD, or Q1..Q3 three-month columns).
+
+const FLOW_TYPES = ['income_statement', 'comprehensive_income', 'cash_flow'];
+const canon = (concept) => (SYNONYMS[concept] ? SYNONYMS[concept][0] : concept);
+
+function factsAt(stmt, colId, into) {
+  if (!stmt || !colId) return into;
+  for (const li of stmt.lineItems) {
+    if (li.abstract) continue;
+    const cell = li.values[colId];
+    if (!cell || typeof cell.value !== 'number') continue;
+    const key = canon(li.concept);
+    if (!(key in into)) into[key] = cell.value;
+  }
+  return into;
+}
+
+function flowsAt(data, { end, monthsLen }) {
+  const out = {};
+  for (const type of FLOW_TYPES) {
+    const stmt = statementOf(data, type);
+    const col = findColumn(stmt, { dims: '', end, monthsLen });
+    factsAt(stmt, col?.id, out);
+  }
+  return out;
+}
+
+function balancesAt(data, instant) {
+  const stmt = statementOf(data, 'balance_sheet');
+  const col = findColumn(stmt, { dims: '', instant });
+  return factsAt(stmt, col?.id, {});
+}
+
+export function yearQuarterPoints(docs, filings) {
+  const points = [];
+  const three = {};
+  const ytd = {};
+  for (const [i, q] of QUARTERS.entries()) {
+    if (!docs[q]) continue;
+    const end = filings[q].reportDate;
+    three[i + 1] = flowsAt(docs[q], { end, monthsLen: 3 });
+    ytd[i + 1] = i === 0 ? three[1] : flowsAt(docs[q], { end, monthsLen: 3 * (i + 1) });
+    points.push({ period: q, periodEnd: end, flows: {}, balances: balancesAt(docs[q], end), sources: [filings[q].accession] });
+  }
+  const fyFlows = docs.FY ? flowsAt(docs.FY, { end: filings.FY.reportDate, monthsLen: 12 }) : null;
+
+  const concepts = new Set();
+  for (const m of [...Object.values(three), ...Object.values(ytd), fyFlows || {}]) for (const c of Object.keys(m)) concepts.add(c);
+
+  const cum = { 0: {} };
+  for (const c of concepts) {
+    let prev = 0;
+    for (let n = 1; n <= 3; n++) {
+      const y = ytd[n]?.[c];
+      const t = three[n]?.[c];
+      const cur = y ?? (prev != null && t != null ? prev + t : null);
+      (cum[n] ||= {})[c] = cur;
+      const p = points.find((pt) => pt.period === `Q${n}`);
+      if (p) p.flows[c] = t ?? (cur != null && prev != null ? cur - prev : null);
+      prev = cur;
+    }
+  }
+
+  if (docs.FY) {
+    const end = filings.FY.reportDate;
+    const q4 = { period: 'Q4', periodEnd: end, flows: {}, balances: balancesAt(docs.FY, end), sources: [filings.FY.accession], fy: fyFlows };
+    for (const c of Object.keys(fyFlows)) {
+      const c3 = cum[3]?.[c];
+      q4.flows[c] = c3 != null ? fyFlows[c] - c3 : null;
+    }
+    if (docs.Q3) q4.sources.push(filings.Q3.accession);
+    points.push(q4);
+  }
+  return points;
 }

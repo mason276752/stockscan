@@ -8,27 +8,42 @@ const results = ref([]);
 const open = ref(false);
 const loading = ref(false);
 let timer = null;
+let requestId = 0;
+let chosen = ''; // last value we set programmatically: don't reopen the list for it
 
 watch(query, (q) => {
   clearTimeout(timer);
+  if (q === chosen) return;
+  chosen = '';
   if (!q.trim()) {
     results.value = [];
+    open.value = false;
     return;
   }
   timer = setTimeout(async () => {
+    const id = ++requestId;
     loading.value = true;
     try {
-      results.value = await api.search(q);
-      open.value = true;
+      const rows = await api.search(q);
+      if (id !== requestId || query.value === chosen) return; // stale, or user already picked
+      results.value = rows;
+      open.value = rows.length > 0;
     } finally {
       loading.value = false;
     }
   }, 200);
 });
 
-function choose(row) {
+function close() {
+  clearTimeout(timer);
+  requestId++; // drop any in-flight search
   open.value = false;
+}
+
+function choose(row) {
+  chosen = row.ticker;
   query.value = row.ticker;
+  close();
   emit('select', row.ticker);
 }
 
@@ -36,8 +51,18 @@ function submit() {
   const q = query.value.trim();
   if (!q) return;
   if (results.value.length && results.value[0].ticker.toUpperCase() === q.toUpperCase()) return choose(results.value[0]);
-  open.value = false;
+  chosen = query.value;
+  close();
   emit('select', q);
+}
+
+function onFocus() {
+  if (results.value.length && query.value !== chosen) open.value = true;
+}
+
+function onBlur() {
+  // let a mousedown on a suggestion run first
+  setTimeout(() => (open.value = false), 150);
 }
 </script>
 
@@ -48,8 +73,9 @@ function submit() {
       type="text"
       placeholder="輸入股票代號或公司名稱，例如 GOOGL、AAPL、TSM，或直接輸入 CIK"
       @keydown.enter="submit"
-      @focus="results.length && (open = true)"
-      @blur="setTimeout(() => (open = false), 150)"
+      @keydown.esc="close"
+      @focus="onFocus"
+      @blur="onBlur"
     />
     <ul v-if="open && results.length" class="suggest">
       <li v-for="r in results" :key="r.ticker" @mousedown.prevent="choose(r)">

@@ -2,6 +2,7 @@
 // and a small TTL cache so the UI can flip between filings without re-downloading.
 
 const MIN_INTERVAL_MS = 110;
+const MAX_IN_FLIGHT = 4;
 
 export class SecClient {
   constructor({ userAgent = process.env.SEC_USER_AGENT, timeoutMs = 60_000 } = {}) {
@@ -15,6 +16,8 @@ export class SecClient {
     this.timeoutMs = timeoutMs;
     this.queue = Promise.resolve();
     this.lastRequest = 0;
+    this.inFlight = 0;
+    this.waiters = [];
     this.cache = new Map(); // url -> { expires, value }
   }
 
@@ -29,17 +32,49 @@ export class SecClient {
     return run;
   }
 
-  async fetch(url, { retries = 3 } = {}) {
+  async _acquire() {
+    if (this.inFlight < MAX_IN_FLIGHT) {
+      this.inFlight++;
+      return;
+    }
+    await new Promise((r) => this.waiters.push(r));
+    this.inFlight++;
+  }
+
+  _release() {
+    this.inFlight--;
+    const next = this.waiters.shift();
+    if (next) next();
+  }
+
+  async fetch(url, { retries = 4 } = {}) {
+    await this._acquire();
+    try {
+      return await this._fetchWithRetry(url, retries);
+    } finally {
+      this._release();
+    }
+  }
+
+  async _fetchWithRetry(url, retries) {
     let lastErr;
     for (let attempt = 0; attempt < retries; attempt++) {
       await this._slot();
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
       try {
-        const res = await fetch(url, {
-          headers: { 'User-Agent': this.userAgent, 'Accept-Encoding': 'gzip, deflate' },
-          signal: ctrl.signal,
-        });
+        let res;
+        try {
+          res = await fetch(url, {
+            headers: { 'User-Agent': this.userAgent, 'Accept-Encoding': 'gzip, deflate' },
+            signal: ctrl.signal,
+          });
+        } catch (err) {
+          // network hiccup / timeout: back off and try again
+          lastErr = new Error(`${err.cause?.message || err.message} while fetching ${url}`);
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
         if (res.status === 429 || res.status >= 500) {
           lastErr = new Error(`SEC returned ${res.status} for ${url}`);
           await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));

@@ -7,6 +7,7 @@ import { SecClient } from './lib/secClient.js';
 import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, pickFiling, searchCompanies } from './lib/edgar.js';
 import { scrapeFiling } from './lib/scrape.js';
 import { buildQuarterly } from './lib/quarters.js';
+import { buildIndicators } from './lib/indicators.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -70,6 +71,26 @@ app.get(
     if (!year) return res.status(400).json({ error: 'year query parameter required' });
     const company = await getCompany(client, req.params.id);
     res.json(await dedupe(`q4:${company.cik}:${year}`, () => buildQuarterly(client, company, year)));
+  }),
+);
+
+// GET /api/company/GOOGL/indicators?year=2023&period=Q3&n=20&basis=x4|ttm&mode=quarter|year
+// -> financial ratios for the 20 fiscal quarters ending at FY2023 Q3, or with
+//    mode=year, N years each made of the four quarters ending at that quarter
+//    (2022 Q4 + 2023 Q1..Q3, 2021 Q4 + 2022 Q1..Q3, ...)
+app.get(
+  '/api/company/:id/indicators',
+  wrap(async (req, res) => {
+    const year = Number(req.query.year);
+    const period = String(req.query.period || 'FY').toUpperCase();
+    if (!year || !/^(Q[1-4]|FY)$/.test(period)) return res.status(400).json({ error: 'year and period (Q1-Q4 or FY) required' });
+    const mode = req.query.mode === 'year' ? 'year' : 'quarter';
+    const n = Math.min(mode === 'year' ? 10 : 40, Math.max(1, Number(req.query.n) || (mode === 'year' ? 5 : 20)));
+    const basis = req.query.basis === 'ttm' ? 'ttm' : 'x4';
+    const company = await getCompany(client, req.params.id);
+    res.json(
+      await dedupe(`ind:${company.cik}:${year}:${period}:${n}:${basis}:${mode}`, () => buildIndicators(client, company, { year, period, n, basis, mode })),
+    );
   }),
 );
 

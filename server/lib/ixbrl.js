@@ -22,9 +22,10 @@ export function prefixMap($) {
   const byUri = {};
   for (const [k, v] of Object.entries(attrs)) {
     if (k.startsWith('xmlns:')) byUri[v] = k.slice(6);
+    else if (k === 'xmlns') byUri[v] = ''; // default namespace: unprefixed tags
   }
   const map = {};
-  for (const [canon, uri] of Object.entries(NS)) map[canon] = byUri[uri] || canon;
+  for (const [canon, uri] of Object.entries(NS)) map[canon] = byUri[uri] ?? canon;
   return map;
 }
 

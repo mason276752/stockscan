@@ -6,12 +6,18 @@ import { buildStatements } from './statements.js';
 
 const FILING_TTL = 24 * 3600 * 1000; // a filed document never changes
 
+// Parsed filings are cached by accession (small); the raw SEC responses are
+// not kept, so a company's multi-year history does not pin tens of MB.
+const RESULT_TTL = 24 * 3600 * 1000;
+const RESULT_CAP = 400;
+const results = new Map(); // accession -> { expires, promise }
+
 // MetaLinks.json (written by EDGAR's renderer) carries the standard label and
 // the taxonomy definition of every concept used in the filing.
 async function loadConceptMeta(client, folderUrl, folderFiles) {
   if (!folderFiles.includes('MetaLinks.json')) return {};
   try {
-    const meta = await client.json(`${folderUrl}/MetaLinks.json`, { ttlMs: FILING_TTL });
+    const meta = await client.json(`${folderUrl}/MetaLinks.json`);
     const out = {};
     for (const inst of Object.values(meta.instance || {})) {
       for (const [key, tag] of Object.entries(inst.tag || {})) {
@@ -27,16 +33,23 @@ async function loadConceptMeta(client, folderUrl, folderFiles) {
   }
 }
 
-export async function scrapeFiling(client, filing, company = null) {
-  const doc = parseInlineXbrl(await client.text(filing.documentUrl, { ttlMs: FILING_TTL }));
+export function scrapeFiling(client, filing, company = null) {
+  const hit = results.get(filing.accession);
+  if (hit && hit.expires > Date.now()) return hit.promise;
+  const promise = scrapeUncached(client, filing, company).catch((err) => {
+    results.delete(filing.accession);
+    throw err;
+  });
+  results.set(filing.accession, { expires: Date.now() + RESULT_TTL, promise });
+  if (results.size > RESULT_CAP) results.delete(results.keys().next().value);
+  return promise;
+}
+
+async function scrapeUncached(client, filing, company) {
+  const doc = parseInlineXbrl(await client.text(filing.documentUrl));
   const folder = await client.json(`${filing.folderUrl}/index.json`, { ttlMs: FILING_TTL });
   const folderFiles = folder.directory.item.map((i) => i.name);
-  const tax = await loadTaxonomy(
-    { text: (url) => client.text(url, { ttlMs: FILING_TTL }) },
-    filing.folderUrl,
-    doc.schemaRef,
-    folderFiles,
-  );
+  const tax = await loadTaxonomy({ text: (url) => client.text(url) }, filing.folderUrl, doc.schemaRef, folderFiles);
   const concepts = await loadConceptMeta(client, filing.folderUrl, folderFiles);
   const { statements, allStatements } = buildStatements(doc, tax, concepts);
   return {

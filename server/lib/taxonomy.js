@@ -24,7 +24,7 @@ export function roleInfo(definition) {
 function load(data) {
   const $ = typeof data === 'string' ? loadXml(data) : data;
   const p = prefixMap($);
-  return { $, t: (canon, local) => tag(p[canon], local), x: (local) => `${p.xlink}:${local}` };
+  return { $, t: (canon, local) => tag(p[canon], local), x: (local) => (p.xlink ? `${p.xlink}:${local}` : local) };
 }
 
 export function parseSchema(data) {

@@ -12,4 +12,6 @@ export const api = {
   filingUrl: (cik, accession) => `/api/filing/${cik}/${accession}`,
   quarters: (id, year) => get(`/api/company/${encodeURIComponent(id)}/quarters?year=${year}`),
   quartersUrl: (id, year) => `/api/company/${encodeURIComponent(id)}/quarters?year=${year}`,
+  indicators: (id, params) => get(`/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`),
+  indicatorsUrl: (id, params) => `/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`,
 };
