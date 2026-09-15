@@ -105,6 +105,27 @@ export const store = {
   putScore(accession, cik, reportDate, version, score) {
     need().prepare('INSERT OR REPLACE INTO scores (accession, cik, report_date, version, json) VALUES (?, ?, ?, ?, ?)').run(accession, cik, reportDate ?? null, version, pack(score));
   },
+  scoreCount(version) {
+    return need().prepare('SELECT COUNT(*) AS n FROM scores WHERE version = ?').get(version).n;
+  },
+  // newest scored filing per company (amendments excluded by the caller when saving)
+  latestScoreRows(version) {
+    const rows = need()
+      .prepare(
+        `SELECT s.cik, s.accession, s.json FROM scores s
+         JOIN (SELECT cik, MAX(report_date) AS rd FROM scores WHERE version = ? GROUP BY cik) m ON m.cik = s.cik AND m.rd = s.report_date
+         WHERE s.version = ?`,
+      )
+      .all(version, version);
+    const seen = new Set();
+    const out = [];
+    for (const r of rows) {
+      if (seen.has(r.cik)) continue;
+      seen.add(r.cik);
+      out.push(unpack(r.json));
+    }
+    return out;
+  },
   unscoredAccessions(version) {
     return need().prepare('SELECT f.accession FROM filings f LEFT JOIN scores s ON s.accession = f.accession AND s.version = ? WHERE s.accession IS NULL').all(version).map((r) => r.accession);
   },

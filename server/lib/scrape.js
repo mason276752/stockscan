@@ -2,7 +2,7 @@
 
 import { parseInlineXbrl } from './ixbrl.js';
 import { loadTaxonomy } from './taxonomy.js';
-import { buildStatements } from './statements.js';
+import { buildStatements, reclassify } from './statements.js';
 import { store, requireVersion } from './store.js';
 import { applyZh } from './zh.js';
 
@@ -68,7 +68,7 @@ export async function ensureStored(client, filing, company) {
 async function loadOrScrape(client, filing, company) {
   const saved = store.getFiling(filing.accession);
   // a saved result with no statements came from a parser bug: parse it again
-  if (saved && saved.stats?.statementRoles > 0) return applyZh(saved);
+  if (saved && saved.stats?.statementRoles > 0) return applyZh(reclassify(saved));
   const result = await scrapeUncached(client, filing, company);
   store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
   return result;

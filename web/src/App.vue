@@ -8,6 +8,7 @@ import IndicatorsTable from './components/IndicatorsTable.vue';
 import ValuationPanel from './components/ValuationPanel.vue';
 import BrowsePage from './components/BrowsePage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
+import ScreenerPage from './components/ScreenerPage.vue';
 import ScoreCard from './components/ScoreCard.vue';
 import { isWatched, toggleWatch, watchlist } from './watchlist';
 
@@ -273,8 +274,8 @@ watch([company, filing, tab, indMode, view, page, browseParams], () => {
   if (page.value === 'browse') {
     p.set('page', 'browse');
     for (const [k, v] of Object.entries(browseParams.value)) if (v) p.set(k, v);
-  } else if (page.value === 'watch') {
-    p.set('page', 'watch');
+  } else if (page.value === 'watch' || page.value === 'screen') {
+    p.set('page', page.value);
   } else {
     if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
     if (filing.value?.quartersYear) p.set('quarters', filing.value.quartersYear);
@@ -299,8 +300,8 @@ function applyUrl() {
     browseParams.value = { cat: p.get('cat') || 'sic', code: p.get('code') || '', afs: p.get('afs') || '', etf: p.get('etf') || '' };
     return;
   }
-  if (p.get('page') === 'watch') {
-    page.value = 'watch';
+  if (p.get('page') === 'watch' || p.get('page') === 'screen') {
+    page.value = p.get('page');
     return;
   }
   page.value = 'report';
@@ -329,6 +330,7 @@ onMounted(() => {
       <nav class="nav">
         <button :class="{ active: page === 'report' }" @click="page = 'report'">財報</button>
         <button :class="{ active: page === 'browse' }" @click="page = 'browse'">分類瀏覽</button>
+        <button :class="{ active: page === 'screen' }" @click="page = 'screen'">尋找股票</button>
         <button :class="{ active: page === 'watch' }" @click="page = 'watch'">觀察名單<span v-if="watchlist.items.length" class="count">{{ watchlist.items.length }}</span></button>
       </nav>
       <CompanySearch @select="openCompany" />
@@ -337,6 +339,7 @@ onMounted(() => {
 
     <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" />
     <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" />
+    <ScreenerPage v-else-if="page === 'screen'" @open="openCompany" />
 
     <template v-else>
     <p v-if="error" class="error">{{ error }}</p>
@@ -542,7 +545,8 @@ onMounted(() => {
       輸入股票代號開始，例如 <a href="?company=GOOGL" @click.prevent="loadCompany('GOOGL')">GOOGL</a>、
       <a href="?company=AAPL" @click.prevent="loadCompany('AAPL')">AAPL</a>、
       <a href="?company=TSM" @click.prevent="loadCompany('TSM')">TSM</a>，
-      或到 <a href="?page=browse" @click.prevent="page = 'browse'">分類瀏覽</a> 依產業、申報身分、ETF 成分股找公司。
+      或到 <a href="?page=browse" @click.prevent="page = 'browse'">分類瀏覽</a> 依產業、申報身分、ETF 成分股找公司，
+      或用 <a href="?page=screen" @click.prevent="page = 'screen'">尋找股票</a> 依最新財報的指標篩選。
     </div>
     </template>
   </div>

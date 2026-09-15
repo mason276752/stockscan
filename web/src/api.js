@@ -17,6 +17,9 @@ export const api = {
   valuation: (id, params) => get(`/api/company/${encodeURIComponent(id)}/valuation?${new URLSearchParams(params)}`),
   valuationUrl: (id, params) => `/api/company/${encodeURIComponent(id)}/valuation?${new URLSearchParams(params)}`,
   status: () => get('/api/status'),
+  screenFields: () => get('/api/screen/fields'),
+  screen: (params) => get(`/api/screen?${new URLSearchParams(params)}`),
+  screenUrl: (params) => `/api/screen?${new URLSearchParams(params)}`,
   scores: (ciks) => get(`/api/score?ciks=${ciks.join(',')}`),
   score: (cik, accession) => get(`/api/score/${cik}/${accession}`),
   // browse pages

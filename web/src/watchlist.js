@@ -1,41 +1,81 @@
-// Watchlist kept in localStorage (per browser). Entries: { cik, ticker, name, addedAt }.
+// Watchlist kept in localStorage (per browser).
+//   items:  [{ cik, ticker, name, addedAt, groups: [name, ...] }]
+//   groups: [name, ...]   user-defined categories (e.g. 航運股), a stock may be in several
 import { reactive, watch } from 'vue';
 
 const KEY = 'stockscan.watchlist';
+const KEY_GROUPS = 'stockscan.watchgroups';
 
-function load() {
+function load(key, fallback) {
   try {
-    const v = JSON.parse(localStorage.getItem(KEY) || '[]');
-    return Array.isArray(v) ? v.filter((x) => x && Number.isInteger(x.cik)) : [];
+    const v = JSON.parse(localStorage.getItem(key) || 'null');
+    return v ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-export const watchlist = reactive({ items: load() });
+export const watchlist = reactive({
+  items: (Array.isArray(load(KEY, [])) ? load(KEY, []) : []).filter((x) => x && Number.isInteger(x.cik)).map((x) => ({ ...x, groups: Array.isArray(x.groups) ? x.groups : [] })),
+  groups: (Array.isArray(load(KEY_GROUPS, [])) ? load(KEY_GROUPS, []) : []).filter((g) => typeof g === 'string' && g.trim()),
+});
 
-watch(
-  () => watchlist.items,
-  (items) => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(items));
-    } catch {
-      /* storage unavailable: keep it in memory */
-    }
-  },
-  { deep: true },
-);
+const save = () => {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(watchlist.items));
+    localStorage.setItem(KEY_GROUPS, JSON.stringify(watchlist.groups));
+  } catch {
+    /* storage unavailable: keep it in memory */
+  }
+};
+watch(() => [watchlist.items, watchlist.groups], save, { deep: true });
 
 export const isWatched = (cik) => watchlist.items.some((x) => x.cik === Number(cik));
+export const entryOf = (cik) => watchlist.items.find((x) => x.cik === Number(cik)) || null;
 
-export function toggleWatch(company) {
+// add (optionally straight into a group) or remove
+export function toggleWatch(company, group = null) {
   const cik = Number(company.cik);
   const i = watchlist.items.findIndex((x) => x.cik === cik);
-  if (i >= 0) watchlist.items.splice(i, 1);
-  else watchlist.items.unshift({ cik, ticker: company.ticker || company.tickers?.[0] || null, name: company.name || '', addedAt: new Date().toISOString() });
+  if (i >= 0 && !group) {
+    watchlist.items.splice(i, 1);
+    return;
+  }
+  if (i >= 0) {
+    if (!watchlist.items[i].groups.includes(group)) watchlist.items[i].groups.push(group);
+    return;
+  }
+  watchlist.items.unshift({ cik, ticker: company.ticker || company.tickers?.[0] || null, name: company.name || '', addedAt: new Date().toISOString(), groups: group ? [group] : [] });
 }
 
 export function removeWatch(cik) {
   const i = watchlist.items.findIndex((x) => x.cik === Number(cik));
   if (i >= 0) watchlist.items.splice(i, 1);
+}
+
+export function setGroups(cik, groups) {
+  const e = entryOf(cik);
+  if (e) e.groups = [...new Set(groups)].filter((g) => watchlist.groups.includes(g));
+}
+
+export function addGroup(name) {
+  const g = String(name || '').trim();
+  if (!g || watchlist.groups.includes(g)) return g || null;
+  watchlist.groups.push(g);
+  return g;
+}
+
+export function renameGroup(from, to) {
+  const t = String(to || '').trim();
+  if (!t || t === from || watchlist.groups.includes(t)) return false;
+  watchlist.groups.splice(watchlist.groups.indexOf(from), 1, t);
+  for (const e of watchlist.items) e.groups = e.groups.map((g) => (g === from ? t : g));
+  return true;
+}
+
+export function removeGroup(name) {
+  const i = watchlist.groups.indexOf(name);
+  if (i < 0) return;
+  watchlist.groups.splice(i, 1);
+  for (const e of watchlist.items) e.groups = e.groups.filter((g) => g !== name);
 }

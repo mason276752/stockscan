@@ -13,7 +13,8 @@ import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
 import { buildValuation } from './lib/valuation.js';
-import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, scoreAccession } from './lib/score.js';
+import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession } from './lib/score.js';
+import { ROWS as INDICATOR_ROWS } from './lib/indicators.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 
@@ -364,6 +365,87 @@ app.get(
     }
     if (!s) return res.status(404).json({ error: 'Cannot score this filing' });
     res.json(s);
+  }),
+);
+
+// ---------- screener ----------
+
+// Filterable fields: every indicator row plus the score.
+const SCREEN_FIELDS = [
+  { key: 'score', name: '評分', unit: '分', group: '評分' },
+  ...INDICATOR_ROWS.filter((r) => !r.abstract).map((r) => ({ key: r.key, name: r.name, unit: r.unit, group: r.group, annualized: !!r.annualized })),
+];
+app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS }));
+
+// GET /api/screen?sic=7372&division=D&afs=LAF&score_min=60&grossMargin_min=40&roe_min=15&sort=score&dir=desc&limit=200
+// -> companies whose newest saved filing passes every filter (values are the
+//    single-filing figures used for the score: year-to-date, annualised)
+app.get(
+  '/api/screen',
+  wrap(async (req, res) => {
+    const u = await getUniverse(client);
+    const byCik = new Map(u.companies.map((c) => [c.cik, c]));
+    const q = req.query;
+    const sic = q.sic ? String(q.sic).padStart(4, '0') : null;
+    const sic2 = q.sic2 ? String(q.sic2).padStart(2, '0') : null;
+    const division = q.division ? SIC.divisions.find((d) => d.id === String(q.division).toUpperCase()) : null;
+    const afs = q.afs ? String(q.afs).toUpperCase() : null;
+    const text = String(q.q || '').trim().toUpperCase();
+    const ranges = [];
+    for (const [k, v] of Object.entries(q)) {
+      const m = /^(.+)_(min|max)$/.exec(k);
+      if (!m || v === '' || !Number.isFinite(Number(v))) continue;
+      if (!SCREEN_FIELDS.some((f) => f.key === m[1])) continue;
+      ranges.push({ key: m[1], op: m[2], value: Number(v) });
+    }
+    const listedOnly = q.listed !== '0';
+    const rows = [];
+    for (const s of latestScores()) {
+      const c = byCik.get(s.cik);
+      if (!c) continue;
+      if (listedOnly && !c.ticker) continue;
+      const code = c.sic || '0000';
+      if (sic && code !== sic) continue;
+      if (sic2 && !code.startsWith(sic2)) continue;
+      if (division && !(code.slice(0, 2) >= division.from && code.slice(0, 2) <= division.to)) continue;
+      if (afs && (c.afs || 'UNKNOWN') !== afs) continue;
+      if (text && !(c.name.toUpperCase().includes(text) || c.tickers.some((t) => t.startsWith(text)))) continue;
+      const val = (key) => (key === 'score' ? s.score : s.values?.[key] ?? null);
+      let ok = true;
+      for (const r of ranges) {
+        const v = val(r.key);
+        if (v == null || (r.op === 'min' ? v < r.value : v > r.value)) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) continue;
+      rows.push({
+        cik: c.cik,
+        ticker: c.ticker,
+        tickers: c.tickers,
+        name: c.name,
+        sic: c.sic,
+        sicZh: sicInfo(c.sic)?.zh || null,
+        afs: c.afs,
+        float: c.float,
+        score: { score: s.score, coverage: s.coverage, accession: s.accession, form: s.form, fiscalYear: s.fiscalYear, fiscalPeriod: s.fiscalPeriod, periodEnd: s.periodEnd, filingDate: s.filingDate, categories: s.categories.map((x) => x.score) },
+        values: s.values || {},
+      });
+    }
+    const sortKey = String(q.sort || 'score');
+    const dir = q.dir === 'asc' ? 1 : -1;
+    const sv = (r) => (sortKey === 'score' ? r.score.score : sortKey === 'float' ? r.float : sortKey === 'name' ? r.name : sortKey === 'ticker' ? r.ticker : r.values[sortKey] ?? null);
+    rows.sort((a, b) => {
+      const x = sv(a);
+      const y = sv(b);
+      if (x == null && y == null) return 0;
+      if (x == null) return 1;
+      if (y == null) return -1;
+      return (x < y ? -1 : x > y ? 1 : 0) * dir;
+    });
+    const limit = Math.min(2000, Math.max(1, Number(q.limit) || 300));
+    res.json({ total: rows.length, scored: latestScores().length, count: Math.min(rows.length, limit), rows: rows.slice(0, limit) });
   }),
 );
 

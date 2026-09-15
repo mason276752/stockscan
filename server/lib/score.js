@@ -19,8 +19,9 @@
 import { C, ROWS, first, ratios } from './indicators.js';
 import { balancesAt, factsAt, months, statementOf } from './quarters.js';
 import { store } from './store.js';
+import { reclassify } from './statements.js';
 
-export const SCORE_VERSION = 5;
+export const SCORE_VERSION = 7;
 
 const CATEGORY_OF = { debtRatio: '財務結構', ltCapToPpe: '財務結構', currentRatio: '償債能力', quickRatio: '償債能力', dso: '經營能力', dio: '經營能力', cycle: '經營能力', assetTurnover: '經營能力', grossMargin: '獲利能力', opMargin: '獲利能力', netMargin: '獲利能力', eps: '獲利能力', roe: '獲利能力', cfRatio: '現金流量', cfAdequacy: '現金流量', cfReinvest: '現金流量', cashPct: '現金流量' };
 export const CATEGORIES = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
@@ -59,7 +60,8 @@ export function scoreValues(values) {
     }
     items.push({ key: it.key, name: it.name, unit: it.unit, category: it.category, value: v ?? null, benchmark: it.benchmark, grade: g, points: g == null ? null : Math.round(g * it.weight * 10) / 10, weight: it.weight });
   }
-  const score = applicable ? Math.round((earned / applicable) * 100) : null;
+  // fewer than half the points answerable (banks, funds): no score rather than a misleading one
+  const score = applicable >= 50 ? Math.round((earned / applicable) * 100) : null;
   return {
     score,
     earned: Math.round(earned * 10) / 10,
@@ -130,7 +132,11 @@ export function scoreFiling(data) {
   };
   const { values } = ratios(g);
   const s = scoreValues(values);
+  // every ratio (rounded) is kept so the screener can filter on it
+  const rounded = {};
+  for (const [k, v] of Object.entries(values)) rounded[k] = typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null;
   return {
+    values: rounded,
     version: SCORE_VERSION,
     accession: data.filing.accession,
     cik: data.filing.cik,
@@ -150,9 +156,19 @@ export function scoreAccession(accession) {
   if (hit) return hit;
   const data = store.getFiling(accession);
   if (!data) return null;
-  const s = scoreFiling(data);
+  const s = scoreFiling(reclassify(data));
   if (s) store.putScore(accession, data.filing.cik, data.filing.periodEnd, SCORE_VERSION, s);
   return s;
+}
+
+// Latest score of every company (for the screener), cached for a minute.
+let latestAllMemo = null;
+export function latestScores() {
+  const n = store.scoreCount(SCORE_VERSION);
+  if (latestAllMemo && latestAllMemo.n === n && Date.now() - latestAllMemo.at < 60_000) return latestAllMemo.rows;
+  const rows = store.latestScoreRows(SCORE_VERSION);
+  latestAllMemo = { n, at: Date.now(), rows };
+  return rows;
 }
 
 // Latest saved filing of a company and its score (null when nothing is saved yet).
