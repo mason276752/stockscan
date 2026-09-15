@@ -13,7 +13,7 @@ import { scrapeFiling } from './scrape.js';
 import { yearQuarterPoints } from './quarters.js';
 
 // Concept fallbacks (US-GAAP first, then IFRS). Lists are tried in order.
-const C = {
+export const C = {
   revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers'],
   cogs: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales'],
   grossProfit: ['us-gaap:GrossProfit', 'ifrs-full:GrossProfit'],
@@ -54,7 +54,7 @@ const C = {
   apic: ['us-gaap:AdditionalPaidInCapital', 'us-gaap:AdditionalPaidInCapitalCommonStock', 'ifrs-full:SharePremium'],
 };
 
-const first = (map, keys) => {
+export const first = (map, keys) => {
   for (const k of keys) if (map && map[k] != null) return map[k];
   return null;
 };
@@ -86,6 +86,9 @@ export const ROWS = [
   { key: 'dso', group: '經營能力', name: '平均收現日數', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 應收款項週轉率', benchmark: { op: '<=', value: 15 } },
   { key: 'invTurnover', group: '經營能力', name: '存貨週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業成本（年化）÷ 平均存貨' },
   { key: 'dio', group: '經營能力', name: '平均銷貨日數（平均在庫天數）', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 存貨週轉率', benchmark: { op: '<=', value: 100 } },
+  { key: 'apTurnover', group: '經營能力', name: '應付款項週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業成本（年化）÷ 平均應付帳款' },
+  { key: 'dpo', group: '經營能力', name: '平均付款日數', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 應付款項週轉率：進貨後平均多久才付錢給供應商' },
+  { key: 'cashGap', group: '經營能力', name: '缺現金的天數（現金轉換循環）', unit: '天', kind: 'ratio', annualized: true, formula: '平均銷貨日數 + 平均收現日數 − 平均付款日數：從付錢給供應商到收到客戶的錢之間，自己要墊多少天的錢；愈少愈好，負數代表先收到錢才付款（如 Apple、Amazon）' },
   { key: 'cycle', group: '經營能力', name: '做生意的完整週期', unit: '天', kind: 'ratio', annualized: true, formula: '平均銷貨日數 + 平均收現日數：從進貨到賣出、再到收到現金要多久（未扣應付帳款天數的營業週期）', benchmark: { op: '<=', value: 200 } },
   { key: 'ppeTurnover', group: '經營能力', name: '不動產、廠房及設備週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均不動產、廠房及設備淨額' },
   { key: 'assetTurnover', group: '經營能力', name: '總資產週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均總資產', benchmark: { op: '>=', value: 1 } },
@@ -115,7 +118,7 @@ function stepBack(year, q) {
 }
 
 // Ordered (oldest first) list of quarter keys ending at (year, q), `count` long.
-function quarterKeys(year, q, count) {
+export function quarterKeys(year, q, count) {
   const out = [];
   let y = year;
   let k = q;
@@ -127,7 +130,7 @@ function quarterKeys(year, q, count) {
 }
 
 // Load the quarter points needed and index them by "year-Qn" (or "year-FY").
-async function loadPoints(client, company, keys, quarterly) {
+export async function loadPoints(client, company, keys, quarterly) {
   const years = [...new Set(keys.map((k) => k.year))];
   const filingsByYear = {};
   for (const y of years) {
@@ -196,6 +199,9 @@ function ratios(g) {
   v.invTurnover = div(g.flowA('cogs'), avgBal('inventory'));
   v.dio = div(365, v.invTurnover);
   v.cycle = v.dso != null && v.dio != null ? v.dso + v.dio : null;
+  v.apTurnover = div(g.flowA('cogs'), avgBal('ap'));
+  v.dpo = div(365, v.apTurnover);
+  v.cashGap = v.cycle != null && v.dpo != null ? v.cycle - v.dpo : null;
   v.ppeTurnover = div(revenueA, avgBal('ppe'));
   v.assetTurnover = div(revenueA, avgBal('totalAssets'));
 
@@ -257,6 +263,7 @@ export async function buildIndicators(client, company, { year, period, n = 20, b
   const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
   const endQ = period === 'FY' ? 4 : Number(period.slice(1));
   const yearMode = mode === 'year' && quarterly;
+  const sameMode = mode === 'same' && quarterly; // the chosen quarter only, one column per year
 
   // --- annual filers: one point per fiscal year -------------------------
   if (!quarterly) {
@@ -281,7 +288,7 @@ export async function buildIndicators(client, company, { year, period, n = 20, b
   // --- quarterly filers ---------------------------------------------------
   // year mode needs 4 quarters per column plus 4 more for opening balances;
   // quarter mode needs one extra quarter for opening balances.
-  const count = yearMode ? n * 4 + 4 : n + 1;
+  const count = yearMode || sameMode ? n * 4 + 4 : n + 1;
   const keys = quarterKeys(year, endQ, count);
   const byKey = await loadPoints(client, company, keys, true);
   const points = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { year: k.year, period: `Q${k.q}`, flows: {}, balances: {}, missing: true });
@@ -338,6 +345,8 @@ export async function buildIndicators(client, company, { year, period, n = 20, b
         adequacy: () => adequacyOver(points, i, 20, 4),
       };
       const p = points[i];
+      // same-quarter view: the first four points only feed opening balances / trailing sums
+      if (sameMode && (p.period !== `Q${endQ}` || i < points.length - n * 4)) continue;
       columns.push({ label: `${p.year} ${p.period}`, year: p.year, period: p.period, periodEnd: p.periodEnd || null, missing: !!p.missing, sources: p.sources || [], ...ratios(g) });
     }
   }
@@ -346,7 +355,7 @@ export async function buildIndicators(client, company, { year, period, n = 20, b
     fetchedAt: new Date().toISOString(),
     company: meta(company),
     quarterly: true,
-    mode: yearMode ? 'year' : 'quarter',
+    mode: yearMode ? 'year' : sameMode ? 'same' : 'quarter',
     basis: yearMode ? 'sum4' : basis,
     end: { year, period },
     rows: ROWS,

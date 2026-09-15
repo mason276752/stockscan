@@ -14,6 +14,8 @@ export const api = {
   quartersUrl: (id, year) => `/api/company/${encodeURIComponent(id)}/quarters?year=${year}`,
   indicators: (id, params) => get(`/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`),
   indicatorsUrl: (id, params) => `/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`,
+  valuation: (id, params) => get(`/api/company/${encodeURIComponent(id)}/valuation?${new URLSearchParams(params)}`),
+  valuationUrl: (id, params) => `/api/company/${encodeURIComponent(id)}/valuation?${new URLSearchParams(params)}`,
   status: () => get('/api/status'),
   // browse pages
   browseSic: () => get('/api/browse/sic'),

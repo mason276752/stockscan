@@ -175,7 +175,9 @@ export function pickFiling(filings, { year, period, form } = {}) {
   if (form) list = list.filter((f) => f.form.toUpperCase() === form.toUpperCase());
   if (year) list = list.filter((f) => f.fiscalYear === Number(year));
   if (period) list = list.filter((f) => f.fiscalPeriod === period.toUpperCase());
-  return list[0] || null;
+  // an amendment (10-K/A) is usually just Part III with no statements: prefer the original
+  const originals = list.filter((f) => !f.form.toUpperCase().endsWith('/A'));
+  return (originals.length ? originals : list)[0] || null;
 }
 
 const ARCHIVE_RE = /\/Archives\/edgar\/data\/(\d+)\/(\d{18})\/([^/?#]+)/;

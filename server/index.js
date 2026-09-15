@@ -12,6 +12,7 @@ import { scrapeFiling, SCRAPE_VERSION } from './lib/scrape.js';
 import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
+import { buildValuation } from './lib/valuation.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 
@@ -128,23 +129,40 @@ app.get(
   }),
 );
 
-// GET /api/company/GOOGL/indicators?year=2023&period=Q3&n=20&basis=x4|ttm&mode=quarter|year
+// GET /api/company/GOOGL/indicators?year=2023&period=Q3&n=20&basis=x4|ttm&mode=quarter|year|same
 // -> financial ratios for the 20 fiscal quarters ending at FY2023 Q3, or with
 //    mode=year, N years each made of the four quarters ending at that quarter
-//    (2022 Q4 + 2023 Q1..Q3, 2021 Q4 + 2022 Q1..Q3, ...)
+//    (2022 Q4 + 2023 Q1..Q3, 2021 Q4 + 2022 Q1..Q3, ...); mode=same compares
+//    the same quarter across N years (2019 Q3, 2020 Q3, ... 2023 Q3)
 app.get(
   '/api/company/:id/indicators',
   wrap(async (req, res) => {
     const year = Number(req.query.year);
     const period = String(req.query.period || 'FY').toUpperCase();
     if (!year || !/^(Q[1-4]|FY)$/.test(period)) return res.status(400).json({ error: 'year and period (Q1-Q4 or FY) required' });
-    const mode = req.query.mode === 'year' ? 'year' : 'quarter';
-    const n = Math.min(mode === 'year' ? 10 : 40, Math.max(1, Number(req.query.n) || (mode === 'year' ? 5 : 20)));
+    const mode = ['year', 'same'].includes(req.query.mode) ? req.query.mode : 'quarter';
+    const n = Math.min(mode === 'quarter' ? 40 : 10, Math.max(1, Number(req.query.n) || (mode === 'quarter' ? 20 : 5)));
     const basis = req.query.basis === 'ttm' ? 'ttm' : 'x4';
     const company = await getCompany(client, req.params.id);
     res.json(
       await dedupe(`ind:${company.cik}:${year}:${period}:${n}:${basis}:${mode}`, () => buildIndicators(client, company, { year, period, n, basis, mode })),
     );
+  }),
+);
+
+// GET /api/company/AAPL/valuation?year=2026&period=Q3&n=20 -> relative
+// multiples over the last N quarters (price at each quarter end) and absolute
+// models on the trailing four quarters at today's price
+app.get(
+  '/api/company/:id/valuation',
+  wrap(async (req, res) => {
+    const year = Number(req.query.year);
+    const period = String(req.query.period || 'FY').toUpperCase();
+    if (!year || !/^(Q[1-4]|FY)$/.test(period)) return res.status(400).json({ error: 'year and period (Q1-Q4 or FY) required' });
+    const n = Math.min(40, Math.max(4, Number(req.query.n) || 20));
+    const adr = Math.max(0.0001, Number(req.query.adr) || 1); // ordinary shares per listed share (ADR ratio)
+    const company = await getCompany(client, req.params.id);
+    res.json(await dedupe(`val:${company.cik}:${year}:${period}:${n}:${adr}`, () => buildValuation(client, company, { year, period, n, adr })));
   }),
 );
 

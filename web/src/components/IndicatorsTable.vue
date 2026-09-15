@@ -73,7 +73,7 @@ const groups = computed(() => {
 });
 
 const basisLabel = computed(() => (props.data.basis === 'ttm' ? '近四季合計' : props.data.basis === 'x4' ? '單季 ×4' : '年度'));
-const quarterMode = computed(() => props.data.quarterly && props.data.mode === 'quarter');
+const quarterMode = computed(() => props.data.quarterly && (props.data.mode === 'quarter' || props.data.mode === 'same'));
 
 // newest quarter (the one the user picked) is on the far right: start there
 const wrap = ref(null);
@@ -193,7 +193,7 @@ td.group {
 th.name,
 td.name {
   position: sticky;
-  left: 110px;
+  left: 90px; /* = the 類別 column's border-box width */
   z-index: 1;
   background: var(--panel);
   text-align: left;

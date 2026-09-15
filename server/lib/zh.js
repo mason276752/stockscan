@@ -3,6 +3,8 @@
 // [name] or [name, explanation]. Concepts not listed fall back to the
 // filer's English label in the UI.
 
+import { CUSTOM, DESCRIPTIONS, MORE } from './zh-more.js';
+
 const T = {
   // ---------- 報表標題 / 段落 ----------
   'us-gaap:StatementOfFinancialPositionAbstract': ['資產負債表'],
@@ -601,9 +603,44 @@ const T = {
   'ifrs-full:IncreaseDecreaseInCashAndCashEquivalents': ['本期現金及約當現金增加（減少）'],
 };
 
-export function zhFor(concept) {
-  const hit = T[concept];
-  return hit ? { labelZh: hit[0], descriptionZh: hit[1] || null } : { labelZh: null, descriptionZh: null };
+const ALL = { ...T, ...MORE, ...CUSTOM };
+
+function lookup(concept) {
+  const hit = ALL[concept];
+  if (hit) return { labelZh: hit[0], descriptionZh: hit[1] || DESCRIPTIONS[concept] || null };
+  // a company's own extension element that reuses a standard name (abc:OperatingLeaseLiabilityCurrent)
+  const i = concept.indexOf(':');
+  if (i > 0 && !/^(us-gaap|ifrs-full|dei|srt):/.test(concept)) {
+    const local = concept.slice(i + 1);
+    for (const p of ['us-gaap', 'ifrs-full']) {
+      const std = ALL[`${p}:${local}`];
+      if (std) return { labelZh: std[0], descriptionZh: std[1] || DESCRIPTIONS[`${p}:${local}`] || null };
+    }
+  }
+  return { labelZh: null, descriptionZh: null };
 }
 
-export const zhCount = Object.keys(T).length;
+export function zhFor(concept) {
+  return lookup(concept);
+}
+
+// Fill in Chinese names for a saved result whose line items predate the
+// current dictionary (labels are stored with the parsed filing, so new
+// translations would otherwise only reach freshly scraped filings).
+export function applyZh(result) {
+  const seen = new Set();
+  const lists = [...(result.allStatements || []), ...Object.values(result.statements || {})].filter(Boolean);
+  for (const stmt of lists) {
+    if (seen.has(stmt)) continue;
+    seen.add(stmt);
+    for (const li of stmt.lineItems || []) {
+      if (li.labelZh && li.descriptionZh) continue;
+      const z = lookup(li.concept);
+      if (!li.labelZh && z.labelZh) li.labelZh = z.labelZh;
+      if (!li.descriptionZh && z.descriptionZh) li.descriptionZh = z.descriptionZh;
+    }
+  }
+  return result;
+}
+
+export const zhCount = Object.keys(ALL).length;

@@ -5,6 +5,7 @@ import CompanySearch from './components/CompanySearch.vue';
 import FilingPicker from './components/FilingPicker.vue';
 import StatementTable from './components/StatementTable.vue';
 import IndicatorsTable from './components/IndicatorsTable.vue';
+import ValuationPanel from './components/ValuationPanel.vue';
 import BrowsePage from './components/BrowsePage.vue';
 
 // background crawl progress (server-side), shown in the header
@@ -75,7 +76,7 @@ const indBasis = ref('x4'); // x4 | ttm
 const indMode = ref('quarter'); // quarter | year
 const indCountQ = ref(20);
 const indCountY = ref(5);
-const indCount = computed(() => (indMode.value === 'year' ? indCountY.value : indCountQ.value));
+const indCount = computed(() => (indMode.value === 'quarter' ? indCountQ.value : indCountY.value));
 const indAnnualizeAmounts = ref(true);
 const indicatorsParams = computed(() => {
   if (!company.value || !filing.value) return null;
@@ -102,6 +103,39 @@ async function loadIndicators() {
     loadingIndicators.value = false;
   }
 }
+
+// valuation page (relative multiples over N quarters + absolute models)
+const valuation = ref(null);
+const loadingValuation = ref(false);
+const valuationError = ref(null);
+const valCount = ref(20);
+const valAdr = ref(1); // ADR ratio for foreign filers (ordinary shares per listed share)
+const valuationParams = computed(() => {
+  if (!company.value || !filing.value) return null;
+  const period = filing.value.quartersYear ? 'Q4' : filing.value.fiscalPeriod;
+  return { year: filing.value.fiscalYear, period, n: valCount.value, ...(valAdr.value !== 1 ? { adr: valAdr.value } : {}) };
+});
+watch(company, () => (valAdr.value = 1));
+async function loadValuation() {
+  const p = valuationParams.value;
+  if (!p) return;
+  loadingValuation.value = true;
+  valuationError.value = null;
+  try {
+    valuation.value = await api.valuation(String(company.value.cik), p);
+  } catch (e) {
+    valuationError.value = e.message;
+    valuation.value = null;
+  } finally {
+    loadingValuation.value = false;
+  }
+}
+watch([tab, valuationParams], ([t, p], [, prev]) => {
+  if (t !== 'valuation' || !p) return;
+  if (valuation.value && JSON.stringify(p) === JSON.stringify(prev) && !valuationError.value) return;
+  loadValuation();
+});
+const isValuation = computed(() => tab.value === 'valuation');
 
 watch([tab, indicatorsParams], ([t, p], [, prev]) => {
   if (t !== 'indicators' || !p) return;
@@ -168,7 +202,7 @@ async function loadFiling(f) {
     data.value = await api.filing(f.cik, f.accession, view.value);
     const valid = tab.value.startsWith('role:')
       ? data.value.allStatements.some((s) => `role:${s.role}` === tab.value)
-      : tab.value === 'indicators' || !!data.value.statements[tab.value];
+      : tab.value === 'indicators' || tab.value === 'valuation' || !!data.value.statements[tab.value];
     if (!valid) tab.value = 'balance_sheet';
   } catch (e) {
     error.value = e.message;
@@ -185,7 +219,7 @@ async function loadQuarters(year) {
   filing.value = { accession: `q4-${year}`, form: 'Q4 推算', fiscalYear: year, fiscalPeriod: 'Q4', quartersYear: year };
   try {
     data.value = await api.quarters(String(company.value.cik), year);
-    if (!data.value.statements[tab.value] && !tab.value.startsWith('role:') && tab.value !== 'indicators') tab.value = 'income_statement';
+    if (!data.value.statements[tab.value] && !tab.value.startsWith('role:') && tab.value !== 'indicators' && tab.value !== 'valuation') tab.value = 'income_statement';
     if (tab.value.startsWith('role:') && !data.value.allStatements.some((s) => `role:${s.role}` === tab.value)) tab.value = 'income_statement';
   } catch (e) {
     error.value = e.message;
@@ -221,7 +255,7 @@ watch([company, filing, tab, indMode, view, page, browseParams], () => {
     if (filing.value?.quartersYear) p.set('quarters', filing.value.quartersYear);
     else if (filing.value) p.set('accession', filing.value.accession);
     if (data.value && tab.value !== 'balance_sheet') p.set('tab', tab.value);
-    if (tab.value === 'indicators' && indMode.value === 'year') p.set('mode', 'year');
+    if (tab.value === 'indicators' && indMode.value !== 'quarter') p.set('mode', indMode.value);
     if (view.value === 'all') p.set('view', 'all');
   }
   const url = p.size ? `?${p}` : location.pathname;
@@ -233,7 +267,7 @@ watch([company, filing, tab, indMode, view, page, browseParams], () => {
 function applyUrl() {
   const p = new URLSearchParams(location.search);
   if (p.get('tab')) tab.value = p.get('tab');
-  if (p.get('mode') === 'year') indMode.value = 'year';
+  if (['year', 'same'].includes(p.get('mode'))) indMode.value = p.get('mode');
   if (p.get('view') === 'all') view.value = 'all';
   if (p.get('page') === 'browse') {
     page.value = 'browse';
@@ -328,7 +362,7 @@ onMounted(() => {
               <span class="muted small">{{ data.stats.facts }} facts<template v-if="data.stats.contexts"> · {{ data.stats.contexts }} contexts</template></span>
             </div>
           </div>
-          <p v-if="data.view === 'current' && !isIndicators" class="muted small note">
+          <p v-if="data.view === 'current' && !isIndicators && !isValuation" class="muted small note">
             只看本期：資產負債表 = 本期末；損益表 = {{ data.filing.form?.startsWith('10-Q') ? '本季三個月' : '全年度' }}；現金流量表、權益變動表一欄到底 —— 「（期初）」列是期初餘額、「（期末）」列是期末餘額、其餘列是本期發生數。
             <template v-if="data.previous">10-Q 的現金流量表只有年初至今，本季 = 年初至今 − 上一季（{{ data.previous.fiscalYear }} {{ data.previous.fiscalPeriod }}）年初至今，期初餘額 = 上一季期末，這些欄標「推算」。</template>
             <template v-for="n in data.notes.filter((x) => /找不到/.test(x))" :key="n"> {{ n }}</template>
@@ -344,6 +378,7 @@ onMounted(() => {
                 {{ name }}
               </button>
               <button :class="{ active: tab === 'indicators' }" @click="tab = 'indicators'">財務指標</button>
+              <button :class="{ active: tab === 'valuation' }" @click="tab = 'valuation'">股價估值</button>
               <select v-if="otherStatements.length" :value="tab.startsWith('role:') ? tab : ''" @change="tab = $event.target.value">
                 <option value="" disabled>其他報表…</option>
                 <option v-for="s in otherStatements" :key="s.role" :value="`role:${s.role}`">{{ s.title }}</option>
@@ -355,9 +390,10 @@ onMounted(() => {
                 <select v-model="indMode">
                   <option value="quarter">逐季</option>
                   <option value="year">逐年（近四季合計）</option>
+                  <option value="same">同季比較（歷年同一季）</option>
                 </select>
               </label>
-              <label v-if="indMode === 'year' || indicators?.quarterly === false">
+              <label v-if="indMode !== 'quarter' || indicators?.quarterly === false">
                 年數
                 <select v-model.number="indCountY">
                   <option :value="3">3</option>
@@ -375,7 +411,7 @@ onMounted(() => {
                   <option :value="40">40</option>
                 </select>
               </label>
-              <template v-if="indMode === 'quarter' && indicators?.quarterly !== false">
+              <template v-if="indMode !== 'year' && indicators?.quarterly !== false">
                 <label>
                   年化
                   <select v-model="indBasis">
@@ -385,6 +421,18 @@ onMounted(() => {
                 </label>
                 <label><input v-model="indAnnualizeAmounts" type="checkbox" /> 金額列也年化</label>
               </template>
+            </div>
+            <div v-else-if="isValuation" class="options">
+              <label>
+                {{ valuation?.quarterly === false ? '年數' : '季數' }}
+                <select v-model.number="valCount">
+                  <option :value="8">8</option>
+                  <option :value="12">12</option>
+                  <option :value="20">20</option>
+                  <option :value="40">40</option>
+                </select>
+              </label>
+              <a v-if="valuationParams" :href="api.valuationUrl(String(company.cik), valuationParams)" target="_blank" rel="noopener" class="small">JSON</a>
             </div>
             <div v-else class="options">
               <label v-if="!data.derived">
@@ -416,12 +464,17 @@ onMounted(() => {
           </div>
 
           <template v-if="isIndicators">
-            <p v-if="loadingIndicators" class="muted">計算到 {{ indicatorsEnd }} 為止的 {{ indCount }} {{ indMode === 'year' ? '年' : '期' }}指標，需下載多份申報，第一次約 20–40 秒…</p>
+            <p v-if="loadingIndicators" class="muted">計算到 {{ indicatorsEnd }} 為止的 {{ indCount }} {{ indMode === 'quarter' ? '期' : '年' }}指標，需下載多份申報，第一次約 20–40 秒…</p>
             <p v-else-if="indicatorsError" class="error">{{ indicatorsError }}</p>
             <template v-else-if="indicators">
               <p v-if="indicators.quarterly && indicators.mode === 'year'" class="muted small note">
                 以所選申報（{{ indicatorsEnd }}）為最後一期，每一欄 = 到該季為止連續四季的合計（例如 {{ indicators.columns.at(-1)?.sublabel || indicators.columns.at(-1)?.label }}），往前共 {{ indicators.columns.length }} 年，左舊右新。
                 餘額取該季季末，平均餘額用季末與四季前季末平均。Q4 流量 = 10-K 全年 − 前三季。
+                <a :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
+              </p>
+              <p v-else-if="indicators.quarterly && indicators.mode === 'same'" class="muted small note">
+                只看所選季度（{{ indicatorsParams.period }}）：{{ indicators.columns[0]?.label }} ～ {{ indicators.columns.at(-1)?.label }} 共 {{ indicators.columns.length }} 年同一季的單季數字，左舊右新，避開季節性直接比年增。
+                流量類指標分子換算為年（{{ indBasis === 'ttm' ? '近四季合計' : '單季 ×4' }}），分母用該季末與上季末平均。Q4 流量 = 10-K 全年 − 前三季。
                 <a :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <p v-else-if="indicators.quarterly" class="muted small note">
@@ -436,6 +489,11 @@ onMounted(() => {
               </p>
               <IndicatorsTable :data="indicators" :annualize-amounts="indAnnualizeAmounts" />
             </template>
+          </template>
+          <template v-else-if="isValuation">
+            <p v-if="loadingValuation" class="muted">計算到 {{ valuationParams?.year }} {{ valuationParams?.period }} 為止 {{ valCount }} 期的估值，需下載多份申報與股價，第一次約 20–40 秒…</p>
+            <p v-else-if="valuationError" class="error">{{ valuationError }}</p>
+            <ValuationPanel v-else-if="valuation" :data="valuation" :adr="valAdr" @update:adr="valAdr = $event" />
           </template>
           <template v-else>
             <StatementTable v-if="current" :statement="current" :divisor="divisor" :apply-negation="applyNegation" :show-concept="showConcept" :lang="lang" />

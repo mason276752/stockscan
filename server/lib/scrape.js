@@ -4,6 +4,7 @@ import { parseInlineXbrl } from './ixbrl.js';
 import { loadTaxonomy } from './taxonomy.js';
 import { buildStatements } from './statements.js';
 import { store, requireVersion } from './store.js';
+import { applyZh } from './zh.js';
 
 // Bump whenever the parser / statement builder output changes: saved filings
 // from older versions are discarded at startup and re-parsed on demand.
@@ -66,7 +67,7 @@ export async function ensureStored(client, filing, company) {
 
 async function loadOrScrape(client, filing, company) {
   const saved = store.getFiling(filing.accession);
-  if (saved) return saved;
+  if (saved) return applyZh(saved);
   const result = await scrapeUncached(client, filing, company);
   store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
   return result;
