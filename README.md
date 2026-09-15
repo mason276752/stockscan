@@ -7,7 +7,11 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
 - 資料來源只有 Inline XBRL 本體（`ix:nonFraction` / `xbrli:context` / `xbrli:unit`）
   加上同資料夾的 extension taxonomy（`.xsd` / `_pre.xml` / `_lab.xml`），用來決定報表分類、行順序與標籤。
 - 數值為 XBRL 原值（已套用 `scale` 與 `sign`，未依 `negatedLabel` 翻轉），並保留顯示文字 `raw`。
-- 公司的申報清單每 10 分鐘重新向 SEC 抓一次，所以永遠看得到最新一份；已申報的文件不會變，解析結果快取在記憶體 24 小時。
+- 公司的申報清單每 10 分鐘重新向 SEC 抓一次，所以永遠看得到最新一份；已申報的文件不會變，
+  解析結果存在本機 SQLite（`data/stockscan.sqlite`，Node 內建 `node:sqlite`，不需額外安裝），重啟不用重抓。
+- 公司代號表也存在 SQLite，啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。
+- 閒置時背景預抓：看某一份申報時，會在沒有使用者請求 3 秒後，悄悄下載前後一期、去年/明年同一季、以及同年度其他申報
+  （讓 Q4 推算即時）。預抓請求一律讓路給使用者操作。`GET /api/status` 可看存檔數與預抓佇列。
 
 ## 安裝與啟動
 
@@ -28,7 +32,7 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）。
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`STOCKSCAN_DB`（SQLite 路徑，預設 `./data/stockscan.sqlite`）。
 
 ## 網頁
 
@@ -57,6 +61,7 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 | 路徑 | 說明 |
 |---|---|
 | `GET /api/search?q=goog` | 代號 / 公司名稱建議 |
+| `GET /api/status` | 本機存檔數量、預抓佇列狀態 |
 | `GET /api/company/GOOGL` | 公司資料 + 所有 Inline XBRL 財報清單，每筆標上 `fiscalYear` / `fiscalPeriod`（FY、Q1–Q3） |
 | `GET /api/company/GOOGL/statements` | 最新一份財報的四大報表 |
 | `GET /api/company/GOOGL/statements?year=2025&period=Q2` | 指定年度 / 季度（`period` = FY、Q1、Q2、Q3） |
@@ -184,7 +189,9 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | 檔案 | 內容 |
 |---|---|
 | `server/index.js` | Express 路由、靜態檔案 |
-| `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、TTL 快取 |
+| `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、高/低優先權（預抓讓路） |
+| `server/lib/store.js` | SQLite 存檔：解析後的申報、代號表、申報清單 |
+| `server/lib/prefetch.js` | 閒置時背景預抓相鄰申報 |
 | `server/lib/edgar.js` | ticker/CIK → 公司與申報清單、會計年度/季度判斷、`ix?doc=` 網址解析 |
 | `server/lib/ixbrl.js` | 解析 iXBRL：contexts、units、`ix:nonFraction` / `ix:nonNumeric`、ixt 數值與日期轉換 |
 | `server/lib/taxonomy.js` | 解析 `.xsd` role 定義、presentation linkbase、label linkbase（支援 linkbase 內嵌在 xsd 的申報） |

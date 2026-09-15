@@ -3,6 +3,7 @@
 import { parseInlineXbrl } from './ixbrl.js';
 import { loadTaxonomy } from './taxonomy.js';
 import { buildStatements } from './statements.js';
+import { store } from './store.js';
 
 const FILING_TTL = 24 * 3600 * 1000; // a filed document never changes
 
@@ -33,16 +34,29 @@ async function loadConceptMeta(client, folderUrl, folderFiles) {
   }
 }
 
+export function isCached(accession) {
+  const hit = results.get(accession);
+  return !!hit && hit.expires > Date.now();
+}
+
 export function scrapeFiling(client, filing, company = null) {
   const hit = results.get(filing.accession);
   if (hit && hit.expires > Date.now()) return hit.promise;
-  const promise = scrapeUncached(client, filing, company).catch((err) => {
+  const promise = loadOrScrape(client, filing, company).catch((err) => {
     results.delete(filing.accession);
     throw err;
   });
   results.set(filing.accession, { expires: Date.now() + RESULT_TTL, promise });
   if (results.size > RESULT_CAP) results.delete(results.keys().next().value);
   return promise;
+}
+
+async function loadOrScrape(client, filing, company) {
+  const saved = store.getFiling(filing.accession);
+  if (saved) return saved;
+  const result = await scrapeUncached(client, filing, company);
+  store.putFiling(filing.accession, filing.cik, result);
+  return result;
 }
 
 async function scrapeUncached(client, filing, company) {

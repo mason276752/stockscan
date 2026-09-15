@@ -4,7 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { SecClient } from './lib/secClient.js';
-import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, pickFiling, searchCompanies } from './lib/edgar.js';
+import { openStore, store } from './lib/store.js';
+import { createPrefetcher } from './lib/prefetch.js';
+import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, pickFiling, refreshTickers, searchCompanies } from './lib/edgar.js';
 import { scrapeFiling } from './lib/scrape.js';
 import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
@@ -13,8 +15,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 
 const client = new SecClient();
+openStore();
+const prefetcher = createPrefetcher(client);
+
+// Ticker table: refresh in the background at startup and daily; the saved
+// copy serves searches meanwhile.
+const refresh = () => refreshTickers(client).then((rows) => console.log(`ticker table refreshed: ${rows.length} companies`)).catch((e) => console.warn(`ticker refresh failed: ${e.message}`));
+setTimeout(refresh, 1000);
+setInterval(refresh, 24 * 3600 * 1000).unref();
+
 const app = express();
 app.use(express.json());
+app.use('/api', (_req, _res, next) => {
+  client.touch(); // any user request pauses background prefetching
+  next();
+});
 
 // In-flight de-duplication: two browser tabs asking for the same filing share one scrape.
 const inflight = new Map();
@@ -59,6 +74,7 @@ app.get(
       });
     }
     res.json(await dedupe(filing.accession, () => scrapeFiling(client, filing, company)));
+    prefetcher.schedule(company, filing);
   }),
 );
 
@@ -71,6 +87,7 @@ app.get(
     if (!year) return res.status(400).json({ error: 'year query parameter required' });
     const company = await getCompany(client, req.params.id);
     res.json(await dedupe(`q4:${company.cik}:${year}`, () => buildQuarterly(client, company, year)));
+    prefetcher.schedule(company, pickFiling(company.filings, { year, period: 'FY' }));
   }),
 );
 
@@ -110,6 +127,7 @@ app.get(
       filing = { cik, accession: req.params.accession, primaryDocument: doc.name, ...filingUrls(cik, req.params.accession, doc.name) };
     }
     res.json(await dedupe(filing.accession, () => scrapeFiling(client, filing, company)));
+    prefetcher.schedule(company, filing);
   }),
 );
 
@@ -122,8 +140,14 @@ app.get(
     const company = await getCompany(client, String(base.cik));
     const filing = company.filings.find((f) => f.accession === base.accession) || base;
     res.json(await dedupe(filing.accession, () => scrapeFiling(client, filing, company)));
+    prefetcher.schedule(company, filing);
   }),
 );
+
+// GET /api/status -> local store and prefetch queue
+app.get('/api/status', (_req, res) => {
+  res.json({ store: { file: store.file, filings: store.filingCount() }, prefetch: prefetcher.status(), clientIdle: client.idle });
+});
 
 // Serve the built Vue app when it exists (npm run build:web).
 const dist = path.join(__dirname, '..', 'web', 'dist');
@@ -140,5 +164,6 @@ app.use((err, _req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`stockscan server listening on http://localhost:${PORT}`);
+  console.log(`store: ${store.file} (${store.filingCount()} filings saved)`);
   if (!fs.existsSync(dist)) console.log('web/dist not found - run "npm run build:web" or use the Vite dev server (npm --prefix web run dev)');
 });

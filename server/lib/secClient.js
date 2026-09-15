@@ -3,6 +3,7 @@
 
 const MIN_INTERVAL_MS = 110;
 const MAX_IN_FLIGHT = 4;
+const IDLE_MS = 3000; // low-priority (prefetch) requests wait for this much user quiet
 
 export class SecClient {
   constructor({ userAgent = process.env.SEC_USER_AGENT, timeoutMs = 60_000 } = {}) {
@@ -18,7 +19,18 @@ export class SecClient {
     this.lastRequest = 0;
     this.inFlight = 0;
     this.waiters = [];
+    this.userInFlight = 0;
+    this.lastUserActivity = 0;
     this.cache = new Map(); // url -> { expires, value }
+  }
+
+  // Mark user activity (also called by the API layer for cache hits).
+  touch() {
+    this.lastUserActivity = Date.now();
+  }
+
+  get idle() {
+    return this.userInFlight === 0 && Date.now() - this.lastUserActivity > IDLE_MS;
   }
 
   // Serialise requests so the throttle holds even under concurrent API calls.
@@ -47,13 +59,32 @@ export class SecClient {
     if (next) next();
   }
 
-  async fetch(url, { retries = 4 } = {}) {
+  async fetch(url, { retries = 4, priority = 'high' } = {}) {
+    if (priority === 'low') {
+      // background work yields to anything the user is waiting for
+      while (!this.idle) await new Promise((r) => setTimeout(r, 500));
+    } else {
+      this.touch();
+      this.userInFlight++;
+    }
     await this._acquire();
     try {
       return await this._fetchWithRetry(url, retries);
     } finally {
       this._release();
+      if (priority !== 'low') {
+        this.userInFlight--;
+        this.touch();
+      }
     }
+  }
+
+  // Same client, but every request is low priority.
+  lowPriority() {
+    return {
+      text: (url, opts = {}) => this.text(url, { ...opts, priority: 'low' }),
+      json: (url, opts = {}) => this.json(url, { ...opts, priority: 'low' }),
+    };
   }
 
   async _fetchWithRetry(url, retries) {
@@ -109,11 +140,11 @@ export class SecClient {
     return value;
   }
 
-  text(url, { ttlMs = 0 } = {}) {
-    return this._cached(url, ttlMs, async () => (await this.fetch(url)).text());
+  text(url, { ttlMs = 0, priority } = {}) {
+    return this._cached(url, ttlMs, async () => (await this.fetch(url, { priority })).text());
   }
 
-  json(url, { ttlMs = 0 } = {}) {
-    return this._cached(url, ttlMs, async () => (await this.fetch(url)).json());
+  json(url, { ttlMs = 0, priority } = {}) {
+    return this._cached(url, ttlMs, async () => (await this.fetch(url, { priority })).json());
   }
 }

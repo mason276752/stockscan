@@ -1,5 +1,7 @@
 // Company lookup and filing lists from EDGAR's JSON APIs.
 
+import { store } from './store.js';
+
 const ARCHIVES = 'https://www.sec.gov/Archives/edgar/data';
 const TICKERS_URL = 'https://www.sec.gov/files/company_tickers.json';
 const SUBMISSIONS = 'https://data.sec.gov/submissions/';
@@ -20,9 +22,42 @@ export function filingUrls(cik, accession, primaryDocument) {
   };
 }
 
+// Ticker table: served from SQLite, refreshed from SEC in the background at
+// startup (and daily) so the first search after a restart is instant.
+let tickersMemo = null;
+
+export async function refreshTickers(client) {
+  const data = await client.json(TICKERS_URL);
+  const rows = Object.values(data).map((r) => ({ cik: Number(r.cik_str), ticker: r.ticker, name: r.title }));
+  store.putKV('tickers', rows);
+  tickersMemo = rows;
+  return rows;
+}
+
 async function tickerTable(client) {
-  const data = await client.json(TICKERS_URL, { ttlMs: TICKERS_TTL });
-  return Object.values(data).map((r) => ({ cik: Number(r.cik_str), ticker: r.ticker, name: r.title }));
+  if (tickersMemo) return tickersMemo;
+  const saved = store.getKV('tickers');
+  if (saved) {
+    tickersMemo = saved.value;
+    if (saved.ageMs > TICKERS_TTL) refreshTickers(client).catch(() => {});
+    return tickersMemo;
+  }
+  return refreshTickers(client);
+}
+
+// Per-company submissions (the filing list): SQLite copy if fresh enough,
+// otherwise SEC - falling back to the stale copy when SEC is unreachable.
+async function cachedJson(client, key, url, ttlMs) {
+  const saved = store.getKV(key);
+  if (saved && saved.ageMs < ttlMs) return saved.value;
+  try {
+    const value = await client.json(url);
+    store.putKV(key, value);
+    return value;
+  } catch (err) {
+    if (saved) return saved.value;
+    throw err;
+  }
 }
 
 export async function searchCompanies(client, q, limit = 10) {
@@ -82,11 +117,12 @@ function rowsOf(table) {
 export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, includeOlder = true } = {}) {
   const cik = await resolveCik(client, tickerOrCik);
   const padded = String(cik).padStart(10, '0');
-  const sub = await client.json(`${SUBMISSIONS}CIK${padded}.json`, { ttlMs: SUBMISSIONS_TTL });
+  const sub = await cachedJson(client, `submissions:${padded}`, `${SUBMISSIONS}CIK${padded}.json`, SUBMISSIONS_TTL);
   let rows = rowsOf(sub.filings.recent);
   if (includeOlder) {
     for (const f of sub.filings.files || []) {
-      const older = await client.json(`${SUBMISSIONS}${f.name}`, { ttlMs: SUBMISSIONS_TTL });
+      // older pages only ever gain nothing new; refresh them daily
+      const older = await cachedJson(client, `submissions:${f.name}`, `${SUBMISSIONS}${f.name}`, TICKERS_TTL);
       rows = rows.concat(rowsOf(older));
     }
   }
