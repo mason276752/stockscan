@@ -37,6 +37,14 @@ export function openStore(file = process.env.STOCKSCAN_DB || path.join(process.c
       json       TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS scores (
+      accession   TEXT PRIMARY KEY,
+      cik         INTEGER NOT NULL,
+      report_date TEXT,
+      version     INTEGER NOT NULL,
+      json        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS scores_cik ON scores(cik);
   `);
   // saved filings were produced by a given version of the parser; when the
   // parser changes, throw the old ones away so they get rebuilt
@@ -88,6 +96,17 @@ export const store = {
   // accession -> report_date of every saved filing of a company (cheap: no JSON decoding)
   filingIndex(cik) {
     return need().prepare('SELECT accession, form, report_date FROM filings WHERE cik = ?').all(cik);
+  },
+  // scores: one per filing, keyed by accession, invalidated by version
+  getScore(accession, version) {
+    const row = need().prepare('SELECT json FROM scores WHERE accession = ? AND version = ?').get(accession, version);
+    return row ? unpack(row.json) : null;
+  },
+  putScore(accession, cik, reportDate, version, score) {
+    need().prepare('INSERT OR REPLACE INTO scores (accession, cik, report_date, version, json) VALUES (?, ?, ?, ?, ?)').run(accession, cik, reportDate ?? null, version, pack(score));
+  },
+  unscoredAccessions(version) {
+    return need().prepare('SELECT f.accession FROM filings f LEFT JOIN scores s ON s.accession = f.accession AND s.version = ? WHERE s.accession IS NULL').all(version).map((r) => r.accession);
   },
   size() {
     const f = need().prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM filings').get();

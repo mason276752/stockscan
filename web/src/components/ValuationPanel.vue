@@ -16,8 +16,16 @@ const foreign = computed(() => props.data.currency && props.data.currency.report
 
 // ---- price basis: the chosen filing's period end (default), its filing
 // date, today's quote, or a price typed in by the user ----
-const basis = ref('periodEnd'); // periodEnd | filingDate | now
+// the newest filing defaults to today's price; an older one to its own period end
+const basis = ref(props.data.isLatest ? 'now' : 'periodEnd'); // periodEnd | filingDate | now
 const priceInput = ref('');
+watch(
+  () => props.data,
+  (d) => {
+    basis.value = d.isLatest ? 'now' : 'periodEnd';
+    priceInput.value = '';
+  },
+);
 const latest = computed(() => props.data.columns[props.data.columns.length - 1] || null);
 const typedPrice = computed(() => {
   const n = Number(priceInput.value);

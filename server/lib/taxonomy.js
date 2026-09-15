@@ -24,7 +24,11 @@ export function roleInfo(definition) {
 function load(data) {
   const $ = typeof data === 'string' ? loadXml(data) : data;
   const p = prefixMap($);
-  return { $, t: (canon, local) => tag(p[canon], local), x: (local) => (p.xlink ? `${p.xlink}:${local}` : local) };
+  // Some agents (Toppan Merrill) declare the prefix on the root but write the
+  // children in a default namespace (<presentationLink xmlns="...linkbase">),
+  // so match the element both prefixed and bare.
+  const t = (canon, local) => (p[canon] ? `${tag(p[canon], local)}, ${local}` : local);
+  return { $, t, x: (local) => (p.xlink ? `${p.xlink}:${local}` : local) };
 }
 
 export function parseSchema(data) {

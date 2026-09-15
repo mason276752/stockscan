@@ -7,6 +7,9 @@ import StatementTable from './components/StatementTable.vue';
 import IndicatorsTable from './components/IndicatorsTable.vue';
 import ValuationPanel from './components/ValuationPanel.vue';
 import BrowsePage from './components/BrowsePage.vue';
+import WatchlistPage from './components/WatchlistPage.vue';
+import ScoreCard from './components/ScoreCard.vue';
+import { isWatched, toggleWatch, watchlist } from './watchlist';
 
 // background crawl progress (server-side), shown in the header
 const status = ref(null);
@@ -26,7 +29,7 @@ const crawlText = computed(() => {
   return '';
 });
 
-// page: 'report' (statements of one company) | 'browse' (industry / filer status / ETF lists)
+// page: 'report' (statements of one company) | 'browse' (industry / filer status / ETF lists) | 'watch' (watchlist)
 const page = ref('report');
 const browseParams = ref({});
 
@@ -151,6 +154,26 @@ const TABS = [
 ];
 const isIndicators = computed(() => tab.value === 'indicators');
 
+// score of the selected filing, shown on the indicators tab
+const filingScore = ref(null);
+watch(
+  [tab, filing],
+  async ([t, f]) => {
+    if (t !== 'indicators' || !f || f.quartersYear) {
+      if (f?.quartersYear) filingScore.value = null;
+      return;
+    }
+    if (filingScore.value?.accession === f.accession) return;
+    filingScore.value = null;
+    try {
+      filingScore.value = await api.score(f.cik, f.accession);
+    } catch {
+      filingScore.value = null;
+    }
+  },
+  { immediate: true },
+);
+
 const otherStatements = computed(() => {
   if (!data.value) return [];
   const primary = new Set(Object.values(data.value.statements).filter(Boolean).map((s) => s.role));
@@ -250,6 +273,8 @@ watch([company, filing, tab, indMode, view, page, browseParams], () => {
   if (page.value === 'browse') {
     p.set('page', 'browse');
     for (const [k, v] of Object.entries(browseParams.value)) if (v) p.set(k, v);
+  } else if (page.value === 'watch') {
+    p.set('page', 'watch');
   } else {
     if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
     if (filing.value?.quartersYear) p.set('quarters', filing.value.quartersYear);
@@ -272,6 +297,10 @@ function applyUrl() {
   if (p.get('page') === 'browse') {
     page.value = 'browse';
     browseParams.value = { cat: p.get('cat') || 'sic', code: p.get('code') || '', afs: p.get('afs') || '', etf: p.get('etf') || '' };
+    return;
+  }
+  if (p.get('page') === 'watch') {
+    page.value = 'watch';
     return;
   }
   page.value = 'report';
@@ -300,12 +329,14 @@ onMounted(() => {
       <nav class="nav">
         <button :class="{ active: page === 'report' }" @click="page = 'report'">財報</button>
         <button :class="{ active: page === 'browse' }" @click="page = 'browse'">分類瀏覽</button>
+        <button :class="{ active: page === 'watch' }" @click="page = 'watch'">觀察名單<span v-if="watchlist.items.length" class="count">{{ watchlist.items.length }}</span></button>
       </nav>
       <CompanySearch @select="openCompany" />
     </header>
     <p v-if="crawlText" class="muted small crawl" title="啟動後在背景把每家有代號的公司最新一份 10-K / 10-Q 存到本機，之後點開就不用等下載；使用中會自動讓路">{{ crawlText }}</p>
 
     <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" />
+    <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" />
 
     <template v-else>
     <p v-if="error" class="error">{{ error }}</p>
@@ -313,7 +344,10 @@ onMounted(() => {
 
     <div v-if="company" class="layout">
       <aside class="panel">
-        <h2>{{ company.name }}</h2>
+        <h2>
+          <button class="star" :class="{ on: isWatched(company.cik) }" :title="isWatched(company.cik) ? '從觀察名單移除' : '加入觀察名單'" @click="toggleWatch(company)">{{ isWatched(company.cik) ? '★' : '☆' }}</button>
+          {{ company.name }}
+        </h2>
         <div class="muted small">
           {{ company.tickers.join(', ') }} · CIK {{ company.cik }}
           <span v-if="company.fiscalYearEnd"> · 會計年度結束 {{ company.fiscalYearEnd.slice(0, 2) }}/{{ company.fiscalYearEnd.slice(2) }}</span>
@@ -464,6 +498,7 @@ onMounted(() => {
           </div>
 
           <template v-if="isIndicators">
+            <ScoreCard v-if="filingScore && !filing?.quartersYear" :score="filingScore" />
             <p v-if="loadingIndicators" class="muted">計算到 {{ indicatorsEnd }} 為止的 {{ indCount }} {{ indMode === 'quarter' ? '期' : '年' }}指標，需下載多份申報，第一次約 20–40 秒…</p>
             <p v-else-if="indicatorsError" class="error">{{ indicatorsError }}</p>
             <template v-else-if="indicators">
@@ -529,6 +564,29 @@ header {
 .nav {
   display: flex;
   gap: 6px;
+}
+.nav .count {
+  margin-left: 5px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  padding: 0 5px;
+}
+.nav button:not(.active) .count {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.star {
+  border: none;
+  background: none;
+  padding: 0 4px 0 0;
+  font-size: 18px;
+  color: var(--muted);
+  cursor: pointer;
+  vertical-align: -1px;
+}
+.star.on {
+  color: #f59e0b;
 }
 .crawl {
   margin: -8px 0 12px;

@@ -288,11 +288,17 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
     : null;
   const absolute = inputs ? runModels(inputs, assumptions) : null;
 
+  // is the chosen period the company's newest filing? (then today's price is the natural basis)
+  const newest = company.filings.find((f) => !f.form.toUpperCase().endsWith('/A')) || company.filings[0];
+  const chosen = pickFiling(company.filings, { year, period });
+  const isLatest = !!newest && !!chosen && newest.accession === chosen.accession;
+
   return {
     fetchedAt: new Date().toISOString(),
     company: { cik: company.cik, name: company.name, ticker },
     quarterly,
     end: { year, period },
+    isLatest,
     quote: { ...q, source: q.source || null },
     currency: { reporting, quote: quoteCurrency, fxNow: reporting === quoteCurrency ? 1 : fxNow, fxSource: fxHist ? `${reporting}${quoteCurrency}=X` : null, adr },
     nowPerShare: nowPs,

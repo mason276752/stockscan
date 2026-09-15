@@ -15,6 +15,7 @@ import { store } from './store.js';
 import { getCompany, tickerTable, DEFAULT_FORMS } from './edgar.js';
 import { ensureStored } from './scrape.js';
 import { getUniverse } from './universe.js';
+import { scoreAccession } from './score.js';
 
 const CHECK_TTL = 7 * 24 * 3600 * 1000; // re-sweep a company after this long
 const WATCH_EVERY = 30 * 60 * 1000; // daily-index poll interval
@@ -85,6 +86,11 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     try {
       await ensureStored(low, filing, company);
       state.saved++;
+      try {
+        scoreAccession(filing.accession);
+      } catch (err) {
+        console.warn(`score ${filing.accession}: ${err.message}`);
+      }
       return true;
     } catch (err) {
       state.failed++;

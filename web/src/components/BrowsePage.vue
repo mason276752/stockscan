@@ -2,6 +2,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import CompanyTable from './CompanyTable.vue';
+import ScoreBadge from './ScoreBadge.vue';
+import { isWatched, toggleWatch } from '../watchlist';
 
 // params: { cat: 'sic'|'filer'|'etf', code, afs, etf }
 const props = defineProps({ params: { type: Object, default: () => ({}) } });
@@ -84,6 +86,21 @@ async function loadCompanies() {
 }
 watch([companiesKey, listedOnly], loadCompanies);
 
+// latest-filing scores for whatever is on screen (batched; server reads them from SQLite)
+const scores = ref({});
+async function loadScores(ciks) {
+  const need = [...new Set(ciks.filter((c) => c && !(c in scores.value)))];
+  for (let i = 0; i < need.length; i += 1500) {
+    try {
+      const r = await api.scores(need.slice(i, i + 1500));
+      scores.value = { ...scores.value, ...r.scores };
+    } catch {
+      /* scores are decoration: ignore failures */
+    }
+  }
+}
+watch(companies, (c) => c && loadScores(c.companies.map((x) => x.cik)));
+
 const visibleCompanies = computed(() => {
   if (!companies.value) return [];
   const q = filter.value.trim().toUpperCase();
@@ -120,6 +137,7 @@ async function loadHoldings() {
   error.value = null;
   try {
     holdings.value = await api.etfHoldings(etf.value);
+    loadScores(holdings.value.holdings.map((h) => h.cik));
   } catch (e) {
     error.value = e.message;
     holdings.value = null;
@@ -214,7 +232,7 @@ onMounted(async () => {
             </div>
           </div>
           <p v-if="loadingCompanies" class="muted">讀取公司清單…</p>
-          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-sic="false" @open="emit('open', $event)" />
+          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-sic="false" :scores="scores" @open="emit('open', $event)" />
         </template>
         <p v-else class="empty muted">左邊選一個產業（SIC 4 碼），點公司即可進入財報。</p>
       </main>
@@ -250,7 +268,7 @@ onMounted(async () => {
             </div>
           </div>
           <p v-if="loadingCompanies" class="muted">讀取公司清單…</p>
-          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-afs="false" @open="emit('open', $event)" />
+          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-afs="false" :scores="scores" @open="emit('open', $event)" />
         </template>
         <p v-else-if="loadingCompanies" class="muted">讀取公司清單…</p>
         <p v-else class="empty muted">左邊選一種申報身分。</p>
@@ -302,7 +320,9 @@ onMounted(async () => {
               <thead>
                 <tr>
                   <th class="num">#</th>
+                  <th class="star"></th>
                   <th>代號</th>
+                  <th>評分</th>
                   <th>名稱</th>
                   <th class="num">權重</th>
                   <th class="num">市值 (百萬美元)</th>
@@ -314,10 +334,12 @@ onMounted(async () => {
               <tbody>
                 <tr v-for="(h, i) in visibleHoldings" :key="h.cusip || h.name + i" :class="{ row: h.cik, dim: !h.cik }" @click="h.cik && emit('open', { cik: h.cik, ticker: h.symbol })">
                   <td class="num muted small">{{ i + 1 }}</td>
+                  <td class="star" @click.stop="h.cik && toggleWatch({ cik: h.cik, ticker: h.symbol, name: h.name })"><span v-if="h.cik" :class="{ on: isWatched(h.cik) }">{{ isWatched(h.cik) ? '★' : '☆' }}</span></td>
                   <td class="mono">
                     <a v-if="h.cik" :href="`?company=${h.symbol || h.cik}`" @click.prevent>{{ h.symbol || `CIK ${h.cik}` }}</a>
                     <span v-else class="muted" :title="h.cusip ? `CUSIP ${h.cusip}：找不到對應的 EDGAR 公司（外國公司、未上市或已下市）` : '無 CUSIP'">{{ h.symbol || '—' }}</span>
                   </td>
+                  <td><ScoreBadge v-if="h.cik" :score="scores[h.cik] ?? null" /></td>
                   <td class="name">
                     {{ h.name }}<span v-if="h.title && h.title !== h.name" class="muted small"> · {{ h.title }}</span>
                   </td>
@@ -516,6 +538,17 @@ thead th {
 }
 .dim td {
   color: var(--muted);
+}
+td.star,
+th.star {
+  width: 28px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+}
+td.star .on {
+  color: #f59e0b;
 }
 tbody tr:nth-child(even) td {
   background: var(--row-alt);

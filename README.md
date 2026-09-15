@@ -46,7 +46,9 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 - **欄位**：預設「只看本期」，每張報表只留這份申報自己的期間 —— 資產負債表只有本期末、損益表只有本季三個月（10-K 為全年）、
   現金流量表與權益變動表為期初 / 本期 / 期末。10-Q 的現金流量表通常只有年初至今欄，本季 = 年初至今 − 上一季 10-Q 的年初至今，
   期初現金 = 上一季期末（欄位標「推算」）；切到「申報書全部欄位」可看原本的比較期間。
-- 科目預設顯示中文（對照表在 `server/lib/zh.js`，涵蓋 us-gaap / ifrs-full 常用科目約 570 個；沒有對照的科目顯示英文並標 `EN`），可切換成英文
+- 科目預設顯示中文（對照表在 `server/lib/zh.js` 與 `zh-more.js`，約 1,700 個：us-gaap / ifrs-full 標準科目、以及大型公司自訂科目；
+  以已下載的 3,000 份財報統計，四大報表的標準科目約 96% 有中文；沒有對照的科目顯示英文並標 `EN`），可切換成英文。
+  公司自訂科目（`aapl:`、`jpm:` 這類前綴）若名稱與標準科目相同會沿用其翻譯。中文對照在讀取存檔時套用，新增翻譯不必重抓財報
 - 滑鼠移到科目上會顯示 tooltip：申報書的英文科目、taxonomy 標準名稱、XBRL concept、中文說明（部分科目）、SEC 官方英文定義（來自 MetaLinks.json）
 - **Q4 推算**：左側每個年度多一欄「Q4*」，該年度 Q1–Q3 10-Q 與 10-K 齊全時可按「推算」，
   顯示 Q1 / Q2 / Q3 / Q4* / FY 五欄的季度損益表與現金流量表（Q4 = FY − Q1 − Q2 − Q3），
@@ -58,6 +60,8 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
   - **逐年（近四季合計）**：往前 5 年（可選 3 / 5 / 8 / 10），每一欄是到該季為止連續四季的合計，
     例如選 2023 Q3 → 2022 Q4+2023 Q1–Q3、2021 Q4+2022 Q1–Q3、…；餘額取該季季末，平均餘額用季末與四季前季末平均。
     選 10-K 或 Q4 時每欄就是完整會計年度，數字與 10-K 一致。
+  - **同季比較（歷年同一季）**：只看所選季度，往前 5 年（可選 3 / 5 / 8 / 10），例如選 2023 Q3 → 2019 Q3、2020 Q3、…、2023 Q3 五欄，
+    每欄是該季的單季數字（年化方式同逐季），避開季節性直接比年增。
 - 單位：原始 / 千 / 百萬 / 十億（每股金額與比率不縮放）
 - 依報表顯示反號：把 `negatedLabel` 的行反號，讓數字跟 SEC 上看到的一致
 - 顯示 XBRL 概念名稱：在每行下方列出 `us-gaap:Assets` 這類 concept
@@ -92,8 +96,10 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 | `GET /api/company/GOOGL/quarters?year=2025` | 該會計年度的季度拆分：Q1–Q3 來自 10-Q，FY 來自 10-K，Q4 推算 |
 | `GET /api/company/GOOGL/indicators?year=2025&period=Q3&n=20&basis=x4` | 到 FY2025 Q3 為止 20 季的財務指標（`basis` = `x4` 單季×4 或 `ttm` 近四季合計） |
 | `GET /api/company/GOOGL/indicators?year=2025&period=Q3&mode=year&n=5` | 到 FY2025 Q3 為止 5 年，每年 = 連續四季合計（2024 Q4 + 2025 Q1–Q3 …） |
+| `GET /api/company/GOOGL/indicators?year=2025&period=Q3&mode=same&n=5` | 歷年同一季：2021 Q3、2022 Q3、…、2025 Q3 的單季指標 |
 | `GET /api/filing/1652044/0001652044-26-000048` | 指定 CIK + accession（加 `?view=current` 只留本期欄位；`statements`、`?url=` 也支援） |
 | `GET /api/filing?url=https://www.sec.gov/ix?doc=/Archives/...` | 直接貼 SEC 網址 |
+| `GET /api/company/AAPL/valuation?year=2026&period=Q3&n=20[&adr=5]` | 股價估值：各期倍數（期末股價）、現在倍數、歷史倍數反推的合理價、絕對估值模型（預設假設） |
 | `GET /api/browse/sic` | SIC 大類與 4 碼產業清單（含中文名、公司數） |
 | `GET /api/browse/filer` | 申報身分分類與公司數 |
 | `GET /api/browse/companies?sic=3674` / `?afs=LAF` | 某產業 / 某申報身分的公司（`listed=0` 含沒有股票代號的申報公司，`q=` 篩選） |
@@ -119,6 +125,44 @@ C1、C2、C3 取各季 10-Q 的年初至今欄（沒有就用上一季累計 + �
 - 回傳格式與單一申報相同，多了 `derived: true` 與 `sources`（四份來源申報），
   `columns[].label` 為 Q1/Q2/Q3/Q4/FY，`columns[].derived` 標示是否由相減得出。
 
+### 股價估值
+
+「股價估值」分頁與四張報表、財務指標並列，以所選申報為最後一期：
+
+- **股價來源**：SEC 沒有股價，現價與十年日線來自 Yahoo Finance 的 chart API（免金鑰）。Yahoo 的歷史收盤是分割調整後的，
+  但申報書裡的 EPS、股數是當時的數字，所以程式用 Yahoo 的分割事件把收盤還原成當時的報價，才能算當時的本益比。
+  現價每 10 分鐘更新、日線存 SQLite 一天。
+- **股價基準**：預設用所選申報的**期末收盤價**（跟各期表一致），可切換成**申報日收盤**（看到財報時的價格）或**現在**的價格，也可自訂；
+  倍數、合理價與絕對估值模型都用這個基準價。頁首同時列出三個價格。
+- **流通股數**：SEC companyconcept API 的 `dei:EntityCommonStockSharesOutstanding`（申報封面），依 accession 對到各期；
+  沒有時用 `us-gaap:CommonStockSharesOutstanding`，再沒有用稀釋加權平均股數。
+- **相對估值法**：本益比、股價淨值比、股價營收比、P/OCF、P/FCF、EV/EBITDA、EV/營收、現金股利殖利率、盈餘殖利率、自由現金流殖利率。
+  每一期用「期末收盤價 × 該期近四季數字」，「現在」用現價 × 最近四季；再以歷史平均 / 中位數 / 最低 / 最高倍數 × 目前每股數字反推合理價、便宜價、昂貴價。
+- **絕對估值法**（假設可在頁面上改，預設 r 9%、gT 2.5%、N 5 年、g1 = 近幾年營收年複合成長率限 0–15%、稅率 = 近四季有效稅率限 10–30%）：
+  自由現金流折現 DCF（兩階段）、股利折現 DDM（兩階段）、剩餘收益模型 RIM、盈餘能力價值 EPV（Greenwald）、
+  葛拉漢數字 √(22.5 × EPS × BVPS)、葛拉漢成長公式 EPS × (8.5 + 2g) × 4.4 ÷ Y、每股淨值、每股有形淨值。
+  模型公式在 `shared/valuation.js`，伺服器與瀏覽器共用（改假設時瀏覽器直接重算）。
+- **外國公司 / ADR**：財報幣別（例如 TSM 的 TWD）與報價幣別不同時，每股數字以 Yahoo 的匯率（各期用期末匯率）換算，
+  並乘上頁面上填的 ADR 比率（每 ADR 代表幾股普通股，SEC 資料沒有，TSM 為 5）。
+
+### 觀察名單與評分
+
+- **觀察名單**：財報頁公司名稱旁、分類瀏覽與 ETF 成分股表格的 ☆ 可加入；存在瀏覽器的 `localStorage`（`stockscan.watchlist`），
+  上方「觀察名單」頁列出每家公司最新財報的評分、五大類分數、最新財報期別與申報日，點列進入財報。
+- **評分（0–100）**：對一份 10-K / 10-Q 依財務指標的判斷標準計分，五大類各 20 分、平均分給該類的指標：
+  財務結構（負債佔資產、長期資金佔 PP&E）、償債能力（流動、速動比率）、經營能力（收現、銷貨日數、完整週期、總資產週轉）、
+  獲利能力（毛利率、營益率、淨利率、EPS、ROE）、現金流量（現金流量比率、允當比率、再投資比率、現金佔總資產）。
+  達標得滿分、離標準 20% 以內得一半，無法計算的項目不計、總分按剩餘項目換算成 100（`coverage` 表示可計算的分數）。
+  為了讓背景爬蟲下載到的每一份財報都能單獨評分，數字全部取自該份申報：期末餘額（平均用比較欄）、各張報表取事實最多的本期欄
+  （通常是年初至今）並依其月數 ×12/月數年化，現金流量允當比率也用同一期間而非五年。
+  科目對照有多層備援：營業成本認 `CostOfGoodsAndServicesSold`（另列的攤銷會加回）；銀行的營收 = 淨利息收入 + 非利息收入；
+  營業利益缺時用 營收 − 總成本費用 或 稅前 − 營業外；權益／負債總額可由「負債及權益總計」相減；只按產品／服務等單一軸標示、
+  沒有合計的科目會把成員加總；REIT 的投資性不動產、公用事業的廠房設備視為 PP&E。銀行、保險業沒有流動資產概念，償債、經營能力多半算不出來，分數僅供參考。
+- 分類瀏覽與 ETF 成分股表格多了「評分」欄（可排序），顯示每家公司**最新一份已下載財報**的評分；背景爬蟲存好財報後立即計分，
+  尚未下載的顯示「—」。財務指標分頁上方有該份申報的評分卡，可展開看每個項目的數值、標準與得分。
+- API：`GET /api/score?ciks=320193,1045810` 批次取最新評分；`GET /api/score/:cik/:accession` 取一份申報的完整明細。
+  評分存在 SQLite 的 `scores` 表，`SCORE_VERSION` 變更時啟動會重算。
+
 ### 財務指標的判斷標準
 
 指標名稱旁有標準值的列（例如 流動比率 ≥ 250%），滑鼠移到該列時，每一格依標準著色：符合為淺綠底、不符合為淺紅底、沒有資料不著色。
@@ -143,7 +187,9 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | | 稅前純益佔實收資本比率 | 年化稅前淨利 ÷（普通股股本 + 資本公積） |
 | | 毛利率、營業利益率、經營安全邊際率、純益率 | 同期流量相除，不需年化 |
 | | 每股盈餘、稅後淨利、營業收入 | 單季金額；勾選「金額列也年化」時顯示年化值 |
-| 經營能力 | 做生意的完整週期 | 平均銷貨日數 + 平均收現日數 |
+| 經營能力 | 應付款項週轉率 / 平均付款日數 | 年化營業成本 ÷ 平均應付帳款；365 ÷ 週轉率 |
+| | 缺現金的天數（現金轉換循環） | 平均銷貨日數 + 平均收現日數 − 平均付款日數；負數代表先收錢再付款 |
+| | 做生意的完整週期 | 平均銷貨日數 + 平均收現日數 |
 | 現金流量 | 現金流量比率 | 年化營業現金流量 ÷ 流動負債 |
 | | 現金流量允當比率 | 最近 20 季營業現金流量 ÷ 最近 20 季（資本支出 + 存貨增加 + 現金股利）；不足時用可取得期數（≥4 季） |
 | | 現金再投資比率 | （年化營業現金流量 − 年化現金股利）÷（PP&E 毛額 + 長期投資 + 其他資產 + 營運資金） |
@@ -236,12 +282,16 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/taxonomy.js` | 解析 `.xsd` role 定義、presentation linkbase、label linkbase（支援 linkbase 內嵌在 xsd 的申報） |
 | `server/lib/statements.js` | 把事實依 presentation tree 組成報表，篩選維度、去除雜欄 |
 | `server/lib/scrape.js` | 一份申報 → 完整 JSON（含 MetaLinks.json 的標準名稱與定義） |
-| `server/lib/zh.js` | us-gaap / ifrs-full 科目中文對照表 |
+| `server/lib/zh.js`、`zh-more.js` | 科目中文對照表（標準科目、說明、大型公司自訂科目）；`applyZh` 在讀取存檔時補上 |
 | `server/lib/current.js` | 「只看本期」檢視：去掉比較欄，現金流量表以年初至今相減得本季 |
 | `server/lib/quarters.js` | 季度拆分與 Q4 推算；`yearQuarterPoints` 供指標頁使用 |
 | `server/lib/indicators.js` | 財務指標（五大比率）計算 |
+| `server/lib/prices.js` | Yahoo Finance 現價與十年日線（還原分割）、匯率 |
+| `server/lib/valuation.js` | 估值：近四季數字、股數、各期倍數、絕對模型輸入 |
+| `shared/valuation.js` | 估值模型與倍數公式（伺服器與瀏覽器共用） |
+| `server/lib/score.js` | 單一申報的評分（五大類 × 20 分） |
 | `server/lib/universe.js` | 全部申報公司的 SIC / 申報身分 / 公眾流通市值（Financial Statement Data Sets + frames API） |
 | `server/lib/etf.js` | ETF 清單、N-PORT 成分股、CUSIP → 代號 → CIK 對應 |
 | `server/lib/remoteZip.js` | 用 HTTP Range 從 sec.gov 的 zip 只抽出需要的檔案 |
 | `server/data/sic.json` | SIC 4 碼對照表（SEC 英文名、中文名、大類） |
-| `web/` | Vue 3 + Vite 前端（`CompanySearch`、`FilingPicker`、`StatementTable`、`IndicatorsTable`、`BrowsePage`、`CompanyTable`） |
+| `web/` | Vue 3 + Vite 前端（`CompanySearch`、`FilingPicker`、`StatementTable`、`IndicatorsTable`、`BrowsePage`、`CompanyTable`、`ValuationPanel`、`WatchlistPage`、`ScoreCard`、`ScoreBadge`；`watchlist.js` 為 localStorage 觀察名單） |

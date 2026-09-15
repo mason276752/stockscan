@@ -13,6 +13,7 @@ import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
 import { buildValuation } from './lib/valuation.js';
+import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, scoreAccession } from './lib/score.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 
@@ -38,6 +39,29 @@ setTimeout(() => {
   if (universeStale()) refreshUniverse(client, 'low').catch((e) => console.warn(`universe build failed: ${e.message}`));
 }, 5000);
 setTimeout(() => crawler.start(), 15_000);
+
+// Score every saved filing that has no score yet (new version, or filings
+// saved before scoring existed) - a few ms each, in the background.
+setTimeout(() => {
+  const todo = store.unscoredAccessions(SCORE_VERSION);
+  if (!todo.length) return;
+  console.log(`scoring ${todo.length} saved filings in the background`);
+  let i = 0;
+  const step = () => {
+    const t0 = Date.now();
+    while (i < todo.length && Date.now() - t0 < 50) {
+      try {
+        scoreAccession(todo[i]);
+      } catch (err) {
+        console.warn(`score ${todo[i]}: ${err.message}`);
+      }
+      i++;
+    }
+    if (i < todo.length) setTimeout(step, 20);
+    else console.log('scoring done');
+  };
+  step();
+}, 8000);
 
 const app = express();
 app.use(express.json());
@@ -305,6 +329,41 @@ app.get(
   '/api/browse/etf/:ticker',
   wrap(async (req, res) => {
     res.json(await dedupe(`etf:${req.params.ticker.toUpperCase()}`, () => etfHoldings(client, req.params.ticker)));
+  }),
+);
+
+// ---------- scores ----------
+
+// GET /api/score?ciks=320193,1045810 -> score of each company's newest saved
+// filing (null when the crawler has not saved one yet)
+app.get('/api/score', (req, res) => {
+  const ciks = String(req.query.ciks || '')
+    .split(',')
+    .map((x) => Number(x))
+    .filter((x) => Number.isInteger(x) && x > 0)
+    .slice(0, 6000);
+  const out = {};
+  for (const cik of ciks) {
+    const s = latestScore(cik);
+    out[cik] = s ? { score: s.score, coverage: s.coverage, accession: s.accession, form: s.form, fiscalYear: s.fiscalYear, fiscalPeriod: s.fiscalPeriod, periodEnd: s.periodEnd, filingDate: s.filingDate, categories: s.categories.map((c) => c.score) } : null;
+  }
+  res.json({ version: SCORE_VERSION, items: SCORE_ITEMS.map(({ key, name, category, benchmark, weight }) => ({ key, name, category, benchmark, weight })), scores: out });
+});
+
+// GET /api/score/1652044/0001652044-26-000048 -> full score breakdown of one filing (scrapes it if needed)
+app.get(
+  '/api/score/:cik/:accession',
+  wrap(async (req, res) => {
+    let s = scoreAccession(req.params.accession);
+    if (!s) {
+      const company = await getCompany(client, req.params.cik);
+      const filing = company.filings.find((f) => f.accession === req.params.accession);
+      if (!filing) return res.status(404).json({ error: `Filing ${req.params.accession} not found` });
+      await dedupe(filing.accession, () => scrapeFiling(client, filing, company));
+      s = scoreAccession(filing.accession);
+    }
+    if (!s) return res.status(404).json({ error: 'Cannot score this filing' });
+    res.json(s);
   }),
 );
 

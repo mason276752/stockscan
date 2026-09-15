@@ -1,0 +1,192 @@
+<script setup>
+// Score breakdown of one filing, shown above the indicators table.
+import { computed, ref } from 'vue';
+
+const props = defineProps({ score: { type: Object, required: true } });
+const open = ref(false);
+const cls = (s) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
+const f1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+const OP = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
+const fmtVal = (it) => (it.value == null ? '—' : `${f1.format(it.value)}${it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${it.unit}`}`);
+const fmtBench = (it) => `${OP[it.benchmark.op]} ${it.benchmark.value}${it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${it.unit}`}`;
+const gradeText = (g) => (g == null ? '無法計算' : g === 1 ? '達標' : g === 0.5 ? '接近' : '未達');
+const byCat = computed(() => props.score.categories.map((c) => ({ ...c, items: props.score.items.filter((i) => i.category === c.name) })));
+</script>
+
+<template>
+  <div class="panel card">
+    <div class="head" @click="open = !open">
+      <div class="total" :class="cls(score.score)">
+        <div class="num">{{ score.score ?? '—' }}</div>
+        <div class="of">/ 100</div>
+      </div>
+      <div class="cats">
+        <div v-for="c in score.categories" :key="c.name" class="cat">
+          <div class="cat-name">{{ c.name }}</div>
+          <div class="bar"><div class="fill" :class="cls(c.score)" :style="{ width: `${c.score ?? 0}%` }"></div></div>
+          <div class="cat-val muted">{{ c.earned }} / {{ c.applicable }}</div>
+        </div>
+      </div>
+      <div class="meta muted small">
+        {{ score.form }} {{ score.fiscalYear }} {{ score.fiscalPeriod }} · 期末 {{ score.periodEnd }}<br />
+        {{ score.basis.note }}<br />
+        可計算項目 {{ score.coverage }}/100 分 · <span class="link">{{ open ? '收起明細 ▴' : '看明細 ▾' }}</span>
+      </div>
+    </div>
+    <div v-if="open" class="detail">
+      <table>
+        <thead>
+          <tr>
+            <th>類別</th>
+            <th>指標</th>
+            <th class="num">數值</th>
+            <th>標準</th>
+            <th>結果</th>
+            <th class="num">得分</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="c in byCat" :key="c.name">
+            <tr v-for="(it, i) in c.items" :key="it.key" :class="{ first: i === 0 }">
+              <td v-if="i === 0" :rowspan="c.items.length" class="catcell">{{ c.name }}</td>
+              <td>{{ it.name }}</td>
+              <td class="num">{{ fmtVal(it) }}</td>
+              <td class="muted">{{ fmtBench(it) }}</td>
+              <td :class="it.grade == null ? 'muted' : it.grade === 1 ? 'good-t' : it.grade === 0.5 ? 'mid-t' : 'bad-t'">{{ gradeText(it.grade) }}</td>
+              <td class="num">{{ it.points == null ? '—' : `${it.points} / ${f1.format(it.weight)}` }}</td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <p class="muted small">達標得滿分、離標準 20% 以內得一半、其餘 0 分；無法計算的項目不計，總分按剩餘項目換算成 100。分數由這一份申報獨立算出（年初至今數字年化），所以跟上方指標表的「單季 ×4」或「近四季」可能略有不同。</p>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.card {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+}
+.head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 20px;
+  align-items: center;
+  cursor: pointer;
+}
+.total {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 14px;
+  border-radius: 10px;
+}
+.total .num {
+  font-size: 32px;
+  font-weight: 700;
+}
+.total .of {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.cats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+.cat-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+.bar {
+  height: 8px;
+  background: var(--total);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 4px 0;
+}
+.fill {
+  height: 100%;
+}
+.cat-val {
+  font-size: 11px;
+}
+.meta {
+  text-align: right;
+  line-height: 1.5;
+}
+.link {
+  color: var(--accent);
+}
+.small {
+  font-size: 12px;
+}
+.good {
+  background: #dcfce7;
+  color: #166534;
+}
+.mid {
+  background: #fef9c3;
+  color: #854d0e;
+}
+.bad {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.none {
+  background: var(--total);
+  color: var(--muted);
+}
+.fill.good {
+  background: #22c55e;
+}
+.fill.mid {
+  background: #eab308;
+}
+.fill.bad {
+  background: #ef4444;
+}
+.detail {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+th,
+td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.catcell {
+  font-weight: 600;
+  vertical-align: top;
+}
+.good-t {
+  color: #166534;
+}
+.mid-t {
+  color: #854d0e;
+}
+.bad-t {
+  color: #991b1b;
+}
+@media (max-width: 900px) {
+  .head {
+    grid-template-columns: 1fr;
+  }
+  .cats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+</style>

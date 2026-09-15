@@ -67,7 +67,8 @@ export async function ensureStored(client, filing, company) {
 
 async function loadOrScrape(client, filing, company) {
   const saved = store.getFiling(filing.accession);
-  if (saved) return applyZh(saved);
+  // a saved result with no statements came from a parser bug: parse it again
+  if (saved && saved.stats?.statementRoles > 0) return applyZh(saved);
   const result = await scrapeUncached(client, filing, company);
   store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
   return result;

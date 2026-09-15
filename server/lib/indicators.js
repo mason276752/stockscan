@@ -14,8 +14,19 @@ import { yearQuarterPoints } from './quarters.js';
 
 // Concept fallbacks (US-GAAP first, then IFRS). Lists are tried in order.
 export const C = {
-  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers'],
-  cogs: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales'],
+  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers'],
+  // banks: net revenue = net interest income + non-interest income
+  netInterestIncome: ['us-gaap:InterestIncomeExpenseNet', 'us-gaap:InterestIncomeExpenseAfterProvisionForLoanLoss'],
+  interestIncome: ['us-gaap:InterestAndDividendIncomeOperating', 'us-gaap:InterestIncomeOperating'],
+  noninterestIncome: ['us-gaap:NoninterestIncome'],
+  costsAndExpenses: ['us-gaap:CostsAndExpenses', 'us-gaap:OperatingCostsAndExpenses'],
+  nonoperating: ['us-gaap:NonoperatingIncomeExpense'],
+  cogs: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales', 'us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
+  // some filers show cost of revenue as a base line plus separate amortisation / depreciation lines (Intuit, Broadcom …)
+  cogsTotal: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales'],
+  cogsPartial: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
+  cogsAmort: ['us-gaap:CostOfGoodsAndServicesSoldAmortization'],
+  cogsDA: ['us-gaap:CostOfGoodsAndServicesSoldDepreciationAndAmortization', 'us-gaap:CostOfGoodsAndServicesSoldDepreciation'],
   grossProfit: ['us-gaap:GrossProfit', 'ifrs-full:GrossProfit'],
   operatingIncome: ['us-gaap:OperatingIncomeLoss', 'ifrs-full:ProfitLossFromOperatingActivities'],
   pretaxIncome: [
@@ -25,29 +36,29 @@ export const C = {
     'ifrs-full:ProfitLossBeforeTax',
   ],
   netIncome: ['us-gaap:NetIncomeLoss', 'us-gaap:NetIncomeLossAvailableToCommonStockholdersBasic', 'us-gaap:ProfitLoss', 'ifrs-full:ProfitLossAttributableToOwnersOfParent', 'ifrs-full:ProfitLoss'],
-  eps: ['us-gaap:EarningsPerShareDiluted', 'us-gaap:EarningsPerShareBasicAndDiluted', 'us-gaap:EarningsPerShareBasic', 'ifrs-full:DilutedEarningsLossPerShare', 'ifrs-full:BasicEarningsLossPerShare'],
+  eps: ['us-gaap:EarningsPerShareDiluted', 'us-gaap:EarningsPerShareBasicAndDiluted', 'us-gaap:EarningsPerShareBasic', 'us-gaap:IncomeLossFromContinuingOperationsPerDilutedShare', 'us-gaap:IncomeLossFromContinuingOperationsPerBasicShare', 'ifrs-full:DilutedEarningsLossPerShare', 'ifrs-full:BasicEarningsLossPerShare'],
   ocf: ['us-gaap:NetCashProvidedByUsedInOperatingActivities', 'us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'ifrs-full:CashFlowsFromUsedInOperatingActivities'],
   icf: ['us-gaap:NetCashProvidedByUsedInInvestingActivities', 'us-gaap:NetCashProvidedByUsedInInvestingActivitiesContinuingOperations', 'ifrs-full:CashFlowsFromUsedInInvestingActivities'],
   fcf: ['us-gaap:NetCashProvidedByUsedInFinancingActivities', 'us-gaap:NetCashProvidedByUsedInFinancingActivitiesContinuingOperations', 'ifrs-full:CashFlowsFromUsedInFinancingActivities'],
-  capex: ['us-gaap:PaymentsToAcquirePropertyPlantAndEquipment', 'us-gaap:PaymentsToAcquireProductiveAssets', 'ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities'],
+  capex: ['us-gaap:PaymentsToAcquirePropertyPlantAndEquipment', 'us-gaap:PaymentsToAcquireProductiveAssets', 'us-gaap:PaymentsToAcquireOtherPropertyPlantAndEquipment', 'us-gaap:PaymentsForCapitalImprovements', 'us-gaap:PaymentsToAcquireOilAndGasPropertyAndEquipment', 'us-gaap:PaymentsToAcquireOilAndGasProperty', 'us-gaap:PaymentsToAcquireMachineryAndEquipment', 'us-gaap:PaymentsForFlightEquipment', 'us-gaap:PaymentsToAcquireOilAndGasEquipment', 'us-gaap:PaymentsToAcquireRealEstate', 'us-gaap:PaymentsToDevelopRealEstateAssets', 'us-gaap:PaymentsToAcquireCommercialRealEstate', 'us-gaap:PaymentsForConstructionInProcess', 'ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities'],
   dividends: ['us-gaap:PaymentsOfDividends', 'us-gaap:PaymentsOfDividendsCommonStock', 'us-gaap:PaymentsOfOrdinaryDividends', 'us-gaap:PaymentsOfDividendsCommonStock', 'ifrs-full:DividendsPaidClassifiedAsFinancingActivities', 'ifrs-full:DividendsPaid'],
   // balances
-  cash: ['us-gaap:CashAndCashEquivalentsAtCarryingValue', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents', 'us-gaap:CashAndDueFromBanks', 'ifrs-full:CashAndCashEquivalents'],
-  ar: ['us-gaap:AccountsReceivableNetCurrent', 'us-gaap:ReceivablesNetCurrent', 'us-gaap:AccountsNotesAndLoansReceivableNetCurrent', 'ifrs-full:CurrentTradeReceivables', 'ifrs-full:TradeAndOtherCurrentReceivables'],
+  cash: ['us-gaap:CashAndCashEquivalentsAtCarryingValue', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations', 'us-gaap:CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations', 'us-gaap:CashAndDueFromBanks', 'us-gaap:CashCashEquivalentsAndFederalFundsSold', 'us-gaap:CashCashEquivalentsAndShortTermInvestments', 'us-gaap:Cash', 'us-gaap:CashEquivalentsAtCarryingValue', 'ifrs-full:CashAndCashEquivalents'],
+  ar: ['us-gaap:AccountsReceivableNetCurrent', 'us-gaap:ReceivablesNetCurrent', 'us-gaap:AccountsNotesAndLoansReceivableNetCurrent', 'us-gaap:AccountsAndOtherReceivablesNetCurrent', 'us-gaap:AccountsReceivableNet', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLossCurrent', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLoss', 'us-gaap:PremiumsReceivableAtCarryingValue', 'us-gaap:AccountsReceivableGrossCurrent', 'ifrs-full:CurrentTradeReceivables', 'ifrs-full:TradeAndOtherCurrentReceivables', 'ifrs-full:TradeReceivables'],
   inventory: ['us-gaap:InventoryNet', 'us-gaap:InventoryFinishedGoodsNetOfReserves', 'ifrs-full:Inventories'],
   prepaid: ['us-gaap:PrepaidExpenseCurrent'],
   currentAssets: ['us-gaap:AssetsCurrent', 'ifrs-full:CurrentAssets'],
   totalAssets: ['us-gaap:Assets', 'ifrs-full:Assets'],
-  ppe: ['us-gaap:PropertyPlantAndEquipmentNet', 'ifrs-full:PropertyPlantAndEquipment'],
-  ppeGross: ['us-gaap:PropertyPlantAndEquipmentGross', 'ifrs-full:PropertyPlantAndEquipmentGrossCarryingAmount'],
+  ppe: ['us-gaap:PropertyPlantAndEquipmentNet', 'us-gaap:PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization', 'us-gaap:PropertyPlantAndEquipmentExcludingLessorAssetUnderOperatingLeaseAfterAccumulatedDepreciation', 'us-gaap:PublicUtilitiesPropertyPlantAndEquipmentNet', 'us-gaap:RealEstateInvestmentPropertyNet', 'us-gaap:RealEstateInvestments', 'us-gaap:PropertySubjectToOrAvailableForOperatingLeaseNet', 'us-gaap:OilAndGasPropertySuccessfulEffortMethodNet', 'us-gaap:OilAndGasPropertyFullCostMethodNet', 'ifrs-full:PropertyPlantAndEquipment', 'ifrs-full:InvestmentProperty'],
+  ppeGross: ['us-gaap:PropertyPlantAndEquipmentGross', 'us-gaap:PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetBeforeAccumulatedDepreciationAndAmortization', 'us-gaap:RealEstateInvestmentPropertyAtCost', 'us-gaap:PublicUtilitiesPropertyPlantAndEquipmentPlantInService', 'ifrs-full:PropertyPlantAndEquipmentGrossCarryingAmount'],
   ltInvestments: ['us-gaap:LongTermInvestments', 'us-gaap:OtherLongTermInvestments', 'us-gaap:MarketableSecuritiesNoncurrent', 'us-gaap:EquityMethodInvestments', 'ifrs-full:NoncurrentFinancialAssets', 'ifrs-full:InvestmentAccountedForUsingEquityMethod'],
   otherAssets: ['us-gaap:OtherAssetsNoncurrent', 'ifrs-full:OtherNoncurrentAssets'],
-  ap: ['us-gaap:AccountsPayableCurrent', 'us-gaap:AccountsPayableAndAccruedLiabilitiesCurrent', 'us-gaap:AccountsPayableTradeCurrent', 'ifrs-full:TradeAndOtherCurrentPayablesToTradeSuppliers', 'ifrs-full:TradeAndOtherCurrentPayables'],
+  ap: ['us-gaap:AccountsPayableCurrent', 'us-gaap:AccountsPayableTradeCurrent', 'us-gaap:AccountsPayableAndAccruedLiabilitiesCurrent', 'us-gaap:AccountsPayableAndOtherAccruedLiabilitiesCurrent', 'us-gaap:AccountsPayableCurrentAndNoncurrent', 'us-gaap:AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent', 'us-gaap:AccountsPayableAndOtherAccruedLiabilities', 'ifrs-full:TradeAndOtherCurrentPayablesToTradeSuppliers', 'ifrs-full:TradeAndOtherCurrentPayables', 'ifrs-full:TradeAndOtherPayables'],
   currentLiabilities: ['us-gaap:LiabilitiesCurrent', 'ifrs-full:CurrentLiabilities'],
   totalLiabilities: ['us-gaap:Liabilities', 'ifrs-full:Liabilities'],
   nonCurrentLiabilities: ['us-gaap:LiabilitiesNoncurrent', 'ifrs-full:NoncurrentLiabilities'],
-  equityParent: ['us-gaap:StockholdersEquity', 'ifrs-full:EquityAttributableToOwnersOfParent'],
-  equityTotal: ['us-gaap:StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest', 'us-gaap:StockholdersEquity', 'ifrs-full:Equity', 'ifrs-full:EquityAttributableToOwnersOfParent'],
+  equityParent: ['us-gaap:StockholdersEquity', 'us-gaap:PartnersCapital', 'us-gaap:MembersEquity', 'ifrs-full:EquityAttributableToOwnersOfParent'],
+  equityTotal: ['us-gaap:StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest', 'us-gaap:StockholdersEquity', 'us-gaap:PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest', 'us-gaap:PartnersCapital', 'us-gaap:LimitedLiabilityCompanyLlcMembersEquityIncludingPortionAttributableToNoncontrollingInterest', 'us-gaap:MembersEquity', 'ifrs-full:Equity', 'ifrs-full:EquityAttributableToOwnersOfParent'],
   liabilitiesAndEquity: ['us-gaap:LiabilitiesAndStockholdersEquity', 'ifrs-full:EquityAndLiabilities'],
   paidInCapital: ['us-gaap:CommonStocksIncludingAdditionalPaidInCapital', 'ifrs-full:IssuedCapital'],
   commonStock: ['us-gaap:CommonStockValue', 'us-gaap:CommonStockValueOutstanding'],
@@ -89,7 +100,7 @@ export const ROWS = [
   { key: 'apTurnover', group: '經營能力', name: '應付款項週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業成本（年化）÷ 平均應付帳款' },
   { key: 'dpo', group: '經營能力', name: '平均付款日數', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 應付款項週轉率：進貨後平均多久才付錢給供應商' },
   { key: 'cashGap', group: '經營能力', name: '缺現金的天數（現金轉換循環）', unit: '天', kind: 'ratio', annualized: true, formula: '平均銷貨日數 + 平均收現日數 − 平均付款日數：從付錢給供應商到收到客戶的錢之間，自己要墊多少天的錢；愈少愈好，負數代表先收到錢才付款（如 Apple、Amazon）' },
-  { key: 'cycle', group: '經營能力', name: '做生意的完整週期', unit: '天', kind: 'ratio', annualized: true, formula: '平均銷貨日數 + 平均收現日數：從進貨到賣出、再到收到現金要多久（未扣應付帳款天數的營業週期）', benchmark: { op: '<=', value: 200 } },
+  { key: 'cycle', group: '經營能力', name: '做生意的完整週期', unit: '天', kind: 'ratio', annualized: true, formula: '平均銷貨日數 + 平均收現日數：從進貨到賣出、再到收到現金要多久（未扣應付帳款天數的營業週期）；沒有存貨的公司 = 平均收現日數', benchmark: { op: '<=', value: 200 } },
   { key: 'ppeTurnover', group: '經營能力', name: '不動產、廠房及設備週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均不動產、廠房及設備淨額' },
   { key: 'assetTurnover', group: '經營能力', name: '總資產週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均總資產', benchmark: { op: '>=', value: 1 } },
 
@@ -98,6 +109,7 @@ export const ROWS = [
   { key: 'pretaxToCapital', group: '獲利能力', name: '稅前純益佔實收資本比率', unit: '%', kind: 'ratio', annualized: true, formula: '稅前淨利（年化）÷（普通股股本 + 資本公積）。美國公司面額極低，此比率意義有限' },
   { key: 'grossMargin', group: '獲利能力', name: '營業毛利率 ①', unit: '%', kind: 'ratio', formula: '毛利 ÷ 營業收入（無毛利科目時用 營業收入 − 營業成本）', benchmark: { op: '>=', value: 25 } },
   { key: 'opMargin', group: '獲利能力', name: '營業利益率 ②', unit: '%', kind: 'ratio', formula: '營業利益 ÷ 營業收入', benchmark: { op: '>=', value: 15 } },
+  { key: 'opexRatio', group: '獲利能力', name: '營業費用率 ①−②', unit: '%', kind: 'ratio', formula: '營業毛利率 − 營業利益率，即營業費用（銷售、管理、研發）÷ 營業收入；愈低代表費用控制愈好' },
   { key: 'safetyMargin', group: '獲利能力', name: '經營安全邊際率 ②/①', unit: '%', kind: 'ratio', formula: '營業利益率 ÷ 營業毛利率，愈大愈好' },
   { key: 'netMargin', group: '獲利能力', name: '純益率（淨利率）', unit: '%', kind: 'ratio', formula: '稅後淨利 ÷ 營業收入', benchmark: { op: '>=', value: 10 } },
   { key: 'eps', group: '獲利能力', name: '每股盈餘（稀釋）', unit: '元', kind: 'flow', formula: '申報書稀釋每股盈餘；Q4 為全年減前三季之近似值，年度檢視為四季相加。未做股票分割調整，跨越分割日的期間數字會失真', benchmark: { op: '>', value: 0 } },
@@ -168,13 +180,18 @@ export async function loadPoints(client, company, keys, quarterly) {
 //   flowA(key)  the same on an annual basis
 //   bal(key)    closing balance, balPrev(key) opening balance
 //   adequacy()  { ocf, out, periods } sums for the cash-flow-adequacy ratio
-function ratios(g) {
+export function ratios(g) {
   const v = {};
   const totalAssets = g.bal('totalAssets');
   const currentAssets = g.bal('currentAssets');
   const currentLiabilities = g.bal('currentLiabilities');
-  const equityTotal = g.bal('equityTotal');
-  const totalLiabilities = g.bal('totalLiabilities') ?? (g.bal('liabilitiesAndEquity') != null && equityTotal != null ? g.bal('liabilitiesAndEquity') - equityTotal : null);
+  const lse = g.bal('liabilitiesAndEquity') ?? totalAssets;
+  // equity and total liabilities: the concept, or the other one subtracted from total liabilities & equity
+  const equityTotal = g.bal('equityTotal') ?? (lse != null && g.bal('totalLiabilities') != null ? lse - g.bal('totalLiabilities') : null);
+  const totalLiabilities =
+    g.bal('totalLiabilities') ??
+    (lse != null && equityTotal != null ? lse - equityTotal : null) ??
+    (currentLiabilities != null && g.bal('nonCurrentLiabilities') != null ? currentLiabilities + g.bal('nonCurrentLiabilities') : null);
   const ncl = g.bal('nonCurrentLiabilities') ?? (totalLiabilities != null && currentLiabilities != null ? totalLiabilities - currentLiabilities : null);
   const inventory = g.bal('inventory');
   const avgBal = (key) => avg(g.bal(key), g.balPrev(key));
@@ -193,13 +210,36 @@ function ratios(g) {
   v.currentRatio = pct(currentAssets, currentLiabilities);
   v.quickRatio = currentAssets == null ? null : pct(currentAssets - (inventory ?? 0) - (g.bal('prepaid') ?? 0), currentLiabilities);
 
-  const revenueA = g.flowA('revenue');
+  // cost of revenue: the total concept, or the base line plus its separate amortisation / depreciation lines
+  const cogsOf = (f) => f('cogsTotal') ?? (f('cogsPartial') == null ? null : f('cogsPartial') + (f('cogsAmort') ?? 0) + (f('cogsDA') ?? 0));
+  const cogsA = cogsOf(g.flowA);
+
+  // revenue: banks have no revenue line - use net interest income + non-interest income
+  const revenueOf = (f) => {
+    const direct = f('revenue');
+    if (direct != null) return direct;
+    const nii = f('netInterestIncome') ?? f('interestIncome');
+    return nii == null ? null : nii + (f('noninterestIncome') ?? 0);
+  };
+  // operating income: the concept, else revenue − total costs and expenses, else pre-tax income − non-operating items
+  const opIncomeOf = (f) => {
+    const direct = f('operatingIncome');
+    if (direct != null) return direct;
+    const rev = revenueOf(f);
+    if (rev != null && f('costsAndExpenses') != null) return rev - f('costsAndExpenses');
+    if (f('pretaxIncome') != null && f('nonoperating') != null) return f('pretaxIncome') - f('nonoperating');
+    return null;
+  };
+
+  const revenueA = revenueOf(g.flowA);
   v.arTurnover = div(revenueA, avgBal('ar'));
   v.dso = div(365, v.arTurnover);
-  v.invTurnover = div(g.flowA('cogs'), avgBal('inventory'));
-  v.dio = div(365, v.invTurnover);
+  v.invTurnover = div(cogsA, avgBal('inventory'));
+  // no inventory line at all (services, software, pure cash businesses): zero days in stock
+  const noInventory = inventory == null && g.balPrev('inventory') == null && currentAssets != null;
+  v.dio = noInventory ? 0 : div(365, v.invTurnover);
   v.cycle = v.dso != null && v.dio != null ? v.dso + v.dio : null;
-  v.apTurnover = div(g.flowA('cogs'), avgBal('ap'));
+  v.apTurnover = div(cogsA, avgBal('ap'));
   v.dpo = div(365, v.apTurnover);
   v.cashGap = v.cycle != null && v.dpo != null ? v.cycle - v.dpo : null;
   v.ppeTurnover = div(revenueA, avgBal('ppe'));
@@ -211,11 +251,12 @@ function ratios(g) {
   const paidIn = g.bal('paidInCapital') ?? sum(g.bal('commonStock'), g.bal('apic'));
   v.pretaxToCapital = pct(g.flowA('pretaxIncome'), paidIn);
 
-  const revenue = g.flow('revenue');
-  const cogs = g.flow('cogs');
+  const revenue = revenueOf(g.flow);
+  const cogs = cogsOf(g.flow);
   const gross = g.flow('grossProfit') ?? (revenue != null && cogs != null ? revenue - cogs : null);
   v.grossMargin = pct(gross, revenue);
-  v.opMargin = pct(g.flow('operatingIncome'), revenue);
+  v.opMargin = pct(opIncomeOf(g.flow), revenue);
+  v.opexRatio = v.grossMargin != null && v.opMargin != null ? v.grossMargin - v.opMargin : null;
   v.safetyMargin = pct(v.opMargin, v.grossMargin);
   v.netMargin = pct(g.flow('netIncome'), revenue);
 

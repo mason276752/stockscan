@@ -268,14 +268,35 @@ export async function buildQuarterly(client, company, year) {
 const FLOW_TYPES = ['income_statement', 'comprehensive_income', 'cash_flow'];
 const canon = (concept) => (SYNONYMS[concept] ? SYNONYMS[concept][0] : concept);
 
-function factsAt(stmt, colId, into) {
+export function factsAt(stmt, colId, into) {
   if (!stmt || !colId) return into;
+  const col = stmt.columns.find((c) => c.id === colId);
+  // columns for the same period that carry exactly one dimension: a line
+  // reported only per member (e.g. Intuit tags cost of revenue by product /
+  // service with no total) is rolled up by summing the members of one axis
+  const samePeriod = col
+    ? stmt.columns.filter((c) => c.id !== colId && Object.keys(c.dimensions).length === 1 && c.period.instant === col.period.instant && c.period.start === col.period.start && c.period.end === col.period.end)
+    : [];
   for (const li of stmt.lineItems) {
     if (li.abstract) continue;
-    const cell = li.values[colId];
-    if (!cell || typeof cell.value !== 'number') continue;
     const key = canon(li.concept);
-    if (!(key in into)) into[key] = cell.value;
+    if (key in into) continue;
+    const cell = li.values[colId];
+    if (cell && typeof cell.value === 'number') {
+      into[key] = cell.value;
+      continue;
+    }
+    if (!samePeriod.length) continue;
+    const byAxis = {};
+    for (const c of samePeriod) {
+      const v = li.values[c.id];
+      if (!v || typeof v.value !== 'number') continue;
+      const [axis, member] = Object.entries(c.dimensions)[0];
+      if (/Total|Aggregate/i.test(member)) continue;
+      (byAxis[axis] ||= []).push(v.value);
+    }
+    const axes = Object.values(byAxis);
+    if (axes.length === 1 && axes[0].length) into[key] = axes[0].reduce((a, b) => a + b, 0);
   }
   return into;
 }
@@ -290,7 +311,7 @@ function flowsAt(data, { end, monthsLen }) {
   return out;
 }
 
-function balancesAt(data, instant) {
+export function balancesAt(data, instant) {
   const stmt = statementOf(data, 'balance_sheet');
   const col = findColumn(stmt, { dims: '', instant });
   return factsAt(stmt, col?.id, {});

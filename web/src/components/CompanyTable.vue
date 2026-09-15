@@ -1,10 +1,14 @@
 <script setup>
 import { computed, ref } from 'vue';
 
+import ScoreBadge from './ScoreBadge.vue';
+import { isWatched, toggleWatch } from '../watchlist';
+
 const props = defineProps({
   companies: { type: Array, required: true },
   showSic: { type: Boolean, default: true },
   showAfs: { type: Boolean, default: true },
+  scores: { type: Object, default: () => ({}) }, // cik -> score summary | null
 });
 const emit = defineEmits(['open']);
 
@@ -23,9 +27,10 @@ function sortBy(key) {
 const rows = computed(() => {
   const k = sortKey.value;
   const d = sortDir.value;
+  const val = (c) => (k === 'score' ? props.scores[c.cik]?.score ?? null : c[k]);
   return [...props.companies].sort((a, b) => {
-    const x = a[k] ?? (typeof b[k] === 'number' ? -Infinity : '');
-    const y = b[k] ?? (typeof a[k] === 'number' ? -Infinity : '');
+    const x = val(a) ?? (typeof val(b) === 'number' ? -Infinity : '');
+    const y = val(b) ?? (typeof val(a) === 'number' ? -Infinity : '');
     if (x === y) return a.name.localeCompare(b.name);
     return (x < y ? -1 : 1) * d;
   });
@@ -48,7 +53,9 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
     <table>
       <thead>
         <tr>
+          <th class="star"></th>
           <th class="sortable" @click="sortBy('ticker')">代號{{ arrow('ticker') }}</th>
+          <th class="sortable" title="最新一份財報的評分（0–100），依財務指標的判斷標準計分；尚未下載的顯示 —" @click="sortBy('score')">評分{{ arrow('score') }}</th>
           <th class="sortable" @click="sortBy('name')">公司{{ arrow('name') }}</th>
           <th v-if="showSic" class="sortable" @click="sortBy('sic')">產業 (SIC){{ arrow('sic') }}</th>
           <th v-if="showAfs" class="sortable" @click="sortBy('afs')">申報身分{{ arrow('afs') }}</th>
@@ -59,10 +66,12 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
       </thead>
       <tbody>
         <tr v-for="c in rows" :key="c.cik" class="row" @click="emit('open', c)">
+          <td class="star" @click.stop="toggleWatch(c)"><span :class="{ on: isWatched(c.cik) }" :title="isWatched(c.cik) ? '從觀察名單移除' : '加入觀察名單'">{{ isWatched(c.cik) ? '★' : '☆' }}</span></td>
           <td class="mono">
             <a :href="`?company=${c.ticker || c.cik}`" @click.prevent>{{ c.ticker || `CIK ${c.cik}` }}</a>
             <span v-if="c.tickers.length > 1" class="muted small"> +{{ c.tickers.length - 1 }}</span>
           </td>
+          <td><ScoreBadge :score="scores[c.cik] ?? null" /></td>
           <td class="name">{{ c.name }}</td>
           <td v-if="showSic" class="small">
             <span v-if="c.sic">{{ c.sic }} {{ c.sicZh || c.sicTitle || '' }}</span>
@@ -158,6 +167,17 @@ tbody tr:nth-child(even) td {
 }
 .warn {
   color: var(--neg);
+}
+td.star,
+th.star {
+  width: 28px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+}
+td.star .on {
+  color: #f59e0b;
 }
 .empty {
   padding: 24px;
