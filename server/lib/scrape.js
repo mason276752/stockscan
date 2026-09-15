@@ -3,7 +3,11 @@
 import { parseInlineXbrl } from './ixbrl.js';
 import { loadTaxonomy } from './taxonomy.js';
 import { buildStatements } from './statements.js';
-import { store } from './store.js';
+import { store, requireVersion } from './store.js';
+
+// Bump whenever the parser / statement builder output changes: saved filings
+// from older versions are discarded at startup and re-parsed on demand.
+export const SCRAPE_VERSION = 2;
 
 const FILING_TTL = 24 * 3600 * 1000; // a filed document never changes
 
@@ -55,7 +59,7 @@ async function loadOrScrape(client, filing, company) {
   const saved = store.getFiling(filing.accession);
   if (saved) return saved;
   const result = await scrapeUncached(client, filing, company);
-  store.putFiling(filing.accession, filing.cik, result);
+  store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
   return result;
 }
 

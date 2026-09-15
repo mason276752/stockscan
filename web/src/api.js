@@ -7,9 +7,9 @@ async function get(url) {
 
 export const api = {
   search: (q) => get(`/api/search?q=${encodeURIComponent(q)}`),
-  company: (id) => get(`/api/company/${encodeURIComponent(id)}`),
-  filing: (cik, accession) => get(`/api/filing/${cik}/${accession}`),
-  filingUrl: (cik, accession) => `/api/filing/${cik}/${accession}`,
+  company: (id, { refresh = false } = {}) => get(`/api/company/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`),
+  filing: (cik, accession, view = 'all') => get(`/api/filing/${cik}/${accession}${view === 'current' ? '?view=current' : ''}`),
+  filingUrl: (cik, accession, view = 'all') => `/api/filing/${cik}/${accession}${view === 'current' ? '?view=current' : ''}`,
   quarters: (id, year) => get(`/api/company/${encodeURIComponent(id)}/quarters?year=${year}`),
   quartersUrl: (id, year) => `/api/company/${encodeURIComponent(id)}/quarters?year=${year}`,
   indicators: (id, params) => get(`/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`),

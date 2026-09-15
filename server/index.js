@@ -4,18 +4,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { SecClient } from './lib/secClient.js';
-import { openStore, store } from './lib/store.js';
+import { openStore, requireVersion, store } from './lib/store.js';
 import { createPrefetcher } from './lib/prefetch.js';
 import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, pickFiling, refreshTickers, searchCompanies } from './lib/edgar.js';
-import { scrapeFiling } from './lib/scrape.js';
+import { scrapeFiling, SCRAPE_VERSION } from './lib/scrape.js';
 import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
+import { currentView } from './lib/current.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 
 const client = new SecClient();
 openStore();
+requireVersion(SCRAPE_VERSION);
 const prefetcher = createPrefetcher(client);
 
 // Ticker table: refresh in the background at startup and daily; the saved
@@ -42,6 +44,27 @@ function dedupe(key, fn) {
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+// Scrape a filing and, with ?view=current, reduce it to its own period
+// (needs the previous 10-Q for year-to-date-only statements).
+async function filingResponse(req, company, filing) {
+  const data = await dedupe(filing.accession, () => scrapeFiling(client, filing, company));
+  prefetcher.schedule(company, filing);
+  if (req.query.view !== 'current') return data;
+  let prev = null;
+  const q = /^Q([2-3])$/.exec(filing.fiscalPeriod || '');
+  if (q) {
+    const pf = pickFiling(company.filings, { year: filing.fiscalYear, period: `Q${Number(q[1]) - 1}` });
+    if (pf) {
+      try {
+        prev = { filing: pf, data: await dedupe(pf.accession, () => scrapeFiling(client, pf, company)) };
+      } catch (err) {
+        console.warn(`previous filing ${pf.accession} unavailable: ${err.message}`);
+      }
+    }
+  }
+  return currentView(data, filing, prev);
+}
+
 // GET /api/search?q=goog  -> ticker / company-name suggestions
 app.get(
   '/api/search',
@@ -50,13 +73,14 @@ app.get(
   }),
 );
 
-// GET /api/company/GOOGL  -> company info + every Inline XBRL 10-K/10-Q/20-F/40-F,
-// newest first, each tagged with fiscalYear / fiscalPeriod (FY, Q1-Q3)
+// GET /api/company/GOOGL[?refresh=1]  -> company info + every Inline XBRL
+// 10-K/10-Q/20-F/40-F, newest first, each tagged with fiscalYear /
+// fiscalPeriod (FY, Q1-Q3). refresh=1 re-reads the filing list from SEC now.
 app.get(
   '/api/company/:id',
   wrap(async (req, res) => {
     const forms = req.query.form ? String(req.query.form).split(',') : DEFAULT_FORMS;
-    res.json(await getCompany(client, req.params.id, { forms }));
+    res.json(await getCompany(client, req.params.id, { forms, refresh: req.query.refresh === '1' }));
   }),
 );
 
@@ -73,8 +97,7 @@ app.get(
         available: company.filings.map((f) => ({ fiscalYear: f.fiscalYear, fiscalPeriod: f.fiscalPeriod, form: f.form, accession: f.accession })),
       });
     }
-    res.json(await dedupe(filing.accession, () => scrapeFiling(client, filing, company)));
-    prefetcher.schedule(company, filing);
+    res.json(await filingResponse(req, company, filing));
   }),
 );
 
@@ -111,7 +134,8 @@ app.get(
   }),
 );
 
-// GET /api/filing/1652044/0001652044-26-000048  -> one specific filing
+// GET /api/filing/1652044/0001652044-26-000048[?view=current]  -> one specific
+// filing; view=current keeps only the filing's own period in every statement
 app.get(
   '/api/filing/:cik/:accession',
   wrap(async (req, res) => {
@@ -126,8 +150,7 @@ app.get(
       if (!doc) return res.status(404).json({ error: `Cannot find an Inline XBRL document in ${req.params.accession}` });
       filing = { cik, accession: req.params.accession, primaryDocument: doc.name, ...filingUrls(cik, req.params.accession, doc.name) };
     }
-    res.json(await dedupe(filing.accession, () => scrapeFiling(client, filing, company)));
-    prefetcher.schedule(company, filing);
+    res.json(await filingResponse(req, company, filing));
   }),
 );
 
@@ -139,8 +162,7 @@ app.get(
     const base = filingFromUrl(String(req.query.url));
     const company = await getCompany(client, String(base.cik));
     const filing = company.filings.find((f) => f.accession === base.accession) || base;
-    res.json(await dedupe(filing.accession, () => scrapeFiling(client, filing, company)));
-    prefetcher.schedule(company, filing);
+    res.json(await filingResponse(req, company, filing));
   }),
 );
 

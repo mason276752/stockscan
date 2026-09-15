@@ -25,13 +25,23 @@ export function openStore(file = process.env.STOCKSCAN_DB || path.join(process.c
       fetched_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS filings_cik ON filings(cik);
+    CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE IF NOT EXISTS kv (
       key        TEXT PRIMARY KEY,
       json       TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
   `);
+  // saved filings were produced by a given version of the parser; when the
+  // parser changes, throw the old ones away so they get rebuilt
+  const cols = db.prepare('PRAGMA table_info(filings)').all().map((c) => c.name);
+  if (!cols.includes('version')) db.exec('ALTER TABLE filings ADD COLUMN version INTEGER NOT NULL DEFAULT 0');
   return db;
+}
+
+export function requireVersion(version) {
+  const n = need().prepare('DELETE FROM filings WHERE version <> ?').run(version).changes;
+  if (n) console.log(`store: dropped ${n} filings parsed by an older version`);
 }
 
 const need = () => {
@@ -51,10 +61,10 @@ export const store = {
   hasFiling(accession) {
     return !!need().prepare('SELECT 1 FROM filings WHERE accession = ?').get(accession);
   },
-  putFiling(accession, cik, result) {
+  putFiling(accession, cik, result, version) {
     need()
-      .prepare('INSERT OR REPLACE INTO filings (accession, cik, form, report_date, json, fetched_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(accession, cik, result.filing?.form ?? null, result.filing?.periodEnd ?? null, JSON.stringify(result), new Date().toISOString());
+      .prepare('INSERT OR REPLACE INTO filings (accession, cik, form, report_date, json, fetched_at, version) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(accession, cik, result.filing?.form ?? null, result.filing?.periodEnd ?? null, JSON.stringify(result), new Date().toISOString(), version);
   },
   filingCount(cik = null) {
     const row = cik == null ? need().prepare('SELECT COUNT(*) AS n FROM filings').get() : need().prepare('SELECT COUNT(*) AS n FROM filings WHERE cik = ?').get(cik);

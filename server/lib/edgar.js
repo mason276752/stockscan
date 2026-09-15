@@ -49,13 +49,13 @@ async function tickerTable(client) {
 // otherwise SEC - falling back to the stale copy when SEC is unreachable.
 async function cachedJson(client, key, url, ttlMs) {
   const saved = store.getKV(key);
-  if (saved && saved.ageMs < ttlMs) return saved.value;
+  if (saved && saved.ageMs < ttlMs) return { value: saved.value, updatedAt: Date.now() - saved.ageMs, fromCache: true };
   try {
     const value = await client.json(url);
     store.putKV(key, value);
-    return value;
+    return { value, updatedAt: Date.now(), fromCache: false };
   } catch (err) {
-    if (saved) return saved.value;
+    if (saved) return { value: saved.value, updatedAt: Date.now() - saved.ageMs, fromCache: true, stale: true };
     throw err;
   }
 }
@@ -114,16 +114,19 @@ function rowsOf(table) {
   return out;
 }
 
-export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, includeOlder = true } = {}) {
+// refresh=true bypasses the 10-minute cache (the UI's refresh button, for
+// the day a new 10-Q/10-K is filed).
+export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, includeOlder = true, refresh = false } = {}) {
   const cik = await resolveCik(client, tickerOrCik);
   const padded = String(cik).padStart(10, '0');
-  const sub = await cachedJson(client, `submissions:${padded}`, `${SUBMISSIONS}CIK${padded}.json`, SUBMISSIONS_TTL);
+  const main = await cachedJson(client, `submissions:${padded}`, `${SUBMISSIONS}CIK${padded}.json`, refresh ? 0 : SUBMISSIONS_TTL);
+  const sub = main.value;
   let rows = rowsOf(sub.filings.recent);
   if (includeOlder) {
     for (const f of sub.filings.files || []) {
       // older pages only ever gain nothing new; refresh them daily
       const older = await cachedJson(client, `submissions:${f.name}`, `${SUBMISSIONS}${f.name}`, TICKERS_TTL);
-      rows = rows.concat(rowsOf(older));
+      rows = rows.concat(rowsOf(older.value));
     }
   }
   const allowed = new Set(forms.map((f) => f.toUpperCase()));
@@ -144,6 +147,8 @@ export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, i
     fiscalYearEnd: sub.fiscalYearEnd || null,
     sic: sub.sic || null,
     sicDescription: sub.sicDescription || null,
+    filingsUpdatedAt: new Date(main.updatedAt).toISOString(),
+    filingsStale: !!main.stale,
     filings,
   };
 }

@@ -10,6 +10,30 @@ const company = ref(null);
 const filing = ref(null); // the filing row picked from the list
 const data = ref(null); // scraped statements JSON
 const loadingCompany = ref(false);
+const refreshing = ref(false);
+const refreshMessage = ref('');
+
+// Re-read the filing list from SEC (bypassing the 10-minute cache) - for the
+// day a new 10-Q / 10-K comes out.
+async function refreshFilings() {
+  if (!company.value || refreshing.value) return;
+  refreshing.value = true;
+  refreshMessage.value = '';
+  try {
+    const before = new Set(company.value.filings.map((f) => f.accession));
+    const fresh = await api.company(String(company.value.cik), { refresh: true });
+    const added = fresh.filings.filter((f) => !before.has(f.accession));
+    company.value = fresh;
+    refreshMessage.value = added.length
+      ? `新增 ${added.length} 份：${added.map((f) => `${f.form} ${f.fiscalYear} ${f.fiscalPeriod}`).join('、')}`
+      : `沒有新申報（SEC 清單 ${new Date(fresh.filingsUpdatedAt).toLocaleTimeString()}）`;
+    if (added.length && !filing.value?.quartersYear) await loadFiling(added[0]);
+  } catch (e) {
+    refreshMessage.value = `更新失敗：${e.message}`;
+  } finally {
+    refreshing.value = false;
+  }
+}
 const loadingFiling = ref(false);
 const error = ref(null);
 
@@ -18,6 +42,7 @@ const divisor = ref(1e6);
 const applyNegation = ref(false);
 const showConcept = ref(false);
 const lang = ref('zh');
+const view = ref('current'); // current = only the filing's own period | all = every column in the filing
 
 // financial indicators page
 const indicators = ref(null);
@@ -104,7 +129,7 @@ async function loadFiling(f) {
   loadingFiling.value = true;
   filing.value = f;
   try {
-    data.value = await api.filing(f.cik, f.accession);
+    data.value = await api.filing(f.cik, f.accession, view.value);
     const valid = tab.value.startsWith('role:')
       ? data.value.allStatements.some((s) => `role:${s.role}` === tab.value)
       : tab.value === 'indicators' || !!data.value.statements[tab.value];
@@ -137,17 +162,23 @@ async function loadQuarters(year) {
 const jsonUrl = computed(() => {
   if (!data.value) return '#';
   if (data.value.derived) return api.quartersUrl(String(data.value.filing.cik), data.value.filing.fiscalYear);
-  return api.filingUrl(data.value.filing.cik, data.value.filing.accession);
+  return api.filingUrl(data.value.filing.cik, data.value.filing.accession, view.value);
+});
+
+// switching 本期 / 全部 reloads the same filing (fast: both are served from cache)
+watch(view, () => {
+  if (filing.value && !filing.value.quartersYear) loadFiling(filing.value);
 });
 
 // Keep the selection in the URL so a view can be bookmarked / shared.
-watch([company, filing, tab, indMode], () => {
+watch([company, filing, tab, indMode, view], () => {
   const p = new URLSearchParams();
   if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
   if (filing.value?.quartersYear) p.set('quarters', filing.value.quartersYear);
   else if (filing.value) p.set('accession', filing.value.accession);
   if (data.value && tab.value !== 'balance_sheet') p.set('tab', tab.value);
   if (tab.value === 'indicators' && indMode.value === 'year') p.set('mode', 'year');
+  if (view.value === 'all') p.set('view', 'all');
   history.replaceState(null, '', p.size ? `?${p}` : location.pathname);
 });
 
@@ -155,6 +186,7 @@ onMounted(() => {
   const p = new URLSearchParams(location.search);
   if (p.get('tab')) tab.value = p.get('tab');
   if (p.get('mode') === 'year') indMode.value = 'year';
+  if (p.get('view') === 'all') view.value = 'all';
   if (p.get('company')) loadCompany(p.get('company'), p.get('accession'), p.get('quarters') ? Number(p.get('quarters')) : null);
 });
 </script>
@@ -177,9 +209,16 @@ onMounted(() => {
           <span v-if="company.fiscalYearEnd"> · 會計年度結束 {{ company.fiscalYearEnd.slice(0, 2) }}/{{ company.fiscalYearEnd.slice(2) }}</span>
           <div v-if="company.sicDescription">{{ company.sicDescription }}</div>
         </div>
-        <h3>選擇年度 / 季度</h3>
+        <h3>
+          選擇年度 / 季度
+          <button class="refresh" :disabled="refreshing" title="重新向 SEC 讀取申報清單，今天剛發布的 10-Q / 10-K 會出現在這裡" @click="refreshFilings">
+            {{ refreshing ? '更新中…' : '↻ 更新' }}
+          </button>
+        </h3>
+        <p v-if="refreshMessage" class="small refresh-msg">{{ refreshMessage }}</p>
         <FilingPicker :filings="company.filings" :selected="filing?.accession" @select="loadFiling" @select-quarters="loadQuarters" />
         <p class="muted small">FY = 年報 (10-K / 20-F / 40-F)，Q1–Q3 = 季報 (10-Q)。Q4 數字請看年報。</p>
+        <p class="muted small">清單讀取時間 {{ new Date(company.filingsUpdatedAt).toLocaleString() }}<span v-if="company.filingsStale">（SEC 連不上，顯示舊清單）</span></p>
       </aside>
 
       <main>
@@ -205,6 +244,12 @@ onMounted(() => {
               <span class="muted small">{{ data.stats.facts }} facts<template v-if="data.stats.contexts"> · {{ data.stats.contexts }} contexts</template></span>
             </div>
           </div>
+          <p v-if="data.view === 'current' && !isIndicators" class="muted small note">
+            只看本期：資產負債表 = 本期末；損益表 = {{ data.filing.form?.startsWith('10-Q') ? '本季三個月' : '全年度' }}；現金流量表、權益變動表一欄到底 —— 「（期初）」列是期初餘額、「（期末）」列是期末餘額、其餘列是本期發生數。
+            <template v-if="data.previous">10-Q 的現金流量表只有年初至今，本季 = 年初至今 − 上一季（{{ data.previous.fiscalYear }} {{ data.previous.fiscalPeriod }}）年初至今，期初餘額 = 上一季期末，這些欄標「推算」。</template>
+            <template v-for="n in data.notes.filter((x) => /找不到/.test(x))" :key="n"> {{ n }}</template>
+            比較欄位請切換「欄位 → 申報書全部欄位」。
+          </p>
           <p v-if="data.derived" class="muted small note">
             損益表 / 現金流量表：Q1–Q3 取自 10-Q（三個月欄或年初至今欄相減），Q4 = 10-K 全年 − 前三季。每股金額以相減近似（以 ≈ 標示）；股數等不可相減的項目 Q4 留空。資產負債表為各季期末餘額。股東權益變動表不提供推算。
           </p>
@@ -258,6 +303,13 @@ onMounted(() => {
               </template>
             </div>
             <div v-else class="options">
+              <label v-if="!data.derived">
+                欄位
+                <select v-model="view">
+                  <option value="current">只看本期</option>
+                  <option value="all">申報書全部欄位</option>
+                </select>
+              </label>
               <label>
                 科目
                 <select v-model="lang">
@@ -348,6 +400,17 @@ h3 {
   font-size: 13px;
   margin: 16px 0 8px;
   color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.refresh {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+.refresh-msg {
+  color: var(--accent);
+  margin: 0 0 8px;
 }
 .small {
   font-size: 12px;

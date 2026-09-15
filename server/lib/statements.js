@@ -145,6 +145,22 @@ export function buildStatement(role, doc, tax, byName, concepts = {}) {
     if (Object.keys(item.values).length || item.abstract) lineItems.push(item);
   }
 
+  // The same balance concept usually appears twice in a cash-flow or equity
+  // statement: once as "beginning of period" (periodStartLabel) and once as
+  // "end of period" (periodEndLabel). Both rows would otherwise carry every
+  // instant; keep only the instants that open, respectively close, one of
+  // the statement's duration columns - as the filing itself presents them.
+  const durations = Object.values(used).filter((c) => !c.instant);
+  const starts = new Set(durations.map((c) => prevDay(c.start)));
+  const ends = new Set(durations.map((c) => c.end));
+  for (const item of lineItems) {
+    const pl = item.preferredLabel || '';
+    const want = /periodStart/i.test(pl) ? starts : /periodEnd/i.test(pl) ? ends : null;
+    if (!want || !durations.length) continue;
+    item.values = Object.fromEntries(Object.entries(item.values).filter(([id]) => !used[id]?.instant || want.has(used[id].instant)));
+    if (item.labelZh) item.labelZh += want === starts ? '（期初）' : '（期末）';
+  }
+
   const counts = Object.fromEntries(Object.keys(used).map((id) => [id, 0]));
   for (const item of lineItems) for (const id of Object.keys(item.values)) counts[id]++;
   const columns = pruneColumns(Object.values(used).sort(compareContexts), counts);

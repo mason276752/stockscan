@@ -54,8 +54,8 @@ const columns = computed(() =>
     return {
       ...c,
       periodLabel: c.period.instant ? c.period.instant : `${c.period.start} ~ ${c.period.end}`,
-      derivedQ4: c.derived && c.label === 'Q4',
-      periodKind: c.period.instant ? '時點' : '期間',
+      derivedQ4: !!c.derived,
+      periodKind: c.merged ? `期初 ${c.opening || '—'} · 期末 ${c.closing || '—'}` : c.period.instant ? '時點' : '期間',
       dimLabel: dims.length ? dims.map(humanize).join(' / ') : hasAxes.value ? '合計' : '',
     };
   }),
@@ -86,6 +86,15 @@ function shown(item, cell) {
   return d;
 }
 
+const recUnit = computed(() => {
+  const first = Object.values(props.statement.reconciliation || {})[0];
+  return first?.unit || '';
+});
+function money(v) {
+  if (v == null) return '—';
+  return fmt.format(v / props.divisor);
+}
+
 function rowUnit(item) {
   const first = Object.values(item.values)[0];
   return first?.unit || '';
@@ -110,7 +119,7 @@ function rowClass(item) {
           <th v-for="c in columns" :key="c.id" class="num">
             <div v-if="c.dimLabel" class="dim" :title="Object.values(c.dimensions).join(', ')">{{ c.dimLabel }}</div>
             <div v-if="c.label" class="qlabel">
-              {{ c.label }}<span v-if="c.derivedQ4" class="badge" title="FY − Q1 − Q2 − Q3">推算</span>
+              {{ c.label }}<span v-if="c.derivedQ4" class="badge" :title="c.label === 'Q4' ? 'FY − Q1 − Q2 − Q3' : '年初至今 − 上一季年初至今'">推算</span>
             </div>
             <div :class="{ small: c.label }">{{ c.periodLabel }}</div>
             <div class="muted kind">{{ c.periodKind }}</div>
@@ -132,6 +141,22 @@ function rowClass(item) {
           </td>
         </tr>
       </tbody>
+      <tfoot v-if="statement.reconciliation && Object.keys(statement.reconciliation).length">
+        <tr class="check">
+          <td class="label">驗算：期初 + 本期變動 = 期末</td>
+          <td class="unit muted">{{ recUnit }}</td>
+          <td v-for="c in columns" :key="c.id" class="num">
+            <template v-if="statement.reconciliation[c.id]">
+              <div class="muted small">{{ money(statement.reconciliation[c.id].opening) }} {{ statement.reconciliation[c.id].movements < 0 ? '−' : '+' }} {{ money(Math.abs(statement.reconciliation[c.id].movements)) }} = {{ money(statement.reconciliation[c.id].computed) }}</div>
+              <div :class="statement.reconciliation[c.id].ok ? 'ok' : 'bad'">
+                {{ statement.reconciliation[c.id].ok ? '✓ 與申報期末相符' : `✗ 與申報期末差 ${money(statement.reconciliation[c.id].diff)}` }}
+              </div>
+              <div v-if="statement.reconciliation[c.id].method === 'sum+rollup'" class="muted small" title="有些變動只標在更細的維度（例如依股別），本欄空白處以子維度加總計入">含子維度加總</div>
+              <div v-else-if="statement.reconciliation[c.id].method === 'net'" class="muted small">變動 = 本期現金增加（減少）</div>
+            </template>
+          </td>
+        </tr>
+      </tfoot>
     </table>
     <Teleport to="body">
       <div v-if="tip" class="tip" :style="tipStyle">
@@ -299,6 +324,21 @@ td.label {
   padding: 0 3px;
   margin-left: 4px;
   vertical-align: middle;
+}
+tfoot td {
+  border-top: 2px solid var(--border);
+  background: var(--total);
+  font-size: 12px;
+  vertical-align: top;
+}
+tfoot .small {
+  font-size: 11px;
+}
+tfoot .ok {
+  color: #15803d;
+}
+tfoot .bad {
+  color: var(--neg);
 }
 tr.depth-1 td.label { padding-left: 10px; }
 tr.depth-2 td.label { padding-left: 22px; }
