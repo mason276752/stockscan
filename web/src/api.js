@@ -14,4 +14,12 @@ export const api = {
   quartersUrl: (id, year) => `/api/company/${encodeURIComponent(id)}/quarters?year=${year}`,
   indicators: (id, params) => get(`/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`),
   indicatorsUrl: (id, params) => `/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`,
+  status: () => get('/api/status'),
+  // browse pages
+  browseSic: () => get('/api/browse/sic'),
+  browseFiler: () => get('/api/browse/filer'),
+  browseCompanies: (params) => get(`/api/browse/companies?${new URLSearchParams(params)}`),
+  browseEtfs: (q = '') => get(`/api/browse/etf${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  etfHoldings: (ticker) => get(`/api/browse/etf/${encodeURIComponent(ticker)}`),
+  etfHoldingsUrl: (ticker) => `/api/browse/etf/${encodeURIComponent(ticker)}`,
 };

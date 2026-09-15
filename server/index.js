@@ -6,11 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { SecClient } from './lib/secClient.js';
 import { openStore, requireVersion, store } from './lib/store.js';
 import { createPrefetcher } from './lib/prefetch.js';
+import { createCrawler } from './lib/crawler.js';
 import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, pickFiling, refreshTickers, searchCompanies } from './lib/edgar.js';
 import { scrapeFiling, SCRAPE_VERSION } from './lib/scrape.js';
 import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
+import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
+import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -19,6 +22,8 @@ const client = new SecClient();
 openStore();
 requireVersion(SCRAPE_VERSION);
 const prefetcher = createPrefetcher(client);
+// Background crawl of every ticker company's latest filing (STOCKSCAN_CRAWL=0 turns it off).
+const crawler = createCrawler(client, { prefetcher, enabled: !/^(0|false|no|off)$/i.test(process.env.STOCKSCAN_CRAWL || '1') });
 
 // Ticker table: refresh in the background at startup and daily; the saved
 // copy serves searches meanwhile.
@@ -26,10 +31,17 @@ const refresh = () => refreshTickers(client).then((rows) => console.log(`ticker 
 setTimeout(refresh, 1000);
 setInterval(refresh, 24 * 3600 * 1000).unref();
 
+// Filer universe (SIC / filer status for the browse pages): build it in the
+// background when missing or older than a week, so the first visit is instant.
+setTimeout(() => {
+  if (universeStale()) refreshUniverse(client, 'low').catch((e) => console.warn(`universe build failed: ${e.message}`));
+}, 5000);
+setTimeout(() => crawler.start(), 15_000);
+
 const app = express();
 app.use(express.json());
-app.use('/api', (_req, _res, next) => {
-  client.touch(); // any user request pauses background prefetching
+app.use('/api', (req, _res, next) => {
+  if (req.path !== '/status') client.touch(); // any user request pauses background work (the status poll is not one)
   next();
 });
 
@@ -80,7 +92,9 @@ app.get(
   '/api/company/:id',
   wrap(async (req, res) => {
     const forms = req.query.form ? String(req.query.form).split(',') : DEFAULT_FORMS;
-    res.json(await getCompany(client, req.params.id, { forms, refresh: req.query.refresh === '1' }));
+    const company = await getCompany(client, req.params.id, { forms, refresh: req.query.refresh === '1' });
+    // industry / filer status from the browse universe when it is already built
+    res.json({ ...company, sicZh: sicInfo(company.sic)?.zh || null, filer: lookupFiler(company.cik) });
   }),
 );
 
@@ -166,9 +180,119 @@ app.get(
   }),
 );
 
+// ---------- browse: industry (SIC), filer status, ETF constituents ----------
+
+const companyRow = (c) => ({
+  cik: c.cik,
+  name: c.name,
+  ticker: c.ticker,
+  tickers: c.tickers,
+  sic: c.sic,
+  sicZh: sicInfo(c.sic)?.zh || null,
+  sicTitle: sicInfo(c.sic)?.title || null,
+  afs: c.afs,
+  wksi: c.wksi,
+  float: c.float,
+  floatDate: c.floatDate,
+  floatAdjusted: c.floatAdjusted,
+  form: c.form,
+  period: c.period,
+  filed: c.filed,
+  state: c.state,
+  country: c.country,
+});
+
+// GET /api/browse/sic -> SIC divisions and 4-digit codes with company counts
+app.get(
+  '/api/browse/sic',
+  wrap(async (_req, res) => {
+    const u = await getUniverse(client);
+    const counts = new Map();
+    for (const c of u.companies) {
+      const k = c.sic || '0000';
+      const n = counts.get(k) || { total: 0, listed: 0 };
+      n.total++;
+      if (c.ticker) n.listed++;
+      counts.set(k, n);
+    }
+    const codes = SIC.codes.map((s) => ({ ...s, ...(counts.get(s.code) || { total: 0, listed: 0 }) }));
+    // codes that appear in filings but not on SEC's list
+    for (const [code, n] of counts) if (!SIC.codes.some((s) => s.code === code)) codes.push({ code, title: null, zh: code === '0000' ? '未指定' : null, division: 'J', office: null, ...n });
+    res.json({ updatedAt: u.updatedAt, datasets: u.datasets, divisions: SIC.divisions, codes });
+  }),
+);
+
+// GET /api/browse/filer -> filer-status categories with counts
+app.get(
+  '/api/browse/filer',
+  wrap(async (_req, res) => {
+    const u = await getUniverse(client);
+    const counts = {};
+    for (const c of u.companies) {
+      const k = c.afs || 'UNKNOWN';
+      counts[k] ??= { total: 0, listed: 0, wksi: 0 };
+      counts[k].total++;
+      if (c.ticker) counts[k].listed++;
+      if (c.wksi) counts[k].wksi++;
+    }
+    const categories = [...Object.keys(FILER_STATUS), 'UNKNOWN'].map((k) => ({
+      key: k,
+      ...(FILER_STATUS[k] || { label: 'Not stated', zh: '未標示', note: '申報書未標示身分' }),
+      ...(counts[k] || { total: 0, listed: 0, wksi: 0 }),
+    }));
+    res.json({ updatedAt: u.updatedAt, datasets: u.datasets, categories });
+  }),
+);
+
+// GET /api/browse/companies?sic=7372 | ?afs=LAF [&listed=0] [&q=text] -> companies, largest public float first
+app.get(
+  '/api/browse/companies',
+  wrap(async (req, res) => {
+    const u = await getUniverse(client);
+    const sic = req.query.sic ? String(req.query.sic).padStart(4, '0') : null;
+    const afs = req.query.afs ? String(req.query.afs).toUpperCase() : null;
+    const listedOnly = req.query.listed !== '0';
+    const q = String(req.query.q || '').trim().toUpperCase();
+    let rows = u.companies;
+    if (sic) rows = rows.filter((c) => (c.sic || '0000') === sic);
+    if (afs) rows = rows.filter((c) => (c.afs || 'UNKNOWN') === afs);
+    if (listedOnly) rows = rows.filter((c) => c.ticker);
+    if (q) rows = rows.filter((c) => c.name.toUpperCase().includes(q) || c.tickers.some((t) => t.startsWith(q)));
+    res.json({
+      updatedAt: u.updatedAt,
+      sic: sic ? sicInfo(sic) : null,
+      filer: afs ? { key: afs, ...(FILER_STATUS[afs] || { label: 'Not stated', zh: '未標示' }) } : null,
+      count: rows.length,
+      companies: rows.slice(0, Number(req.query.limit) || 2000).map(companyRow),
+    });
+  }),
+);
+
+// GET /api/browse/etf[?q=text] -> ETF list (popular ones first)
+app.get(
+  '/api/browse/etf',
+  wrap(async (req, res) => {
+    const { etfs, updatedAt } = await etfList(client);
+    const q = String(req.query.q || '').trim().toUpperCase();
+    const rank = new Map(POPULAR_ETFS.map((t, i) => [t, i]));
+    let rows = etfs;
+    if (q) rows = rows.filter((e) => e.ticker.startsWith(q) || e.name.toUpperCase().includes(q) || e.entity.toUpperCase().includes(q));
+    rows = [...rows].sort((a, b) => (rank.get(a.ticker) ?? 1e9) - (rank.get(b.ticker) ?? 1e9) || a.ticker.localeCompare(b.ticker));
+    res.json({ updatedAt, total: etfs.length, count: rows.length, popular: POPULAR_ETFS, etfs: rows.slice(0, Number(req.query.limit) || 300) });
+  }),
+);
+
+// GET /api/browse/etf/VOO -> latest N-PORT constituents, mapped to EDGAR companies
+app.get(
+  '/api/browse/etf/:ticker',
+  wrap(async (req, res) => {
+    res.json(await dedupe(`etf:${req.params.ticker.toUpperCase()}`, () => etfHoldings(client, req.params.ticker)));
+  }),
+);
+
 // GET /api/status -> local store and prefetch queue
 app.get('/api/status', (_req, res) => {
-  res.json({ store: { file: store.file, filings: store.filingCount() }, prefetch: prefetcher.status(), clientIdle: client.idle });
+  res.json({ store: { file: store.file, ...store.size() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle });
 });
 
 // Serve the built Vue app when it exists (npm run build:web).
@@ -187,5 +311,6 @@ app.use((err, _req, res, _next) => {
 app.listen(PORT, () => {
   console.log(`stockscan server listening on http://localhost:${PORT}`);
   console.log(`store: ${store.file} (${store.filingCount()} filings saved)`);
+  if (crawler.status().enabled) console.log('background crawl of latest filings enabled (STOCKSCAN_CRAWL=0 to disable)');
   if (!fs.existsSync(dist)) console.log('web/dist not found - run "npm run build:web" or use the Vite dev server (npm --prefix web run dev)');
 });

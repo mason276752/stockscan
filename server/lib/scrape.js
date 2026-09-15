@@ -55,6 +55,15 @@ export function scrapeFiling(client, filing, company = null) {
   return promise;
 }
 
+// For the background crawler: parse and save a filing without pinning the
+// result in the in-memory cache. Returns true when something was downloaded.
+export async function ensureStored(client, filing, company) {
+  if (store.hasFiling(filing.accession)) return false;
+  const result = await scrapeUncached(client, filing, company);
+  store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
+  return true;
+}
+
 async function loadOrScrape(client, filing, company) {
   const saved = store.getFiling(filing.accession);
   if (saved) return saved;

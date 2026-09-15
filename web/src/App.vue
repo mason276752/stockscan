@@ -5,6 +5,29 @@ import CompanySearch from './components/CompanySearch.vue';
 import FilingPicker from './components/FilingPicker.vue';
 import StatementTable from './components/StatementTable.vue';
 import IndicatorsTable from './components/IndicatorsTable.vue';
+import BrowsePage from './components/BrowsePage.vue';
+
+// background crawl progress (server-side), shown in the header
+const status = ref(null);
+async function pollStatus() {
+  try {
+    status.value = await api.status();
+  } catch {
+    status.value = null;
+  }
+}
+const crawlText = computed(() => {
+  const c = status.value?.crawler;
+  if (!c?.enabled) return '';
+  const saved = status.value.store.filings.toLocaleString();
+  if (c.phase === 'sweep') return `背景下載最新財報 ${c.position.toLocaleString()} / ${c.total.toLocaleString()}${c.current ? ` · ${c.current}` : ''} · 已存 ${saved} 份`;
+  if (c.phase === 'watch') return `已存 ${saved} 份財報 · 監看 EDGAR 新申報${c.lastWatch ? `（${new Date(c.lastWatch).toLocaleTimeString()}）` : ''}`;
+  return '';
+});
+
+// page: 'report' (statements of one company) | 'browse' (industry / filer status / ETF lists)
+const page = ref('report');
+const browseParams = ref({});
 
 const company = ref(null);
 const filing = ref(null); // the filing row picked from the list
@@ -106,6 +129,19 @@ const current = computed(() => {
   return data.value.statements[tab.value];
 });
 
+function openBrowse(params) {
+  browseParams.value = { cat: 'sic', code: '', afs: '', etf: '', ...params };
+  page.value = 'browse';
+}
+const fmtFloat = (v) => (v >= 1e12 ? `${(v / 1e12).toFixed(2)} 兆美元` : v >= 1e8 ? `${Math.round(v / 1e8).toLocaleString()} 億美元` : `${Math.round(v / 1e6).toLocaleString()} 百萬美元`);
+
+// From the search box or a browse list: show the statements page for that company.
+function openCompany(idOrRow) {
+  const id = typeof idOrRow === 'string' ? idOrRow : idOrRow.ticker || String(idOrRow.cik);
+  page.value = 'report';
+  loadCompany(id);
+}
+
 async function loadCompany(id, accession = null, quartersYear = null) {
   error.value = null;
   loadingCompany.value = true;
@@ -170,24 +206,56 @@ watch(view, () => {
   if (filing.value && !filing.value.quartersYear) loadFiling(filing.value);
 });
 
-// Keep the selection in the URL so a view can be bookmarked / shared.
-watch([company, filing, tab, indMode, view], () => {
+// Keep the selection in the URL so a view can be bookmarked / shared. Switching
+// between 財報 and 分類瀏覽 pushes a history entry so the browser's Back
+// button returns to the list you came from.
+let lastPage = page.value;
+let restoring = false;
+watch([company, filing, tab, indMode, view, page, browseParams], () => {
   const p = new URLSearchParams();
-  if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
-  if (filing.value?.quartersYear) p.set('quarters', filing.value.quartersYear);
-  else if (filing.value) p.set('accession', filing.value.accession);
-  if (data.value && tab.value !== 'balance_sheet') p.set('tab', tab.value);
-  if (tab.value === 'indicators' && indMode.value === 'year') p.set('mode', 'year');
-  if (view.value === 'all') p.set('view', 'all');
-  history.replaceState(null, '', p.size ? `?${p}` : location.pathname);
+  if (page.value === 'browse') {
+    p.set('page', 'browse');
+    for (const [k, v] of Object.entries(browseParams.value)) if (v) p.set(k, v);
+  } else {
+    if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
+    if (filing.value?.quartersYear) p.set('quarters', filing.value.quartersYear);
+    else if (filing.value) p.set('accession', filing.value.accession);
+    if (data.value && tab.value !== 'balance_sheet') p.set('tab', tab.value);
+    if (tab.value === 'indicators' && indMode.value === 'year') p.set('mode', 'year');
+    if (view.value === 'all') p.set('view', 'all');
+  }
+  const url = p.size ? `?${p}` : location.pathname;
+  if (page.value !== lastPage && !restoring) history.pushState(null, '', url);
+  else history.replaceState(null, '', url);
+  lastPage = page.value;
 });
 
-onMounted(() => {
+function applyUrl() {
   const p = new URLSearchParams(location.search);
   if (p.get('tab')) tab.value = p.get('tab');
   if (p.get('mode') === 'year') indMode.value = 'year';
   if (p.get('view') === 'all') view.value = 'all';
-  if (p.get('company')) loadCompany(p.get('company'), p.get('accession'), p.get('quarters') ? Number(p.get('quarters')) : null);
+  if (p.get('page') === 'browse') {
+    page.value = 'browse';
+    browseParams.value = { cat: p.get('cat') || 'sic', code: p.get('code') || '', afs: p.get('afs') || '', etf: p.get('etf') || '' };
+    return;
+  }
+  page.value = 'report';
+  const id = p.get('company');
+  if (id && (!company.value || (!company.value.tickers.includes(id.toUpperCase()) && String(company.value.cik) !== id))) {
+    loadCompany(id, p.get('accession'), p.get('quarters') ? Number(p.get('quarters')) : null);
+  }
+}
+
+onMounted(() => {
+  pollStatus();
+  setInterval(pollStatus, 15_000);
+  applyUrl();
+  window.addEventListener('popstate', () => {
+    restoring = true;
+    applyUrl();
+    setTimeout(() => (restoring = false), 0);
+  });
 });
 </script>
 
@@ -195,9 +263,17 @@ onMounted(() => {
   <div class="app">
     <header>
       <h1>stockscan <span class="muted">SEC Inline XBRL 財報瀏覽</span></h1>
-      <CompanySearch @select="loadCompany" />
+      <nav class="nav">
+        <button :class="{ active: page === 'report' }" @click="page = 'report'">財報</button>
+        <button :class="{ active: page === 'browse' }" @click="page = 'browse'">分類瀏覽</button>
+      </nav>
+      <CompanySearch @select="openCompany" />
     </header>
+    <p v-if="crawlText" class="muted small crawl" title="啟動後在背景把每家有代號的公司最新一份 10-K / 10-Q 存到本機，之後點開就不用等下載；使用中會自動讓路">{{ crawlText }}</p>
 
+    <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" />
+
+    <template v-else>
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="loadingCompany" class="muted">讀取公司資料…</p>
 
@@ -207,7 +283,15 @@ onMounted(() => {
         <div class="muted small">
           {{ company.tickers.join(', ') }} · CIK {{ company.cik }}
           <span v-if="company.fiscalYearEnd"> · 會計年度結束 {{ company.fiscalYearEnd.slice(0, 2) }}/{{ company.fiscalYearEnd.slice(2) }}</span>
-          <div v-if="company.sicDescription">{{ company.sicDescription }}</div>
+          <div v-if="company.sic">
+            <a :href="`?page=browse&cat=sic&code=${company.sic}`" title="看同產業的公司" @click.prevent="openBrowse({ cat: 'sic', code: String(company.sic) })">
+              SIC {{ company.sic }} {{ company.sicZh || company.sicDescription }}
+            </a>
+          </div>
+          <div v-if="company.filer?.filerStatus">
+            <a :href="`?page=browse&cat=filer&afs=${company.filer.afs}`" title="看同一申報身分的公司" @click.prevent="openBrowse({ cat: 'filer', afs: company.filer.afs })">{{ company.filer.filerStatus.zh }}</a><span v-if="company.filer.wksi"> · WKSI</span>
+            <span v-if="company.filer.publicFloat != null"> · 公眾流通市值 {{ fmtFloat(company.filer.publicFloat) }}<span v-if="company.filer.publicFloatAdjusted" title="申報值疑似單位錯誤，已除以 1,000">*</span>（{{ company.filer.publicFloatDate }}）</span>
+          </div>
         </div>
         <h3>
           選擇年度 / 季度
@@ -364,8 +448,10 @@ onMounted(() => {
     <div v-else-if="!loadingCompany" class="empty muted">
       輸入股票代號開始，例如 <a href="?company=GOOGL" @click.prevent="loadCompany('GOOGL')">GOOGL</a>、
       <a href="?company=AAPL" @click.prevent="loadCompany('AAPL')">AAPL</a>、
-      <a href="?company=TSM" @click.prevent="loadCompany('TSM')">TSM</a>
+      <a href="?company=TSM" @click.prevent="loadCompany('TSM')">TSM</a>，
+      或到 <a href="?page=browse" @click.prevent="page = 'browse'">分類瀏覽</a> 依產業、申報身分、ETF 成分股找公司。
     </div>
+    </template>
   </div>
 </template>
 
@@ -377,10 +463,18 @@ onMounted(() => {
 }
 header {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto 1fr;
   gap: 24px;
   align-items: center;
   margin-bottom: 16px;
+}
+.nav {
+  display: flex;
+  gap: 6px;
+}
+.crawl {
+  margin: -8px 0 12px;
+  text-align: right;
 }
 h1 {
   font-size: 20px;

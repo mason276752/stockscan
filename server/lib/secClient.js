@@ -59,7 +59,7 @@ export class SecClient {
     if (next) next();
   }
 
-  async fetch(url, { retries = 4, priority = 'high' } = {}) {
+  async fetch(url, { retries = 4, priority = 'high', headers = {}, method = 'GET' } = {}) {
     if (priority === 'low') {
       // background work yields to anything the user is waiting for
       while (!this.idle) await new Promise((r) => setTimeout(r, 500));
@@ -69,7 +69,7 @@ export class SecClient {
     }
     await this._acquire();
     try {
-      return await this._fetchWithRetry(url, retries);
+      return await this._fetchWithRetry(url, retries, headers, method);
     } finally {
       this._release();
       if (priority !== 'low') {
@@ -84,10 +84,12 @@ export class SecClient {
     return {
       text: (url, opts = {}) => this.text(url, { ...opts, priority: 'low' }),
       json: (url, opts = {}) => this.json(url, { ...opts, priority: 'low' }),
+      buffer: (url, opts = {}) => this.buffer(url, { ...opts, priority: 'low' }),
+      head: (url, opts = {}) => this.head(url, { ...opts, priority: 'low' }),
     };
   }
 
-  async _fetchWithRetry(url, retries) {
+  async _fetchWithRetry(url, retries, headers, method) {
     let lastErr;
     for (let attempt = 0; attempt < retries; attempt++) {
       await this._slot();
@@ -97,7 +99,8 @@ export class SecClient {
         let res;
         try {
           res = await fetch(url, {
-            headers: { 'User-Agent': this.userAgent, 'Accept-Encoding': 'gzip, deflate' },
+            method,
+            headers: { 'User-Agent': this.userAgent, 'Accept-Encoding': 'gzip, deflate', ...headers },
             signal: ctrl.signal,
           });
         } catch (err) {
@@ -146,5 +149,21 @@ export class SecClient {
 
   json(url, { ttlMs = 0, priority } = {}) {
     return this._cached(url, ttlMs, async () => (await this.fetch(url, { priority })).json());
+  }
+
+  // Raw bytes; with `range` ([from, to], inclusive) only that slice of the
+  // file is requested - used to pull one member out of a large zip.
+  async buffer(url, { priority, range } = {}) {
+    const headers = range ? { Range: `bytes=${range[0]}-${range[1]}` } : {};
+    const res = await this.fetch(url, { priority, headers });
+    if (range && res.status !== 206) throw new Error(`SEC did not honour the Range request for ${url}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  // Content-Length (null when the server does not say).
+  async head(url, { priority } = {}) {
+    const res = await this.fetch(url, { priority, method: 'HEAD' });
+    const len = res.headers.get('content-length');
+    return { size: len ? Number(len) : null };
   }
 }

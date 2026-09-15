@@ -7,7 +7,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
+
+// JSON is stored gzip'd (a parsed filing is ~300 KB as text, ~30 KB packed);
+// rows written by earlier versions are plain text and still read fine.
+const pack = (value) => zlib.gzipSync(JSON.stringify(value));
+const unpack = (col) => JSON.parse(col instanceof Uint8Array ? zlib.gunzipSync(col).toString("utf8") : col);
 
 let db = null;
 
@@ -56,7 +62,7 @@ export const store = {
 
   getFiling(accession) {
     const row = need().prepare('SELECT json FROM filings WHERE accession = ?').get(accession);
-    return row ? JSON.parse(row.json) : null;
+    return row ? unpack(row.json) : null;
   },
   hasFiling(accession) {
     return !!need().prepare('SELECT 1 FROM filings WHERE accession = ?').get(accession);
@@ -64,7 +70,7 @@ export const store = {
   putFiling(accession, cik, result, version) {
     need()
       .prepare('INSERT OR REPLACE INTO filings (accession, cik, form, report_date, json, fetched_at, version) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(accession, cik, result.filing?.form ?? null, result.filing?.periodEnd ?? null, JSON.stringify(result), new Date().toISOString(), version);
+      .run(accession, cik, result.filing?.form ?? null, result.filing?.periodEnd ?? null, pack(result), new Date().toISOString(), version);
   },
   filingCount(cik = null) {
     const row = cik == null ? need().prepare('SELECT COUNT(*) AS n FROM filings').get() : need().prepare('SELECT COUNT(*) AS n FROM filings WHERE cik = ?').get(cik);
@@ -74,9 +80,18 @@ export const store = {
   // kv entries come back with their age so callers can apply their own TTL
   getKV(key) {
     const row = need().prepare('SELECT json, updated_at FROM kv WHERE key = ?').get(key);
-    return row ? { value: JSON.parse(row.json), ageMs: Date.now() - row.updated_at } : null;
+    return row ? { value: unpack(row.json), ageMs: Date.now() - row.updated_at } : null;
   },
   putKV(key, value) {
-    need().prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, JSON.stringify(value), Date.now());
+    need().prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, pack(value), Date.now());
+  },
+  // accession -> report_date of every saved filing of a company (cheap: no JSON decoding)
+  filingIndex(cik) {
+    return need().prepare('SELECT accession, form, report_date FROM filings WHERE cik = ?').all(cik);
+  },
+  size() {
+    const f = need().prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM filings').get();
+    const k = need().prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM kv').get();
+    return { filings: f.n, filingsBytes: f.bytes, kv: k.n, kvBytes: k.bytes };
   },
 };

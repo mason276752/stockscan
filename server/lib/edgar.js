@@ -34,7 +34,7 @@ export async function refreshTickers(client) {
   return rows;
 }
 
-async function tickerTable(client) {
+export async function tickerTable(client) {
   if (tickersMemo) return tickersMemo;
   const saved = store.getKV('tickers');
   if (saved) {
@@ -45,13 +45,30 @@ async function tickerTable(client) {
   return refreshTickers(client);
 }
 
+// Only these forms are kept from a submissions list: the full list (every
+// 8-K, Form 4, …) is 1 MB+ for a large company and is never needed here.
+const KEEP_FORMS = /^(10-|20-F|40-F|6-K)/;
+function trimSubmissions(sub) {
+  const trimTable = (t) => {
+    const keep = [];
+    for (let i = 0; i < (t.accessionNumber || []).length; i++) if (KEEP_FORMS.test(t.form[i])) keep.push(i);
+    const pick = (arr) => (arr ? keep.map((i) => arr[i]) : undefined);
+    return { accessionNumber: pick(t.accessionNumber), form: pick(t.form), filingDate: pick(t.filingDate), reportDate: pick(t.reportDate), primaryDocument: pick(t.primaryDocument), isInlineXBRL: pick(t.isInlineXBRL) };
+  };
+  if (sub.filings?.recent) {
+    const { cik, name, tickers, exchanges, fiscalYearEnd, sic, sicDescription, filings } = sub;
+    return { cik, name, tickers, exchanges, fiscalYearEnd, sic, sicDescription, filings: { recent: trimTable(filings.recent), files: filings.files || [] }, trimmed: true };
+  }
+  return { ...trimTable(sub), trimmed: true }; // an older page
+}
+
 // Per-company submissions (the filing list): SQLite copy if fresh enough,
 // otherwise SEC - falling back to the stale copy when SEC is unreachable.
 async function cachedJson(client, key, url, ttlMs) {
   const saved = store.getKV(key);
   if (saved && saved.ageMs < ttlMs) return { value: saved.value, updatedAt: Date.now() - saved.ageMs, fromCache: true };
   try {
-    const value = await client.json(url);
+    const value = trimSubmissions(await client.json(url));
     store.putKV(key, value);
     return { value, updatedAt: Date.now(), fromCache: false };
   } catch (err) {

@@ -64,8 +64,10 @@ const pct = (a, b) => (div(a, b) == null ? null : (a / b) * 100);
 const avg = (a, b) => (a == null ? null : b == null ? a : (a + b) / 2);
 
 // Row catalogue: group, name, unit, kind (ratio | flow amount | balance) and the formula shown in the tooltip.
+// benchmark: the rule of thumb a value is judged against (the indicators page
+// colours the hovered row green / red by it)
 export const ROWS = [
-  { key: 'cashPct', group: '資產負債結構', name: '現金與約當現金（佔總資產%）', unit: '%', kind: 'ratio', formula: '現金及約當現金 ÷ 總資產' },
+  { key: 'cashPct', group: '資產負債結構', name: '現金與約當現金（佔總資產%）', unit: '%', kind: 'ratio', formula: '現金及約當現金 ÷ 總資產', benchmark: { op: '>=', value: 25 } },
   { key: 'arPct', group: '資產負債結構', name: '應收帳款（佔總資產%）', unit: '%', kind: 'ratio', formula: '應收帳款淨額 ÷ 總資產' },
   { key: 'invPct', group: '資產負債結構', name: '存貨（佔總資產%）', unit: '%', kind: 'ratio', formula: '存貨 ÷ 總資產' },
   { key: 'caPct', group: '資產負債結構', name: '流動資產（佔總資產%）', unit: '%', kind: 'ratio', formula: '流動資產 ÷ 總資產' },
@@ -74,33 +76,34 @@ export const ROWS = [
   { key: 'nclPct', group: '資產負債結構', name: '長期負債（佔總資產%）', unit: '%', kind: 'ratio', formula: '非流動負債 ÷ 總資產（無非流動負債科目時用 總負債 − 流動負債）' },
   { key: 'equityPct', group: '資產負債結構', name: '股東權益（佔總資產%）', unit: '%', kind: 'ratio', formula: '權益總額（含非控制權益）÷ 總資產' },
 
-  { key: 'debtRatio', group: '財務結構', name: '負債佔資產比率', unit: '%', kind: 'ratio', formula: '總負債 ÷ 總資產' },
-  { key: 'ltCapToPpe', group: '財務結構', name: '長期資金佔不動產、廠房及設備比率', unit: '%', kind: 'ratio', formula: '（權益總額 + 非流動負債）÷ 不動產、廠房及設備淨額' },
+  { key: 'debtRatio', group: '財務結構', name: '負債佔資產比率', unit: '%', kind: 'ratio', formula: '總負債 ÷ 總資產', benchmark: { op: '<=', value: 60 } },
+  { key: 'ltCapToPpe', group: '財務結構', name: '長期資金佔不動產、廠房及設備比率', unit: '%', kind: 'ratio', formula: '（權益總額 + 非流動負債）÷ 不動產、廠房及設備淨額', benchmark: { op: '>=', value: 100 } },
 
-  { key: 'currentRatio', group: '償債能力', name: '流動比率', unit: '%', kind: 'ratio', formula: '流動資產 ÷ 流動負債' },
-  { key: 'quickRatio', group: '償債能力', name: '速動比率', unit: '%', kind: 'ratio', formula: '（流動資產 − 存貨 − 預付費用）÷ 流動負債' },
+  { key: 'currentRatio', group: '償債能力', name: '流動比率', unit: '%', kind: 'ratio', formula: '流動資產 ÷ 流動負債', benchmark: { op: '>=', value: 250 } },
+  { key: 'quickRatio', group: '償債能力', name: '速動比率', unit: '%', kind: 'ratio', formula: '（流動資產 − 存貨 − 預付費用）÷ 流動負債', benchmark: { op: '>=', value: 150 } },
 
   { key: 'arTurnover', group: '經營能力', name: '應收款項週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均應收帳款' },
-  { key: 'dso', group: '經營能力', name: '平均收現日數', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 應收款項週轉率' },
+  { key: 'dso', group: '經營能力', name: '平均收現日數', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 應收款項週轉率', benchmark: { op: '<=', value: 15 } },
   { key: 'invTurnover', group: '經營能力', name: '存貨週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業成本（年化）÷ 平均存貨' },
-  { key: 'dio', group: '經營能力', name: '平均銷貨日數（平均在庫天數）', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 存貨週轉率' },
+  { key: 'dio', group: '經營能力', name: '平均銷貨日數（平均在庫天數）', unit: '天', kind: 'ratio', annualized: true, formula: '365 ÷ 存貨週轉率', benchmark: { op: '<=', value: 100 } },
+  { key: 'cycle', group: '經營能力', name: '做生意的完整週期', unit: '天', kind: 'ratio', annualized: true, formula: '平均銷貨日數 + 平均收現日數：從進貨到賣出、再到收到現金要多久（未扣應付帳款天數的營業週期）', benchmark: { op: '<=', value: 200 } },
   { key: 'ppeTurnover', group: '經營能力', name: '不動產、廠房及設備週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均不動產、廠房及設備淨額' },
-  { key: 'assetTurnover', group: '經營能力', name: '總資產週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均總資產' },
+  { key: 'assetTurnover', group: '經營能力', name: '總資產週轉率', unit: '次', kind: 'ratio', annualized: true, formula: '營業收入（年化）÷ 平均總資產', benchmark: { op: '>=', value: 1 } },
 
   { key: 'roa', group: '獲利能力', name: '資產報酬率 ROA', unit: '%', kind: 'ratio', annualized: true, formula: '稅後淨利（年化）÷ 平均總資產' },
-  { key: 'roe', group: '獲利能力', name: '權益報酬率 ROE', unit: '%', kind: 'ratio', annualized: true, formula: '稅後淨利（年化）÷ 平均股東權益（母公司）' },
+  { key: 'roe', group: '獲利能力', name: '權益報酬率 ROE', unit: '%', kind: 'ratio', annualized: true, formula: '稅後淨利（年化）÷ 平均股東權益（母公司）', benchmark: { op: '>=', value: 20 } },
   { key: 'pretaxToCapital', group: '獲利能力', name: '稅前純益佔實收資本比率', unit: '%', kind: 'ratio', annualized: true, formula: '稅前淨利（年化）÷（普通股股本 + 資本公積）。美國公司面額極低，此比率意義有限' },
-  { key: 'grossMargin', group: '獲利能力', name: '營業毛利率 ①', unit: '%', kind: 'ratio', formula: '毛利 ÷ 營業收入（無毛利科目時用 營業收入 − 營業成本）' },
-  { key: 'opMargin', group: '獲利能力', name: '營業利益率 ②', unit: '%', kind: 'ratio', formula: '營業利益 ÷ 營業收入' },
+  { key: 'grossMargin', group: '獲利能力', name: '營業毛利率 ①', unit: '%', kind: 'ratio', formula: '毛利 ÷ 營業收入（無毛利科目時用 營業收入 − 營業成本）', benchmark: { op: '>=', value: 25 } },
+  { key: 'opMargin', group: '獲利能力', name: '營業利益率 ②', unit: '%', kind: 'ratio', formula: '營業利益 ÷ 營業收入', benchmark: { op: '>=', value: 15 } },
   { key: 'safetyMargin', group: '獲利能力', name: '經營安全邊際率 ②/①', unit: '%', kind: 'ratio', formula: '營業利益率 ÷ 營業毛利率，愈大愈好' },
-  { key: 'netMargin', group: '獲利能力', name: '純益率（淨利率）', unit: '%', kind: 'ratio', formula: '稅後淨利 ÷ 營業收入' },
-  { key: 'eps', group: '獲利能力', name: '每股盈餘（稀釋）', unit: '元', kind: 'flow', formula: '申報書稀釋每股盈餘；Q4 為全年減前三季之近似值，年度檢視為四季相加。未做股票分割調整，跨越分割日的期間數字會失真' },
+  { key: 'netMargin', group: '獲利能力', name: '純益率（淨利率）', unit: '%', kind: 'ratio', formula: '稅後淨利 ÷ 營業收入', benchmark: { op: '>=', value: 10 } },
+  { key: 'eps', group: '獲利能力', name: '每股盈餘（稀釋）', unit: '元', kind: 'flow', formula: '申報書稀釋每股盈餘；Q4 為全年減前三季之近似值，年度檢視為四季相加。未做股票分割調整，跨越分割日的期間數字會失真', benchmark: { op: '>', value: 0 } },
   { key: 'netIncome', group: '獲利能力', name: '稅後淨利', unit: '百萬', kind: 'flow', formula: '歸屬於母公司之淨利' },
   { key: 'revenue', group: '獲利能力', name: '營業收入', unit: '百萬', kind: 'flow', formula: '營業收入' },
 
-  { key: 'cfRatio', group: '現金流量', name: '現金流量比率', unit: '%', kind: 'ratio', annualized: true, formula: '營業活動現金流量（年化）÷ 流動負債' },
-  { key: 'cfAdequacy', group: '現金流量', name: '現金流量允當比率', unit: '%', kind: 'ratio', formula: '最近五年營業活動現金流量 ÷ 最近五年（資本支出 + 存貨增加 + 現金股利）。資料不足五年時用可取得的期間（至少四季），tooltip 會註明期數' },
-  { key: 'cfReinvest', group: '現金流量', name: '現金再投資比率', unit: '%', kind: 'ratio', annualized: true, formula: '（營業活動現金流量 − 現金股利，年化）÷（不動產、廠房及設備毛額 + 長期投資 + 其他資產 + 營運資金）' },
+  { key: 'cfRatio', group: '現金流量', name: '現金流量比率', unit: '%', kind: 'ratio', annualized: true, formula: '營業活動現金流量（年化）÷ 流動負債', benchmark: { op: '>', value: 100 } },
+  { key: 'cfAdequacy', group: '現金流量', name: '現金流量允當比率', unit: '%', kind: 'ratio', formula: '最近五年營業活動現金流量 ÷ 最近五年（資本支出 + 存貨增加 + 現金股利）。資料不足五年時用可取得的期間（至少四季），tooltip 會註明期數', benchmark: { op: '>', value: 100 } },
+  { key: 'cfReinvest', group: '現金流量', name: '現金再投資比率', unit: '%', kind: 'ratio', annualized: true, formula: '（營業活動現金流量 − 現金股利，年化）÷（不動產、廠房及設備毛額 + 長期投資 + 其他資產 + 營運資金）', benchmark: { op: '>', value: 10 } },
   { key: 'ocf', group: '現金流量', name: '營業活動現金流量', unit: '百萬', kind: 'flow', formula: '來自現金流量表' },
   { key: 'icf', group: '現金流量', name: '投資活動現金流量', unit: '百萬', kind: 'flow', formula: '來自現金流量表' },
   { key: 'fcf', group: '現金流量', name: '籌資活動現金流量', unit: '百萬', kind: 'flow', formula: '來自現金流量表' },
@@ -192,6 +195,7 @@ function ratios(g) {
   v.dso = div(365, v.arTurnover);
   v.invTurnover = div(g.flowA('cogs'), avgBal('inventory'));
   v.dio = div(365, v.invTurnover);
+  v.cycle = v.dso != null && v.dio != null ? v.dso + v.dio : null;
   v.ppeTurnover = div(revenueA, avgBal('ppe'));
   v.assetTurnover = div(revenueA, avgBal('totalAssets'));
 
