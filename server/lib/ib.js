@@ -92,12 +92,13 @@ const withTimeout = (p, ms, what) =>
 
 // Daily OHLC bars (split-adjusted, TWS "TRADES"), oldest first:
 // [{ date, open, high, low, close, volume }]
-export async function ibDailyBars(ticker, { years = 10 } = {}) {
+export async function ibDailyBars(ticker, { years = 10, days: span = null } = {}) {
   if (!(await ibConnect(2000))) throw Object.assign(new Error('IBKR TWS is not connected'), { status: 503 });
   const contract = { symbol: ibSymbol(ticker), secType: SecType.STK, exchange: 'SMART', currency: 'USD' };
   const ask = async (c) => {
     requests++;
-    return withTimeout(api.getHistoricalData(c, '', `${years} Y`, BarSizeSetting.DAYS_ONE, WhatToShow.TRADES, 1, 1), 45_000, ticker);
+    const duration = span ? (span <= 365 ? `${span} D` : `${Math.ceil(span / 365)} Y`) : `${years} Y`;
+    return withTimeout(api.getHistoricalData(c, '', duration, BarSizeSetting.DAYS_ONE, WhatToShow.TRADES, 1, 1), 45_000, ticker);
   };
   let bars;
   const tries = [contract, ...PRIMARY.map((primaryExch) => ({ ...contract, primaryExch }))];

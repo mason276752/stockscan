@@ -40,7 +40,7 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 `./data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `./data/cache.sqlite`）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 `./data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `./data/cache.sqlite`）、`STOCKSCAN_BARS`（日線目錄，預設 `./data/bars`）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
 自製 ETF 的日線：`TV_ENABLED=0`（不用 TradingView websocket）、`IB_HOST`（預設 127.0.0.1）、`IB_PORT`（預設 7496；TWS 模擬帳戶 7497、IB Gateway 4001 / 4002）、`IB_CLIENT_ID`（預設 100 + PORT 的後三位，兩個 server 才不會互踢）、`IB_ENABLED=0`（不連 TWS，改用 Yahoo）。
 
 ### 資料存放（可進 git）
@@ -49,7 +49,8 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.br   一份財報一檔（brotli JSON，約 16 KB）
 data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.br            一份財報一個評分（約 4 KB）
 data/store/documentation.json                                             標準科目的 SEC 定義，全站一份（不再每份財報重複存）
-data/cache.sqlite                                                         快取：代號表、申報清單、日線、市場快照…（.gitignore）
+data/bars/<來源>/<SYMBOL>.json.br                                         自製 ETF 的日線快取，一檔一檔（.gitignore）
+data/cache.sqlite                                                         快取：代號表、申報清單、市場快照…（.gitignore）
 ```
 
 - 財報一旦申報就不會變，所以每個檔寫一次就不動；解析或評分版本升級時舊檔刪掉重建。檔名就是索引（啟動時掃目錄，約 0.6 秒），沒有另外的索引檔會不同步。
@@ -378,7 +379,10 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
   一條連線、每檔一個 chart session、同時最多 8 個，30 檔約 3 秒；非官方、無文件，`TV_ENABLED=0` 可關）→ ② IBKR **TWS API**
   （`@stoqey/ib`，`reqHistoricalData` 日線、TRADES；只讀歷史資料、不碰帳戶；TWS 要開 API，10 分鐘 60 次限制）→ ③ Yahoo Finance。
   每檔獨立走這條鏈：前一個來源查不到或逾時就換下一個，表格會標各檔實際來源。裸代號在 TradingView 可能對到別國掛牌（COCO → 印尼），
-  所以非美國交易所的結果會改以 NASDAQ / NYSE / AMEX / OTC 前綴重查。日線快取：盤中 30 分鐘；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
+  所以非美國交易所的結果會改以 NASDAQ / NYSE / AMEX / OTC 前綴重查。
+  日線存在 `data/bars/<來源>/<SYMBOL>.json.br`（[barStore.js](server/lib/barStore.js)）：盤中 30 分鐘內視為新鮮；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路；
+  最近讀過的 400 檔解碼後留在記憶體，同一個籃子連開是 0 ms。過期時**只抓最後一根之後的幾天**（往前多抓 7 天核對）接上去，不重抓整段 10 年——三個來源都支援（TradingView 指定根數、TWS 指定天數、Yahoo 指定起日）；
+  核對段的收盤價對不上（期間發生分割、來源改了調整）就整段重抓。一個月沒人讀的檔啟動時清掉。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
 - **K 線圖（預設：Advanced Charts）**：伺服器把各成分股日線組成指數後餵給 TradingView 授權版 **Advanced Charts**
   （`charting_library` 放在 `web/assets/tradingview/`，後端以 `/tradingview/` 提供、Vite 開發模式代理過去；資料由 `web/src/tvDatafeed.js`
   以 Datafeed API 餵入，大盤 ETF 以 Overlay 指標疊同一價格軸，週／月線由函式庫從日線合成），沒有這個資料夾時用開源的
@@ -395,6 +399,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 |---|---|
 | `server/index.js` | Express 路由、靜態檔案 |
 | `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、高/低優先權（預抓讓路） |
+| `server/lib/barStore.js` | 日線快取：一檔一個 brotli 檔、記憶體 LRU、增量接續（`mergeDays` 核對重疊段）、一個月未用清除；舊 kv 裡的日線第一次啟動會搬過來 |
 | `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |
 | `server/lib/prefetch.js` | 閒置時背景預抓相鄰申報 |
 | `server/lib/crawler.js` | 背景爬蟲：掃過所有有代號公司的最近 5 期申報，並每 30 分鐘監看 EDGAR daily index |

@@ -20,6 +20,7 @@ import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, 
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 import { liveHoldings } from './lib/liveHoldings.js';
 import { RANGES, basketSeries, dailyBars, rebased } from './lib/bars.js';
+import { barStore, openBarStore } from './lib/barStore.js';
 import { ibConnect, ibStatus } from './lib/ib.js';
 import { tvStatus } from './lib/tvws.js';
 
@@ -32,6 +33,7 @@ const BASE = `/${String(process.env.BASE_URL || '').trim().replace(/^\/+|\/+$/g,
 const client = new SecClient();
 openStore();
 requireVersion(SCRAPE_VERSION);
+openBarStore();
 const prefetcher = createPrefetcher(client);
 // Background crawl of every ticker company's latest filing (STOCKSCAN_CRAWL=0 turns it off).
 const crawler = createCrawler(client, { prefetcher, enabled: !/^(0|false|no|off)$/i.test(process.env.STOCKSCAN_CRAWL || '1') });
@@ -707,7 +709,7 @@ app.post(
 
 // GET /api/status -> local store and prefetch queue
 app.get('/api/status', (_req, res) => {
-  res.json({ store: { file: store.file, ...store.size() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle, tv: tvStatus(), ib: ibStatus() });
+  res.json({ store: { file: store.file, ...store.size(), bars: barStore.stats() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle, tv: tvStatus(), ib: ibStatus() });
 });
 
 // Serve the built Vue app when it exists (npm run build:web). The build uses

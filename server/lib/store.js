@@ -171,13 +171,10 @@ export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(pr
   return root;
 }
 
-// Housekeeping for the kv cache at startup: daily bars nobody has asked for
-// in a day are dead weight (their TTL is half an hour and a 10-year series
-// is ~200 KB of text), rows still stored as plain text get packed, and the
-// file is shrunk when a lot went away.
-const BARS_MAX_AGE = 24 * 3600 * 1000;
+// Housekeeping for the kv cache at startup: rows still stored as plain text
+// (first migration pass) get packed and the file is shrunk.
 function compactCache() {
-  const stale = cache.prepare("DELETE FROM kv WHERE key LIKE 'bars:%' AND updated_at < ?").run(Date.now() - BARS_MAX_AGE).changes;
+  const stale = 0;
   const text = cache.prepare("SELECT key FROM kv WHERE typeof(json) = 'text'").all().map((r) => r.key);
   if (text.length) {
     const get = cache.prepare('SELECT json FROM kv WHERE key = ?');
@@ -193,7 +190,7 @@ function compactCache() {
   }
   if (stale || text.length) {
     cache.exec('VACUUM');
-    console.log(`store: 快取整理：清掉 ${stale} 筆過期日線、壓縮 ${text.length} 筆純文字列`);
+    console.log(`store: 快取整理：壓縮 ${text.length} 筆純文字列`);
   }
   cache.exec('PRAGMA wal_checkpoint(TRUNCATE)'); // fold the WAL back into the file so it does not sit at its high-water mark
 }
@@ -322,6 +319,15 @@ export const store = {
   },
   putKV(key, value) {
     cache.prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, kvPack(value), Date.now());
+  },
+  kvKeys(prefix) {
+    return cache.prepare('SELECT key FROM kv WHERE substr(key, 1, ?) = ?').all(prefix.length, prefix).map((r) => r.key);
+  },
+  deleteKV(key) {
+    cache.prepare('DELETE FROM kv WHERE key = ?').run(key);
+  },
+  compactKV() {
+    cache.exec('VACUUM; PRAGMA wal_checkpoint(TRUNCATE);');
   },
 
   // scores: one per filing, keyed by accession, invalidated by version

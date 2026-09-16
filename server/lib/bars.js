@@ -6,7 +6,7 @@
 // valuation page keeps its own Yahoo price history in prices.js - it needs
 // the unadjusted quotes of the day.)
 
-import { store } from './store.js';
+import { barStore, mergeDays } from './barStore.js';
 import { ibConnect, ibConnected, ibDailyBars, ibStatus } from './ib.js';
 import { tvDailyBars, tvStatus } from './tvws.js';
 import { yahooSymbol } from './prices.js';
@@ -15,9 +15,10 @@ const BARS_TTL = 30 * 60 * 1000; // a basket of 30 names is 30 TWS requests; IB 
 const YEARS = 10;
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/';
 
-async function yahooDailyBars(ticker) {
+async function yahooDailyBars(ticker, since = null) {
   const symbol = yahooSymbol(ticker);
-  const url = `${YAHOO}${encodeURIComponent(symbol)}?${new URLSearchParams({ range: `${YEARS}y`, interval: '1d' })}`;
+  const span = since ? { period1: String(Math.floor(Date.parse(since) / 1000)), period2: String(Math.floor(Date.now() / 1000) + 86_400) } : { range: `${YEARS}y` };
+  const url = `${YAHOO}${encodeURIComponent(symbol)}?${new URLSearchParams({ ...span, interval: '1d' })}`;
   let res;
   for (let attempt = 0; ; attempt++) {
     res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
@@ -58,10 +59,10 @@ const enabledSources = () => [...(tvStatus().enabled ? ['tv'] : []), ...(ibStatu
 // for BARS_TTL, or - when it was fetched after the last close - until the
 // next session opens. (Weekends handled; holidays just refetch once.)
 function barsFresh(saved) {
-  if (saved.ageMs < BARS_TTL) return true;
-  const fetchedAt = Date.parse(saved.value?.fetchedAt || 0);
+  const fetchedAt = Date.parse(saved?.fetchedAt || 0);
   if (!fetchedAt) return false;
   const now = Date.now();
+  if (now - fetchedAt < BARS_TTL) return true;
   // fetched after the last settled close, and no session has opened since then
   return fetchedAt >= lastClose(now) + 15 * 60_000 && now < nextOpen(fetchedAt);
 }
@@ -93,16 +94,35 @@ export function nextOpen(t) {
   return t;
 }
 const SOURCE_NAME = { tv: 'TradingView', ib: 'IBKR', yahoo: 'Yahoo Finance' };
-const CACHE_KEY = { tv: 'bars:tv2', ib: 'bars:ib', yahoo: 'bars:yahoo' }; // tv2: entries before the US-listing check are stale
+const CACHE_KEY = { tv: 'tv2', ib: 'ib', yahoo: 'yahoo' }; // directory per source under data/bars (tv2: before the US-listing check the series could be another country's)
+const OVERLAP = 7; // calendar days re-fetched behind the last saved bar, to check the history still lines up
 
-async function fetchFrom(source, symbol) {
+// the whole series, or (since = 'yyyy-mm-dd') only the bars from that day on
+async function fetchFrom(source, symbol, since = null) {
+  const calendarDays = since ? Math.ceil((Date.now() - Date.parse(since)) / 86_400_000) + 2 : null;
   if (source === 'tv') {
-    const r = await tvDailyBars(symbol);
-    return { symbol, source: 'TradingView', currency: r.currency || 'USD', resolved: r.resolved, days: r.days };
+    const r = await tvDailyBars(symbol, since ? { bars: calendarDays } : {});
+    return { symbol, source: 'TradingView', currency: r.currency || 'USD', resolved: r.resolved, days: since ? r.days.filter((d) => d.date >= since) : r.days };
   }
-  if (source === 'ib') return { symbol, source: 'IBKR', currency: 'USD', days: await ibDailyBars(symbol, { years: YEARS }) };
-  const { days, currency } = await yahooDailyBars(symbol);
+  if (source === 'ib') return { symbol, source: 'IBKR', currency: 'USD', days: await ibDailyBars(symbol, since ? { days: calendarDays } : { years: YEARS }) };
+  const { days, currency } = await yahooDailyBars(symbol, since);
   return { symbol, source: 'Yahoo Finance', currency, days };
+}
+
+// bring a saved series up to date: fetch the tail (with overlap) and splice
+// it on; a history that no longer lines up (split since) is fetched whole
+async function refresh(src, symbol, saved) {
+  const last = saved?.days?.at(-1)?.date;
+  if (last) {
+    const since = new Date(Date.parse(last) - OVERLAP * 86_400_000).toISOString().slice(0, 10);
+    const tail = await fetchFrom(src, symbol, since);
+    const days = mergeDays(saved.days, tail.days);
+    if (days) return { ...saved, ...tail, days, fetchedAt: new Date().toISOString(), incremental: tail.days.length };
+  }
+  const value = await fetchFrom(src, symbol);
+  if (!value.days.length) throw Object.assign(new Error(`${SOURCE_NAME[src]}: no daily bars for ${symbol}`), { status: 404 });
+  value.fetchedAt = new Date().toISOString();
+  return value;
 }
 
 // { symbol, source: 'TradingView' | 'IBKR' | 'Yahoo Finance', currency, days: [{ date, open, high, low, close, volume }], fetchedAt }
@@ -112,18 +132,15 @@ export async function dailyBars(ticker) {
   const symbol = String(ticker).toUpperCase();
   // a fresh copy from any enabled source answers without touching the network (or TWS)
   for (const src of enabledSources()) {
-    const saved = store.getKV(`${CACHE_KEY[src]}:${symbol}`);
-    if (saved && barsFresh(saved)) return saved.value;
+    const saved = barStore.get(CACHE_KEY[src], symbol);
+    if (saved && barsFresh(saved)) return saved;
   }
   const order = await sources();
   let lastErr = null;
   for (const src of order) {
     try {
-      const value = await fetchFrom(src, symbol);
-      if (!value.days.length) throw Object.assign(new Error(`${SOURCE_NAME[src]}: no daily bars for ${symbol}`), { status: 404 });
-      value.fetchedAt = new Date().toISOString();
-      store.putKV(`${CACHE_KEY[src]}:${symbol}`, value);
-      return value;
+      const value = await refresh(src, symbol, barStore.get(CACHE_KEY[src], symbol));
+      return barStore.put(CACHE_KEY[src], symbol, value);
     } catch (err) {
       lastErr = err;
       const next = order[order.indexOf(src) + 1];
@@ -132,8 +149,8 @@ export async function dailyBars(ticker) {
   }
   // every source failed: a stale copy beats nothing
   for (const src of order) {
-    const saved = store.getKV(`${CACHE_KEY[src]}:${symbol}`);
-    if (saved) return saved.value;
+    const saved = barStore.get(CACHE_KEY[src], symbol);
+    if (saved) return saved;
   }
   throw lastErr;
 }
