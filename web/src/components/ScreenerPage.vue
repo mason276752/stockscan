@@ -2,31 +2,93 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
+import SicPicker from './SicPicker.vue';
 import { isWatched, toggleWatch } from '../watchlist';
 import { createBasket } from '../baskets';
 
-const emit = defineEmits(['open', 'basket']);
+// params: the screen as it appears in the URL (see App.vue); `navigate`
+// reports every change so the URL and the browser history follow along
+const props = defineProps({ params: { type: Object, default: () => ({}) } });
+const emit = defineEmits(['open', 'basket', 'navigate']);
 
-const meta = ref(null); // { fields, divisions, filer }
+const meta = ref(null); // { fields, divisions, filer, market }
 const sic = ref(null); // /api/browse/sic
 const text = ref('');
 const division = ref('');
 const sicCode = ref('');
 const afs = ref('');
 const listedOnly = ref(true);
-// condition rows: { key, min, max }
+const exDivisions = ref([]); // division ids to leave out
+const exSics = ref([]); // SIC codes to leave out, one dropdown row each
+// condition rows: { key, mode: 'now' | 'chg' | 'yoy', min, max }
+//   now = the latest filing's figure; chg = change since the previous filing;
+//   yoy = change since the same period a year earlier
 const DEFAULT_CONDITIONS = [
-  { key: 'score', min: 60, max: '' },
-  { key: 'grossMargin', min: '', max: '' },
-  { key: 'roe', min: '', max: '' },
-  { key: 'debtRatio', min: '', max: '' },
+  { key: 'score', mode: 'now', min: 60, max: '' },
+  { key: 'grossMargin', mode: 'now', min: '', max: '' },
+  { key: 'roe', mode: 'now', min: '', max: '' },
+  { key: 'debtRatio', mode: 'now', min: '', max: '' },
 ];
 const conditions = ref(DEFAULT_CONDITIONS.map((c) => ({ ...c })));
 const sortKey = ref('score');
 const sortDir = ref('desc');
+const sortMode = ref('now');
 const result = ref(null);
 const loading = ref(false);
 const error = ref(null);
+
+// ---- URL <-> state ----
+const MODES = { now: '', chg: 'chg', yoy: 'yoy' };
+function toUrlParams() {
+  const p = {};
+  if (text.value.trim()) p.q = text.value.trim();
+  if (division.value) p.division = division.value;
+  if (sicCode.value) p.sic = sicCode.value;
+  if (afs.value) p.afs = afs.value;
+  if (!listedOnly.value) p.listed = '0';
+  if (exDivisions.value.length) p.exdiv = exDivisions.value.join(',');
+  if (exSics.value.filter(Boolean).length) p.exsic = exSics.value.filter(Boolean).join(',');
+  const cond = conditions.value.filter((c) => c.key).map((c) => [c.key, MODES[c.mode] || '', c.min ?? '', c.max ?? ''].join(':'));
+  if (cond.length) p.cond = cond.join(';');
+  if (sortKey.value !== 'score' || sortDir.value !== 'desc' || sortMode.value !== 'now') {
+    p.sort = sortKey.value;
+    p.dir = sortDir.value;
+    if (sortMode.value !== 'now') p.sortmode = sortMode.value;
+  }
+  return p;
+}
+let applying = false;
+function applyUrlParams(p) {
+  applying = true;
+  text.value = p.q || '';
+  division.value = p.division || '';
+  sicCode.value = p.sic || '';
+  afs.value = p.afs || '';
+  listedOnly.value = p.listed !== '0';
+  exDivisions.value = p.exdiv ? String(p.exdiv).split(',').filter(Boolean) : [];
+  exSics.value = p.exsic ? String(p.exsic).split(',').filter(Boolean) : [];
+  if (p.cond != null) {
+    conditions.value = String(p.cond)
+      .split(';')
+      .filter(Boolean)
+      .map((s) => {
+        const [key, mode, min, max] = s.split(':');
+        return { key, mode: mode === 'chg' || mode === 'yoy' ? mode : 'now', min: min ?? '', max: max ?? '' };
+      });
+  } else if (Object.keys(p).length === 0) conditions.value = DEFAULT_CONDITIONS.map((c) => ({ ...c }));
+  else conditions.value = [];
+  sortKey.value = p.sort || 'score';
+  sortDir.value = p.dir === 'asc' ? 'asc' : 'desc';
+  sortMode.value = p.sortmode === 'chg' || p.sortmode === 'yoy' ? p.sortmode : 'now';
+  applying = false;
+}
+watch(
+  () => props.params,
+  (p) => {
+    if (JSON.stringify(p || {}) !== JSON.stringify(toUrlParams())) applyUrlParams(p || {});
+  },
+  { deep: true },
+);
 
 // the results (as sorted; all of them, or the first N) as a new custom ETF
 const basketN = ref('');
@@ -38,7 +100,7 @@ function makeBasket() {
   const parts = [];
   if (sicCode.value) parts.push(sicCode.value);
   else if (division.value) parts.push(meta.value?.divisions?.find((d) => d.id === division.value)?.zh || division.value);
-  const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${(fieldOf(c.key)?.name || c.key).replace(/（.*?）/g, '')}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
+  const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${(fieldOf(c.key)?.name || c.key).replace(/（.*?）/g, '')}${c.mode === 'chg' ? '較上期' : c.mode === 'yoy' ? '較去年' : ''}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
   const label = [...parts, ...cond].join(' ') || '尋找股票';
   createBasket(label, rows, { prune: true, source: { type: 'screen', params: { ...params.value }, n: n < basketable.value.length ? n : null, label }, sync: { at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）', added: [], removed: [], changed: 0 } });
   emit('basket');
@@ -58,19 +120,27 @@ const sicOptions = computed(() => {
   const d = division.value ? sic.value.divisions.find((x) => x.id === division.value) : null;
   return sic.value.codes.filter((c) => (listedOnly.value ? c.listed : c.total) && (!d || c.division === d.id)).sort((a, b) => a.code.localeCompare(b.code));
 });
+// change filters compare with earlier filings: market figures have none
+const modesFor = (key) => (fieldOf(key)?.market ? ['now'] : ['now', 'chg', 'yoy']);
+const isPct = (key) => fieldOf(key)?.unit === '百萬' || fieldOf(key)?.unit === '百萬股' || key === 'score'; // changes shown as % growth
+const unitLabel = (f) => (f.unit === '百萬' ? '（百萬）' : f.unit === '%' ? '（%）' : f.unit ? `（${f.unit}）` : '');
 
-// amounts are entered in millions; percentages / ratios as shown
-const scale = (key) => (fieldOf(key)?.unit === '百萬' ? 1e6 : 1);
+// amounts are entered in millions; percentages / ratios as shown; changes in % or points
+const scale = (c) => (c.mode !== 'now' ? 1 : fieldOf(c.key)?.unit === '百萬' || fieldOf(c.key)?.unit === '百萬股' ? 1e6 : 1);
 const params = computed(() => {
   const p = { sort: sortKey.value, dir: sortDir.value, limit: 500, listed: listedOnly.value ? '1' : '0' };
+  if (sortMode.value !== 'now') p.sortmode = sortMode.value;
   if (text.value.trim()) p.q = text.value.trim();
   if (division.value) p.division = division.value;
   if (sicCode.value) p.sic = sicCode.value;
   if (afs.value) p.afs = afs.value;
+  if (exDivisions.value.length) p.exdiv = exDivisions.value.join(',');
+  if (exSics.value.filter(Boolean).length) p.exsic = exSics.value.filter(Boolean).join(',');
   for (const c of conditions.value) {
     if (!c.key) continue;
-    if (c.min !== '' && c.min != null && Number.isFinite(Number(c.min))) p[`${c.key}_min`] = Number(c.min) * scale(c.key);
-    if (c.max !== '' && c.max != null && Number.isFinite(Number(c.max))) p[`${c.key}_max`] = Number(c.max) * scale(c.key);
+    const suffix = c.mode === 'now' ? '' : `_${c.mode}`;
+    if (c.min !== '' && c.min != null && Number.isFinite(Number(c.min))) p[`${c.key}${suffix}_min`] = Number(c.min) * scale(c);
+    if (c.max !== '' && c.max != null && Number.isFinite(Number(c.max))) p[`${c.key}${suffix}_max`] = Number(c.max) * scale(c);
   }
   return p;
 });
@@ -90,37 +160,61 @@ async function run() {
 watch(params, () => {
   clearTimeout(timer);
   timer = setTimeout(run, 350);
+  if (!applying) emit('navigate', toUrlParams());
 });
 
 function addCondition() {
-  conditions.value.push({ key: 'netMargin', min: '', max: '' });
+  conditions.value.push({ key: 'netMargin', mode: 'now', min: '', max: '' });
 }
 function removeCondition(i) {
   conditions.value.splice(i, 1);
 }
 function reset() {
-  text.value = '';
-  division.value = '';
-  sicCode.value = '';
-  afs.value = '';
-  conditions.value = DEFAULT_CONDITIONS.map((c) => ({ ...c }));
-  sortKey.value = 'score';
-  sortDir.value = 'desc';
+  applyUrlParams({});
 }
-function sortBy(k) {
-  if (sortKey.value === k) sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc';
+// every SIC with a company, for the exclusion pickers
+const allSicOptions = computed(() => (sic.value ? sic.value.codes.filter((c) => (listedOnly.value ? c.listed : c.total)).sort((a, b) => a.code.localeCompare(b.code)) : []));
+function addExSic() {
+  exSics.value.push('');
+}
+function removeExSic(i) {
+  exSics.value.splice(i, 1);
+}
+function toggleExDivision(id) {
+  const i = exDivisions.value.indexOf(id);
+  if (i >= 0) exDivisions.value.splice(i, 1);
+  else exDivisions.value.push(id);
+}
+function sortBy(k, mode = 'now') {
+  if (sortKey.value === k && sortMode.value === mode) sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc';
   else {
     sortKey.value = k;
+    sortMode.value = mode;
     sortDir.value = k === 'name' || k === 'ticker' ? 'asc' : 'desc';
   }
 }
-const arrow = (k) => (sortKey.value === k ? (sortDir.value === 'asc' ? ' ▲' : ' ▼') : '');
+const arrow = (k, mode = 'now') => (sortKey.value === k && sortMode.value === mode ? (sortDir.value === 'asc' ? ' ▲' : ' ▼') : '');
 
-// result columns: the fields used in conditions plus a few staples
-const STAPLES = ['grossMargin', 'opMargin', 'netMargin', 'roe', 'debtRatio', 'currentRatio', 'cfRatio', 'revenue'];
+// result columns: the fields used in conditions (with their change columns) plus a few staples
+const STAPLES = ['price', 'marketCap', 'pe', 'grossMargin', 'opMargin', 'netMargin', 'roe', 'debtRatio', 'currentRatio', 'revenueAnn'];
 const columns = computed(() => {
-  const keys = [...conditions.value.map((c) => c.key).filter((k) => k && k !== 'score'), ...STAPLES];
-  return [...new Set(keys)].map(fieldOf).filter(Boolean);
+  const out = [];
+  const seen = new Set();
+  const push = (key, mode) => {
+    const id = `${key}:${mode}`;
+    const f = fieldOf(key);
+    if (!f || seen.has(id)) return;
+    seen.add(id);
+    out.push({ field: f, mode, id });
+  };
+  for (const c of conditions.value) {
+    if (!c.key || c.key === 'score') continue;
+    push(c.key, 'now');
+    if (c.mode !== 'now') push(c.key, c.mode);
+  }
+  if (sortMode.value !== 'now') push(sortKey.value, sortMode.value);
+  for (const k of STAPLES) push(k, 'now');
+  return out;
 });
 const f1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
 const f2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
@@ -131,20 +225,41 @@ function fmt(field, v) {
     case '%':
       return `${f1.format(v)}%`;
     case '次':
+    case '倍':
       return `${f2.format(v)}`;
     case '天':
+    case '股':
       return f0.format(v);
     case '元':
+    case '美元':
       return f2.format(v);
     case '百萬':
+    case '百萬股':
       return f0.format(v / 1e6);
     default:
       return f1.format(v);
   }
 }
+// a cell: the value, or the change vs the previous / year-earlier filing
+function cell(r, col) {
+  const { field: f, mode } = col;
+  if (f.market) return { text: fmt(f, r.market?.[f.key]), neg: (r.market?.[f.key] ?? 0) < 0 };
+  const cur = f.key === 'score' ? r.score.score : r.values?.[f.key];
+  if (mode === 'now') return { text: fmt(f, cur), neg: (cur ?? 0) < 0 };
+  const base = mode === 'chg' ? r.prev : r.yoy;
+  const b = !base ? null : f.key === 'score' ? base.score : base.values?.[f.key];
+  if (cur == null || b == null) return { text: '—', neg: false, title: base ? '' : mode === 'chg' ? '沒有上一期財報' : '沒有去年同期財報' };
+  const d = isPct(f.key) ? (b === 0 ? null : ((cur - b) / Math.abs(b)) * 100) : cur - b;
+  if (d == null) return { text: '—', neg: false };
+  const title = `${base.fiscalYear} ${base.fiscalPeriod}：${fmt(f, b)} → ${fmt(f, cur)}`;
+  return { text: `${d > 0 ? '+' : ''}${f1.format(d)}${isPct(f.key) ? '%' : ' pt'}`, neg: d < 0, pos: d > 0, title };
+}
+const colTitle = (col) => `${col.field.name.replace(/（.*?）/g, '').replace(/ [①②]|\s*[①②]\/[①②]|\s*[①②]−[①②]/g, '')}${col.mode === 'chg' ? ' 較上期' : col.mode === 'yoy' ? ' 較去年同期' : ''}`;
 const AFS_ZH = { LAF: '大型加速', ACC: '加速', NON: '非加速' };
+const cap = (v) => (v == null ? '—' : v >= 1e12 ? `${f2.format(v / 1e12)} 兆` : v >= 1e9 ? `${f1.format(v / 1e9)} 十億` : `${f0.format(v / 1e6)} 百萬`);
 
 onMounted(async () => {
+  applyUrlParams(props.params || {});
   try {
     [meta.value, sic.value] = await Promise.all([api.screenFields(), api.browseSic()]);
   } catch (e) {
@@ -172,10 +287,7 @@ onMounted(async () => {
         </label>
         <label class="frow">
           <span>產業 (SIC)</span>
-          <select v-model="sicCode">
-            <option value="">全部</option>
-            <option v-for="c in sicOptions" :key="c.code" :value="c.code">{{ c.code }} {{ c.zh || c.title }}（{{ listedOnly ? c.listed : c.total }}）</option>
-          </select>
+          <SicPicker v-model="sicCode" :codes="sicOptions" :divisions="meta?.divisions || []" :count-key="listedOnly ? 'listed' : 'total'" placeholder="全部；輸入代碼或名稱搜尋…" />
         </label>
         <label class="frow">
           <span>申報身分</span>
@@ -186,17 +298,36 @@ onMounted(async () => {
         </label>
         <label class="frow check"><input v-model="listedOnly" type="checkbox" /> 只列有股票代號的公司</label>
 
-        <div class="side-head">財務指標（最新財報）</div>
+        <div class="side-head">排除產業</div>
+        <div class="chips">
+          <button v-for="d in meta?.divisions || []" :key="d.id" class="chip" :class="{ on: exDivisions.includes(d.id) }" :title="`排除 ${d.id} ${d.zh}`" @click="toggleExDivision(d.id)">{{ d.zh }}</button>
+        </div>
+        <div v-for="(code, i) in exSics" :key="i" class="exrow">
+          <SicPicker v-model="exSics[i]" :codes="allSicOptions" :divisions="meta?.divisions || []" :count-key="listedOnly ? 'listed' : 'total'" placeholder="要排除的產業：輸入代碼或名稱搜尋…" />
+          <button class="mini" title="移除" @click="removeExSic(i)">✕</button>
+        </div>
+        <div class="actions">
+          <button class="mini" @click="addExSic">＋ 排除產業 (SIC)</button>
+        </div>
+
+        <div class="side-head">條件（最新財報 / 現在市場）</div>
         <div v-for="(c, i) in conditions" :key="i" class="cond">
-          <select v-model="c.key">
-            <optgroup v-for="g in fieldGroups" :key="g.name" :label="g.name">
-              <option v-for="f in g.fields" :key="f.key" :value="f.key">{{ f.name }}{{ f.unit === '百萬' ? '（百萬）' : f.unit === '%' ? '（%）' : f.unit ? `（${f.unit}）` : '' }}</option>
-            </optgroup>
-          </select>
+          <div class="cond-head">
+            <select v-model="c.key" @change="modesFor(c.key).includes(c.mode) || (c.mode = 'now')">
+              <optgroup v-for="g in fieldGroups" :key="g.name" :label="g.name">
+                <option v-for="f in g.fields" :key="f.key" :value="f.key">{{ f.name }}{{ unitLabel(f) }}</option>
+              </optgroup>
+            </select>
+            <select v-model="c.mode" class="mode" :disabled="modesFor(c.key).length === 1" :title="c.mode === 'now' ? '最新一份財報的數值' : c.mode === 'chg' ? '與上一份財報相比的變化（比率：百分點；金額、評分：成長 %）' : '與去年同期財報相比的變化（比率：百分點；金額、評分：成長 %）'">
+              <option value="now">目前</option>
+              <option value="chg" :disabled="!modesFor(c.key).includes('chg')">較上期</option>
+              <option value="yoy" :disabled="!modesFor(c.key).includes('yoy')">較去年同期</option>
+            </select>
+          </div>
           <div class="range">
-            <input v-model="c.min" type="text" inputmode="decimal" placeholder="≥" />
+            <input v-model="c.min" type="text" inputmode="decimal" :placeholder="c.mode === 'now' ? '≥' : isPct(c.key) ? '≥ %' : '≥ pt'" />
             <span class="muted">～</span>
-            <input v-model="c.max" type="text" inputmode="decimal" placeholder="≤" />
+            <input v-model="c.max" type="text" inputmode="decimal" :placeholder="c.mode === 'now' ? '≤' : isPct(c.key) ? '≤ %' : '≤ pt'" />
             <button class="mini" title="移除條件" @click="removeCondition(i)">✕</button>
           </div>
         </div>
@@ -205,7 +336,8 @@ onMounted(async () => {
           <button class="mini" @click="reset">重設</button>
         </div>
         <p class="muted small">
-          數字取自每家公司最新一份已下載的 10-K / 10-Q（年初至今、年化，與評分相同）；金額類以百萬為單位、幣別為財報幣別（外國公司可能不是美元）。尚未下載財報的公司不會出現。
+          財報數字取自每家公司最新一份已下載的 10-K / 10-Q（年初至今、年化，與評分相同），金額以百萬為單位、幣別為財報幣別；「較上期」「較去年同期」用背景抓下來的前幾期財報比較。
+          股價、市值、估值倍數來自 TradingView 的市場快照{{ meta?.market?.updatedAt ? `（${new Date(meta.market.updatedAt).toLocaleString()}）` : '' }}，每半小時更新；市值以百萬美元輸入。
         </p>
       </aside>
 
@@ -234,8 +366,8 @@ onMounted(async () => {
                 <th class="sortable" @click="sortBy('name')">公司{{ arrow('name') }}</th>
                 <th>產業</th>
                 <th class="sortable" @click="sortBy('score')">評分{{ arrow('score') }}</th>
-                <th v-for="f in columns" :key="f.key" class="num sortable" :title="f.name" @click="sortBy(f.key)">
-                  {{ f.name.replace(/（.*?）/g, '').replace(/ [①②]|\s*[①②]\/[①②]|\s*[①②]−[①②]/g, '') }}<span v-if="f.unit === '百萬'" class="muted"> 百萬</span>{{ arrow(f.key) }}
+                <th v-for="col in columns" :key="col.id" class="num sortable" :class="{ chg: col.mode !== 'now' }" :title="col.field.name + (col.mode === 'chg' ? '（較上一期財報）' : col.mode === 'yoy' ? '（較去年同期財報）' : '')" @click="sortBy(col.field.key, col.mode)">
+                  {{ colTitle(col) }}<span v-if="col.mode === 'now' && (col.field.unit === '百萬' || col.field.unit === '百萬股')" class="muted"> 百萬</span>{{ arrow(col.field.key, col.mode) }}
                 </th>
                 <th class="sortable num" @click="sortBy('float')">公眾流通市值{{ arrow('float') }}</th>
               </tr>
@@ -247,7 +379,7 @@ onMounted(async () => {
                 <td class="name">{{ r.name }}<span class="muted small afs"> {{ AFS_ZH[r.afs] || '' }}</span></td>
                 <td class="small">{{ r.sic }} {{ r.sicZh || '' }}</td>
                 <td><ScoreBadge :score="r.score" /></td>
-                <td v-for="f in columns" :key="f.key" class="num" :class="{ neg: r.values[f.key] < 0 }">{{ fmt(f, r.values[f.key]) }}</td>
+                <td v-for="col in columns" :key="col.id" class="num" :class="{ neg: cell(r, col).neg, pos: cell(r, col).pos, chg: col.mode !== 'now' }" :title="cell(r, col).title || ''">{{ cell(r, col).text }}</td>
                 <td class="num small">{{ r.float == null ? '—' : r.float >= 1e12 ? `${f2.format(r.float / 1e12)} 兆` : `${f0.format(r.float / 1e8)} 億` }}</td>
               </tr>
             </tbody>
@@ -452,5 +584,50 @@ td.star .on {
   border: 1px solid var(--border);
   border-radius: 4px;
   text-align: right;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  cursor: pointer;
+}
+.chip.on {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
+  text-decoration: line-through;
+}
+.cond-head {
+  display: flex;
+  gap: 4px;
+}
+.exrow {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.cond-head select:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.cond-head select.mode {
+  width: 92px;
+  flex: none;
+}
+td.pos {
+  color: #15803d;
+}
+th.chg,
+td.chg {
+  background: #f8fafc;
 }
 </style>

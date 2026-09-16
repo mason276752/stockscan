@@ -13,7 +13,8 @@ import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
 import { buildValuation } from './lib/valuation.js';
-import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession } from './lib/score.js';
+import { AMOUNT_FIELDS, ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession } from './lib/score.js';
+import { MARKET_FIELDS, marketSnapshot, marketStatus } from './lib/market.js';
 import { ROWS as INDICATOR_ROWS } from './lib/indicators.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
@@ -44,6 +45,9 @@ setTimeout(() => {
   if (universeStale()) refreshUniverse(client, 'low').catch((e) => console.warn(`universe build failed: ${e.message}`));
 }, 5000);
 setTimeout(() => crawler.start(), 15_000);
+// market snapshot (price, market cap, multiples) for the screener: fetch at startup, refresh every half hour
+setTimeout(() => marketSnapshot().catch(() => {}), 3000);
+setInterval(() => marketSnapshot().catch(() => {}), 30 * 60 * 1000).unref();
 
 // IBKR TWS for the custom-ETF charts: connect once at startup; when TWS is not
 // running the charts use Yahoo Finance and the page offers a retry.
@@ -397,15 +401,24 @@ app.get(
 // ---------- screener ----------
 
 // Filterable fields: every indicator row plus the score.
+// Screener fields: the score, every indicator row, statement amounts (from
+// the latest filing), and the market snapshot (price, market cap, multiples).
 const SCREEN_FIELDS = [
   { key: 'score', name: '評分', unit: '分', group: '評分' },
   ...INDICATOR_ROWS.filter((r) => !r.abstract).map((r) => ({ key: r.key, name: r.name, unit: r.unit, group: r.group, annualized: !!r.annualized })),
+  ...AMOUNT_FIELDS,
+  ...MARKET_FIELDS.map((f) => ({ ...f, market: true })),
 ];
-app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS }));
+const MARKET_KEYS = new Set(MARKET_FIELDS.map((f) => f.key));
+app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS, market: marketStatus() }));
 
-// GET /api/screen?sic=7372&division=D&afs=LAF&score_min=60&grossMargin_min=40&roe_min=15&sort=score&dir=desc&limit=200
+// GET /api/screen?sic=7372&division=D&afs=LAF&exdiv=H,I&exsic=6770,2834&score_min=60&grossMargin_min=40
+//     &roe_chg_min=2&revenueAnn_yoy_min=10&price_max=50&marketCap_min=1000&sort=score&dir=desc&limit=200
 // -> companies whose newest saved filing passes every filter (values are the
-//    single-filing figures used for the score: year-to-date, annualised)
+//    single-filing figures used for the score: year-to-date, annualised).
+//    <key>_min / _max filter the value; <key>_chg_* the change since the
+//    previous filing; <key>_yoy_* the change since the same period a year
+//    earlier - percentage points for ratios, % growth for amounts and the score.
 app.get(
   '/api/screen',
   wrap(async (req, res) => {
@@ -415,15 +428,22 @@ app.get(
     const sic = q.sic ? String(q.sic).padStart(4, '0') : null;
     const sic2 = q.sic2 ? String(q.sic2).padStart(2, '0') : null;
     const division = q.division ? SIC.divisions.find((d) => d.id === String(q.division).toUpperCase()) : null;
+    const exDiv = String(q.exdiv || '').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean).map((id) => SIC.divisions.find((d) => d.id === id)).filter(Boolean);
+    const exSic = String(q.exsic || '').split(',').map((x) => x.trim()).filter((x) => /^\d{2,4}$/.test(x));
     const afs = q.afs ? String(q.afs).toUpperCase() : null;
     const text = String(q.q || '').trim().toUpperCase();
+    const fieldOf = (key) => SCREEN_FIELDS.find((f) => f.key === key);
     const ranges = [];
     for (const [k, v] of Object.entries(q)) {
-      const m = /^(.+)_(min|max)$/.exec(k);
+      const m = /^(.+?)(?:_(chg|yoy))?_(min|max)$/.exec(k);
       if (!m || v === '' || !Number.isFinite(Number(v))) continue;
-      if (!SCREEN_FIELDS.some((f) => f.key === m[1])) continue;
-      ranges.push({ key: m[1], op: m[2], value: Number(v) });
+      const f = fieldOf(m[1]);
+      if (!f) continue;
+      if (m[2] && f.market) continue; // no history for market fields
+      ranges.push({ key: m[1], mode: m[2] || 'now', op: m[3], value: Number(v), pctChange: f.unit === '百萬' || f.unit === '百萬股' || f.key === 'score' });
     }
+    const wantsMarket = ranges.some((r) => MARKET_KEYS.has(r.key)) || MARKET_KEYS.has(String(q.sort || ''));
+    const market = await marketSnapshot({ wait: wantsMarket });
     const listedOnly = q.listed !== '0';
     const rows = [];
     for (const s of latestScores()) {
@@ -434,12 +454,24 @@ app.get(
       if (sic && code !== sic) continue;
       if (sic2 && !code.startsWith(sic2)) continue;
       if (division && !(code.slice(0, 2) >= division.from && code.slice(0, 2) <= division.to)) continue;
+      if (exDiv.some((d) => code.slice(0, 2) >= d.from && code.slice(0, 2) <= d.to)) continue;
+      if (exSic.some((x) => code.startsWith(x))) continue;
       if (afs && (c.afs || 'UNKNOWN') !== afs) continue;
       if (text && !(c.name.toUpperCase().includes(text) || c.tickers.some((t) => t.startsWith(text)))) continue;
-      const val = (key) => (key === 'score' ? s.score : s.values?.[key] ?? null);
+      const mk = c.ticker ? market?.byTicker?.[c.ticker] || null : null;
+      const at = (src, key) => (!src ? null : key === 'score' ? src.score : src.values?.[key] ?? null);
+      const val = (key, mode = 'now') => {
+        if (MARKET_KEYS.has(key)) return mode === 'now' ? mk?.[key] ?? null : null;
+        if (mode === 'now') return at(s, key);
+        const base = mode === 'chg' ? s.prev : s.yoy;
+        const a = at(s, key);
+        const b = at(base, key);
+        if (a == null || b == null) return null;
+        return fieldOf(key)?.unit === '百萬' || fieldOf(key)?.unit === '百萬股' || key === 'score' ? (b === 0 ? null : ((a - b) / Math.abs(b)) * 100) : a - b;
+      };
       let ok = true;
       for (const r of ranges) {
-        const v = val(r.key);
+        const v = val(r.key, r.mode);
         if (v == null || (r.op === 'min' ? v < r.value : v > r.value)) {
           ok = false;
           break;
@@ -457,11 +489,24 @@ app.get(
         float: c.float,
         score: { score: s.score, coverage: s.coverage, accession: s.accession, form: s.form, fiscalYear: s.fiscalYear, fiscalPeriod: s.fiscalPeriod, periodEnd: s.periodEnd, filingDate: s.filingDate, categories: s.categories.map((x) => x.score) },
         values: s.values || {},
+        prev: s.prev ? { fiscalYear: s.prev.fiscalYear, fiscalPeriod: s.prev.fiscalPeriod, periodEnd: s.prev.periodEnd, score: s.prev.score, values: s.prev.values } : null,
+        yoy: s.yoy ? { fiscalYear: s.yoy.fiscalYear, fiscalPeriod: s.yoy.fiscalPeriod, periodEnd: s.yoy.periodEnd, score: s.yoy.score, values: s.yoy.values } : null,
+        history: s.history,
+        market: mk ? { price: mk.price, currency: mk.currency, change: mk.change, marketCap: mk.marketCap, pe: mk.pe, pb: mk.pb, ps: mk.ps, pfcf: mk.pfcf, evEbitda: mk.evEbitda, divYield: mk.divYield, peg: mk.peg, perfYtd: mk.perfYtd, perfY: mk.perfY, volume: mk.volume, avgVolume: mk.avgVolume, beta: mk.beta, exchange: mk.exchange, tv: mk.tv } : null,
       });
     }
     const sortKey = String(q.sort || 'score');
+    const sortMode = ['chg', 'yoy'].includes(String(q.sortmode || '')) ? String(q.sortmode) : 'now';
     const dir = q.dir === 'asc' ? 1 : -1;
-    const sv = (r) => (sortKey === 'score' ? r.score.score : sortKey === 'float' ? r.float : sortKey === 'name' ? r.name : sortKey === 'ticker' ? r.ticker : r.values[sortKey] ?? null);
+    const chgOf = (r, key, mode) => {
+      const base = mode === 'chg' ? r.prev : r.yoy;
+      const a = key === 'score' ? r.score.score : r.values[key] ?? null;
+      const b = !base ? null : key === 'score' ? base.score : base.values?.[key] ?? null;
+      if (a == null || b == null) return null;
+      const f = fieldOf(key);
+      return f?.unit === '百萬' || f?.unit === '百萬股' || key === 'score' ? (b === 0 ? null : ((a - b) / Math.abs(b)) * 100) : a - b;
+    };
+    const sv = (r) => (sortMode !== 'now' ? chgOf(r, sortKey, sortMode) : MARKET_KEYS.has(sortKey) ? r.market?.[sortKey] ?? null : sortKey === 'score' ? r.score.score : sortKey === 'float' ? r.float : sortKey === 'name' ? r.name : sortKey === 'ticker' ? r.ticker : r.values[sortKey] ?? null);
     rows.sort((a, b) => {
       const x = sv(a);
       const y = sv(b);
@@ -471,7 +516,7 @@ app.get(
       return (x < y ? -1 : x > y ? 1 : 0) * dir;
     });
     const limit = Math.min(2000, Math.max(1, Number(q.limit) || 300));
-    res.json({ total: rows.length, scored: latestScores().length, count: Math.min(rows.length, limit), rows: rows.slice(0, limit) });
+    res.json({ total: rows.length, scored: latestScores().length, count: Math.min(rows.length, limit), market: marketStatus(), rows: rows.slice(0, limit) });
   }),
 );
 

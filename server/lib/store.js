@@ -126,6 +126,14 @@ export const store = {
     }
     return out;
   },
+  // every scored filing (light: no JSON), newest first within a company
+  scoreIndex(version) {
+    return need().prepare('SELECT accession, cik, report_date FROM scores WHERE version = ? ORDER BY cik, report_date DESC').all(version);
+  },
+  scoreJson(accession) {
+    const row = need().prepare('SELECT json FROM scores WHERE accession = ?').get(accession);
+    return row ? unpack(row.json) : null;
+  },
   unscoredAccessions(version) {
     return need().prepare('SELECT f.accession FROM filings f LEFT JOIN scores s ON s.accession = f.accession AND s.version = ? WHERE s.accession IS NULL').all(version).map((r) => r.accession);
   },

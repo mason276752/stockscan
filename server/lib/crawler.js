@@ -1,12 +1,16 @@
-// Background crawl of the latest 10-K / 10-Q of every company that has a
-// ticker, so the report page opens instantly for any of them.
+// Background crawl of the latest 10-K / 10-Q filings of every company that
+// has a ticker, so the report page opens instantly for any of them and the
+// screener can compare each company with its previous period and the same
+// period a year earlier.
 //
 //   1. sweep   walk the browse universe (largest public float first), fetch
-//              each company's filing list and save its newest filing;
+//              each company's filing list and save its newest DEPTH filings;
 //              companies checked in the last week are skipped, so a restart
 //              resumes where it left off
 //   2. watch   poll EDGAR's daily form index for new 10-K / 10-Q / 20-F /
-//              40-F from those companies and save them as they appear
+//              40-F from those companies and save them as they appear - also
+//              every half hour in the middle of a sweep, so today's filings
+//              never wait for the sweep to finish
 //
 // Everything runs at low priority: it waits whenever the user is asking for
 // something, and it yields to the neighbour prefetcher.
@@ -18,6 +22,8 @@ import { getUniverse } from './universe.js';
 import { scoreAccession } from './score.js';
 
 const CHECK_TTL = 7 * 24 * 3600 * 1000; // re-sweep a company after this long
+const DEPTH = 5; // filings per company: the latest, the previous, and the same quarter a year ago with room to spare
+const CHECKED_KEY = `crawl:checked:d${DEPTH}`; // a new depth starts the sweep over
 const WATCH_EVERY = 30 * 60 * 1000; // daily-index poll interval
 const WATCH_DAYS = 7; // how far back the daily index is read on (re)start
 const MAX_FAILS = 3; // give up on a filing that keeps failing to parse
@@ -71,6 +77,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     startedAt: null,
     lastWatch: null,
     watched: 0, // filings picked up from the daily index
+    depth: DEPTH,
+    watchLog: [], // the last new filings picked up by the daily index
   };
   const fails = store.getKV('crawl:fails')?.value || {};
 
@@ -108,7 +116,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     state.round++;
     const u = await getUniverse(client, { priority: 'low' });
     const targets = u.companies.filter((c) => c.ticker); // already sorted by public float, largest first
-    const checked = store.getKV('crawl:checked')?.value || {};
+    const checked = store.getKV(CHECKED_KEY)?.value || {};
     state.total = targets.length;
     state.position = 0;
     state.done = 0;
@@ -120,22 +128,34 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         continue;
       }
       await yieldToUser();
+      // today's filings must not wait for a multi-hour sweep
+      if (!state.lastWatch || Date.now() - Date.parse(state.lastWatch) > WATCH_EVERY) {
+        try {
+          await watch();
+        } catch (err) {
+          console.warn(`crawl watch failed: ${err.message}`);
+        }
+        state.phase = 'sweep';
+      }
       try {
         const company = await getCompany(low, String(c.cik));
-        const latest = company.filings[0];
-        if (await saveLatest(company, latest)) state.done++;
-        else {
-          state.skipped++;
-          if (!latest || store.hasFiling(latest.accession)) state.done++;
+        // the newest DEPTH originals (amendments rarely carry full statements)
+        const wanted = company.filings.filter((f) => !/\/A$/i.test(f.form || '')).slice(0, DEPTH);
+        let had = 0;
+        for (const filing of wanted) {
+          if (store.hasFiling(filing.accession)) had++;
+          else if (await saveLatest(company, filing)) had++;
+          else state.skipped++;
         }
+        if (!wanted.length || had === wanted.length) state.done++;
       } catch (err) {
         state.failed++;
         console.warn(`crawl ${c.ticker} (CIK ${c.cik}): ${err.message}`);
       }
       checked[c.cik] = new Date().toISOString();
-      if (state.position % 25 === 0) store.putKV('crawl:checked', checked);
+      if (state.position % 25 === 0) store.putKV(CHECKED_KEY, checked);
     }
-    store.putKV('crawl:checked', checked);
+    store.putKV(CHECKED_KEY, checked);
     clearInterval(timer);
     logProgress();
     console.log(`crawl sweep ${state.round} done: ${state.saved} saved, ${state.skipped} already had, ${state.failed} failed`);
@@ -145,13 +165,14 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   function logProgress() {
     const remaining = state.total - state.position;
     console.log(
-      `crawl: 已下載 ${n(state.done)} / ${n(state.total)} 份最新財報，還需下載 ${n(remaining)} 份` +
+      `crawl: 已備齊 ${n(state.done)} / ${n(state.total)} 家最近 ${DEPTH} 期財報，還需處理 ${n(remaining)} 家` +
         `（本輪新存 ${n(state.saved)}、失敗 ${n(state.failed)}）${state.current ? ` 目前 ${state.current}` : ''}`,
     );
   }
 
   // New 10-K / 10-Q … in EDGAR's daily index for companies with a ticker.
   async function watch() {
+    const before = state.phase;
     state.phase = 'watch';
     const tickers = await tickerTable(client);
     const known = new Set(tickers.map((t) => t.cik));
@@ -180,7 +201,9 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
           const filing = company.filings.find((f) => f.accession === r.accession);
           if (filing && (await saveLatest(company, filing))) {
             state.watched++;
-            console.log(`crawl: 新申報 ${company.tickers?.[0] || company.cik} ${filing.form} ${filing.fiscalYear} ${filing.fiscalPeriod} 已下載（已存 ${n(store.filingCount())} 份）`);
+            state.watchLog.unshift({ at: new Date().toISOString(), day, ticker: company.tickers?.[0] || null, cik: company.cik, form: filing.form, fiscalYear: filing.fiscalYear, fiscalPeriod: filing.fiscalPeriod, filingDate: filing.filingDate });
+            state.watchLog.length = Math.min(state.watchLog.length, 50);
+            console.log(`crawl: 新申報 ${company.tickers?.[0] || company.cik} ${filing.form} ${filing.fiscalYear} ${filing.fiscalPeriod}（${day} 申報）已下載（已存 ${n(store.filingCount())} 份）`);
           }
         } catch (err) {
           console.warn(`crawl new filing ${r.accession}: ${err.message}`);
@@ -191,6 +214,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     for (const day of Object.keys(done)) if (day < edgarDay(WATCH_DAYS + 7)) delete done[day];
     store.putKV('crawl:days', done);
     state.lastWatch = new Date().toISOString();
+    state.lastWatchDay = today;
+    if (before === 'sweep') state.phase = 'sweep';
   }
 
   async function run() {

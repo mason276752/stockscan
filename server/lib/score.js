@@ -21,7 +21,7 @@ import { balancesAt, costOfRevenueFromHeading, factsAt, months, noCostOfRevenue,
 import { store } from './store.js';
 import { reclassify } from './statements.js';
 
-export const SCORE_VERSION = 15;
+export const SCORE_VERSION = 16;
 
 const CATEGORY_OF = { debtRatio: '財務結構', ltCapToPpe: '財務結構', currentRatio: '償債能力', quickRatio: '償債能力', dso: '經營能力', dio: '經營能力', cycle: '經營能力', assetTurnover: '經營能力', grossMargin: '獲利能力', opMargin: '獲利能力', netMargin: '獲利能力', eps: '獲利能力', roe: '獲利能力', cfRatio: '現金流量', cfAdequacy: '現金流量', cfReinvest: '現金流量', cashPct: '現金流量' };
 export const CATEGORIES = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
@@ -115,6 +115,38 @@ export function singleFilingInputs(data) {
   return { balances, balancesPrev, flows, flowsA, monthsLen, factor: 12 / monthsLen };
 }
 
+// screener amount fields: values key -> C key
+export const BALANCE_AMOUNTS = { totalAssets: 'totalAssets', totalLiabilities: 'totalLiabilities', equity: 'equityTotal', cash: 'cash', ar: 'ar', inventory: 'inventory', ap: 'ap', ppe: 'ppe', currentAssets: 'currentAssets', currentLiabilities: 'currentLiabilities', longTermDebt: 'longTermDebt' };
+export const FLOW_AMOUNTS = { revenueAnn: 'revenue', grossProfitAnn: 'grossProfit', operatingIncomeAnn: 'operatingIncome', pretaxIncomeAnn: 'pretaxIncome', netIncomeAnn: 'netIncome', rdAnn: 'rd', sgaAnn: 'sga', interestExpenseAnn: 'interestExpenseNonop', incomeTaxAnn: 'incomeTax', ocfAnn: 'ocf', capexAnn: 'capex', dividendsAnn: 'dividends', buybacksAnn: 'buybacks', stockIssuedAnn: 'stockIssued' };
+export const AMOUNT_FIELDS = [
+  { key: 'totalAssets', name: '總資產', group: '資產負債表' },
+  { key: 'currentAssets', name: '流動資產', group: '資產負債表' },
+  { key: 'cash', name: '現金及約當現金', group: '資產負債表' },
+  { key: 'ar', name: '應收帳款', group: '資產負債表' },
+  { key: 'inventory', name: '存貨', group: '資產負債表' },
+  { key: 'ppe', name: '不動產、廠房及設備', group: '資產負債表' },
+  { key: 'totalLiabilities', name: '總負債', group: '資產負債表' },
+  { key: 'currentLiabilities', name: '流動負債', group: '資產負債表' },
+  { key: 'ap', name: '應付帳款', group: '資產負債表' },
+  { key: 'longTermDebt', name: '長期借款', group: '資產負債表' },
+  { key: 'equity', name: '股東權益', group: '資產負債表' },
+  { key: 'revenueAnn', name: '營業收入（年化）', group: '損益表' },
+  { key: 'grossProfitAnn', name: '營業毛利（年化）', group: '損益表' },
+  { key: 'rdAnn', name: '研發費用（年化）', group: '損益表' },
+  { key: 'sgaAnn', name: '銷管費用（年化）', group: '損益表' },
+  { key: 'operatingIncomeAnn', name: '營業利益（年化）', group: '損益表' },
+  { key: 'interestExpenseAnn', name: '利息費用（年化）', group: '損益表' },
+  { key: 'pretaxIncomeAnn', name: '稅前淨利（年化）', group: '損益表' },
+  { key: 'incomeTaxAnn', name: '所得稅（年化）', group: '損益表' },
+  { key: 'netIncomeAnn', name: '本期淨利（年化）', group: '損益表' },
+  { key: 'sharesDiluted', name: '稀釋加權股數', group: '損益表', unit: '百萬股' },
+  { key: 'ocfAnn', name: '營業活動現金流（年化）', group: '現金流量與權益' },
+  { key: 'capexAnn', name: '資本支出（年化）', group: '現金流量與權益' },
+  { key: 'dividendsAnn', name: '現金股利發放（年化）', group: '現金流量與權益' },
+  { key: 'buybacksAnn', name: '庫藏股買回（年化）', group: '現金流量與權益' },
+  { key: 'stockIssuedAnn', name: '發行新股所得（年化）', group: '現金流量與權益' },
+].map((f) => ({ unit: '百萬', ...f }));
+
 export function scoreFiling(data) {
   const inp = singleFilingInputs(data);
   if (!inp) return null;
@@ -137,6 +169,14 @@ export function scoreFiling(data) {
     },
   };
   const { values } = ratios(g);
+  // statement lines as amounts, for the screener: balances at the period end,
+  // flows annualised like the ratios (a 10-Q's nine months ×12/9)
+  for (const [key, ckey] of Object.entries(BALANCE_AMOUNTS)) values[key] = g.bal(ckey);
+  values.equity = values.equity ?? (g.bal('liabilitiesAndEquity') != null && g.bal('totalLiabilities') != null ? g.bal('liabilitiesAndEquity') - g.bal('totalLiabilities') : null);
+  for (const [key, ckey] of Object.entries(FLOW_AMOUNTS)) values[key] = g.flowA(ckey);
+  values.grossProfitAnn = values.grossProfitAnn ?? (values.grossMargin != null && values.revenueAnn != null ? (values.grossMargin / 100) * values.revenueAnn : null);
+  values.operatingIncomeAnn = values.operatingIncomeAnn ?? (values.opMargin != null && values.revenueAnn != null ? (values.opMargin / 100) * values.revenueAnn : null);
+  values.sharesDiluted = g.flow('sharesDiluted');
   const s = scoreValues(values);
   // every ratio (rounded) is kept so the screener can filter on it
   const rounded = {};
@@ -167,12 +207,37 @@ export function scoreAccession(accession) {
   return s;
 }
 
-// Latest score of every company (for the screener), cached for a minute.
+// Latest score of every company (for the screener), each with the previous
+// filing's values (`prev`) and the same period a year earlier (`yoy`) for
+// change filters. Cached for a minute; decoded score JSON is kept per
+// accession so a refresh only decodes what is new.
 let latestAllMemo = null;
+const decoded = new Map(); // accession -> score
+const HISTORY = 6; // filings per company to look at for prev / yoy
+function scoreOf(accession) {
+  if (!decoded.has(accession)) decoded.set(accession, store.scoreJson(accession));
+  return decoded.get(accession);
+}
 export function latestScores() {
   const n = store.scoreCount(SCORE_VERSION);
   if (latestAllMemo && latestAllMemo.n === n && Date.now() - latestAllMemo.at < 60_000) return latestAllMemo.rows;
-  const rows = store.latestScoreRows(SCORE_VERSION);
+  const byCik = new Map();
+  for (const r of store.scoreIndex(SCORE_VERSION)) {
+    if (!r.report_date) continue;
+    const list = byCik.get(r.cik) || [];
+    if (list.length < HISTORY) list.push(r.accession);
+    byCik.set(r.cik, list);
+  }
+  const rows = [];
+  for (const [, accs] of byCik) {
+    const hist = accs.map(scoreOf).filter((x) => x && !/\/A$/i.test(x.form || ''));
+    if (!hist.length) continue;
+    const cur = hist[0];
+    const prev = hist[1] || null;
+    const yoy = hist.find((x, i) => i > 0 && x.fiscalPeriod === cur.fiscalPeriod && String(Number(x.fiscalYear) + 1) === String(cur.fiscalYear)) || null;
+    rows.push({ ...cur, prev: prev ? { accession: prev.accession, fiscalYear: prev.fiscalYear, fiscalPeriod: prev.fiscalPeriod, periodEnd: prev.periodEnd, score: prev.score, values: prev.values } : null, yoy: yoy ? { accession: yoy.accession, fiscalYear: yoy.fiscalYear, fiscalPeriod: yoy.fiscalPeriod, periodEnd: yoy.periodEnd, score: yoy.score, values: yoy.values } : null, history: hist.length });
+  }
+  if (decoded.size > 60_000) decoded.clear();
   latestAllMemo = { n, at: Date.now(), rows };
   return rows;
 }

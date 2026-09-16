@@ -27,8 +27,9 @@ const crawlText = computed(() => {
   const c = status.value?.crawler;
   if (!c?.enabled) return '';
   const saved = status.value.store.filings.toLocaleString();
-  if (c.phase === 'sweep') return `背景下載最新財報 ${c.position.toLocaleString()} / ${c.total.toLocaleString()}${c.current ? ` · ${c.current}` : ''} · 已存 ${saved} 份`;
-  if (c.phase === 'watch') return `已存 ${saved} 份財報 · 監看 EDGAR 新申報${c.lastWatch ? `（${new Date(c.lastWatch).toLocaleTimeString()}）` : ''}`;
+  const watchNote = c.lastWatch ? ` · 新申報監看 ${new Date(c.lastWatch).toLocaleTimeString()}${c.watched ? `，今起已抓 ${c.watched} 份` : ''}` : '';
+  if (c.phase === 'sweep') return `背景下載最近 ${c.depth || 5} 期財報 ${c.position.toLocaleString()} / ${c.total.toLocaleString()} 家${c.current ? ` · ${c.current}` : ''} · 已存 ${saved} 份${watchNote}`;
+  if (c.phase === 'watch') return `已存 ${saved} 份財報 · 監看 EDGAR 新申報中${watchNote}`;
   return '';
 });
 
@@ -36,6 +37,7 @@ const crawlText = computed(() => {
 //       | 'screen' (screener) | 'basket' (custom ETF charts)
 const page = ref('report');
 const browseParams = ref({});
+const screenParams = ref({}); // the screener's filters, mirrored in the URL
 
 const company = ref(null);
 const filing = ref(null); // the filing row picked from the list
@@ -272,12 +274,16 @@ watch(view, () => {
 // button returns to the list you came from.
 let lastPage = page.value;
 let restoring = false;
-watch([company, filing, tab, indMode, view, page, browseParams], () => {
+let lastScreen = '';
+watch([company, filing, tab, indMode, view, page, browseParams, screenParams], () => {
   const p = new URLSearchParams();
   if (page.value === 'browse') {
     p.set('page', 'browse');
     for (const [k, v] of Object.entries(browseParams.value)) if (v) p.set(k, v);
-  } else if (page.value === 'watch' || page.value === 'screen' || page.value === 'basket') {
+  } else if (page.value === 'screen') {
+    p.set('page', 'screen');
+    for (const [k, v] of Object.entries(screenParams.value)) if (v !== '' && v != null) p.set(k, v);
+  } else if (page.value === 'watch' || page.value === 'basket') {
     p.set('page', page.value);
   } else {
     if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
@@ -288,9 +294,13 @@ watch([company, filing, tab, indMode, view, page, browseParams], () => {
     if (view.value === 'all') p.set('view', 'all');
   }
   const url = p.size ? `?${p}` : location.pathname;
-  if (page.value !== lastPage && !restoring) history.pushState(null, '', url);
+  // a page switch, or a changed screen (each set of filters gets its own history entry), pushes; the rest replaces
+  const screenNow = page.value === 'screen' ? JSON.stringify(screenParams.value) : '';
+  const screenChanged = page.value === 'screen' && lastPage === 'screen' && screenNow !== lastScreen;
+  if ((page.value !== lastPage || screenChanged) && !restoring) history.pushState(null, '', url);
   else history.replaceState(null, '', url);
   lastPage = page.value;
+  lastScreen = screenNow;
 });
 
 function applyUrl() {
@@ -303,7 +313,14 @@ function applyUrl() {
     browseParams.value = { cat: p.get('cat') || 'sic', code: p.get('code') || '', afs: p.get('afs') || '', etf: p.get('etf') || '' };
     return;
   }
-  if (['watch', 'screen', 'basket'].includes(p.get('page'))) {
+  if (p.get('page') === 'screen') {
+    const sp = {};
+    for (const [k, v] of p.entries()) if (k !== 'page') sp[k] = v;
+    screenParams.value = sp;
+    page.value = 'screen';
+    return;
+  }
+  if (['watch', 'basket'].includes(p.get('page'))) {
     page.value = p.get('page');
     return;
   }
@@ -343,7 +360,7 @@ onMounted(() => {
 
     <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" @basket="page = 'basket'" />
     <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" />
-    <ScreenerPage v-else-if="page === 'screen'" @open="openCompany" @basket="page = 'basket'" />
+    <ScreenerPage v-else-if="page === 'screen'" :params="screenParams" @open="openCompany" @basket="page = 'basket'" @navigate="screenParams = $event" />
     <BasketPage v-else-if="page === 'basket'" @open="openCompany" />
 
     <template v-else>

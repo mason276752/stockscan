@@ -26,6 +26,14 @@ export const C = {
   // total operating expenses below gross profit (or all costs when there is no cost of revenue)
   opexTotal: ['us-gaap:OperatingExpenses', 'ifrs-full:OperatingExpense'],
   nonoperating: ['us-gaap:NonoperatingIncomeExpense'],
+  // statement lines offered as screener filters (amounts, not ratios)
+  longTermDebt: ['us-gaap:LongTermDebtNoncurrent', 'us-gaap:LongTermDebt', 'us-gaap:LongTermDebtAndCapitalLeaseObligations', 'us-gaap:DebtInstrumentCarryingAmount', 'ifrs-full:NoncurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings', 'ifrs-full:LongtermBorrowings', 'ifrs-full:NoncurrentBorrowings'],
+  rd: ['us-gaap:ResearchAndDevelopmentExpense', 'us-gaap:ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost', 'ifrs-full:ResearchAndDevelopmentExpense'],
+  sga: ['us-gaap:SellingGeneralAndAdministrativeExpense', 'us-gaap:GeneralAndAdministrativeExpense', 'ifrs-full:SellingGeneralAndAdministrativeExpense', 'ifrs-full:AdministrativeExpense'],
+  incomeTax: ['us-gaap:IncomeTaxExpenseBenefit', 'ifrs-full:IncomeTaxExpenseContinuingOperations'],
+  buybacks: ['us-gaap:PaymentsForRepurchaseOfCommonStock', 'us-gaap:PaymentsForRepurchaseOfEquity', 'ifrs-full:PaymentsToAcquireOrRedeemEntitysShares'],
+  stockIssued: ['us-gaap:ProceedsFromIssuanceOfCommonStock', 'us-gaap:ProceedsFromIssuanceOrSaleOfEquity', 'us-gaap:ProceedsFromIssuanceInitialPublicOffering', 'ifrs-full:ProceedsFromIssuingShares'],
+  sharesDiluted: ['us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding', 'us-gaap:WeightedAverageNumberOfShareOutstandingBasicAndDiluted', 'us-gaap:WeightedAverageNumberOfSharesOutstandingBasic', 'ifrs-full:AdjustedWeightedAverageShares', 'ifrs-full:WeightedAverageShares'],
   // the usual lines between operating and pre-tax income, for filers without an operating income line
   interestExpenseNonop: ['us-gaap:InterestExpenseNonoperating', 'us-gaap:InterestExpense', 'us-gaap:InterestExpenseDebt', 'us-gaap:InterestAndDebtExpense', 'us-gaap:InterestIncomeExpenseNonoperatingNet', 'us-gaap:InvestmentAndDebtInterestIncomeExpenseNet', 'ifrs-full:FinanceCosts'],
   interestIncomeNonop: ['us-gaap:InvestmentIncomeInterest', 'us-gaap:InvestmentIncomeInterestAndDividend', 'us-gaap:InterestIncomeOther', 'us-gaap:InvestmentIncomeNonoperating', 'ifrs-full:FinanceIncome'],
