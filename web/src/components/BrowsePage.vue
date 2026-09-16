@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
-import { createBasket, normalizeWeights } from '../baskets';
+import { createBasket } from '../baskets';
 import CompanyTable from './CompanyTable.vue';
 import ScoreBadge from './ScoreBadge.vue';
 import { isWatched, toggleWatch } from '../watchlist';
@@ -157,15 +157,34 @@ const visibleHoldings = computed(() => {
 });
 // copy the ETF's holdings (the ones with a ticker; all of them, or the top N
 // by weight) into a custom ETF with the N-PORT weights, to be edited there
+// The copy uses the freshest list the server can get (issuer daily file /
+// index list, else this N-PORT) and remembers the ETF as the basket's source
+// so it can be resynced later.
 const copyN = ref('');
+const copying = ref(false);
 const copyable = computed(() => visibleHoldings.value.filter((h) => h.symbol && h.pctVal > 0));
-function copyToBasket() {
-  const n = Number(copyN.value) > 0 ? Math.floor(Number(copyN.value)) : copyable.value.length;
-  const rows = copyable.value.slice(0, n).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.pctVal }));
-  if (!rows.length) return;
-  normalizeWeights(rows);
-  createBasket(`${holdings.value.etf.ticker} 複製${rows.length < copyable.value.length ? `（前 ${rows.length} 檔）` : ''}`, rows, { prune: true });
-  emit('basket');
+async function copyToBasket() {
+  const n = Number(copyN.value) > 0 ? Math.floor(Number(copyN.value)) : 0;
+  const ticker = holdings.value.etf.ticker;
+  copying.value = true;
+  try {
+    let rows;
+    let sync = null;
+    try {
+      const live = await api.etfLive(ticker);
+      const all = live.holdings.filter((h) => h.symbol && h.weight > 0).sort((a, b) => b.weight - a.weight);
+      rows = (n ? all.slice(0, n) : all).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.weight }));
+      sync = { at: new Date().toISOString(), asOf: live.asOf, sourceName: live.source, added: [], removed: [], changed: 0 };
+    } catch {
+      rows = (n ? copyable.value.slice(0, n) : copyable.value).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.pctVal }));
+      sync = { at: new Date().toISOString(), asOf: holdings.value.filing.reportDate, sourceName: `N-PORT（${holdings.value.filing.reportDate}）`, added: [], removed: [], changed: 0 };
+    }
+    if (!rows.length) return;
+    createBasket(`${ticker} 複製${n ? `（前 ${rows.length} 檔）` : ''}`, rows, { prune: true, source: { type: 'etf', ticker, n: n || null }, sync });
+    emit('basket');
+  } finally {
+    copying.value = false;
+  }
 }
 const popular = computed(() => {
   if (!etfs.value) return [];
@@ -328,7 +347,7 @@ onMounted(async () => {
               <span class="muted small">{{ visibleHoldings.length }} 筆 · 可查財報 {{ holdings.stats.mapped }}/{{ holdings.stats.total }}</span>
               <span class="copy" title="把成分股（依權重排序、有代號的）複製成自製 ETF，權重照 N-PORT 比例換算成 100%，之後可以自己增減、改權重；留空 = 全部">
                 前 <input v-model="copyN" type="number" min="1" class="n" :placeholder="String(copyable.length)" /> 檔
-                <button class="small" :disabled="!copyable.length" @click="copyToBasket">{{ Number(copyN) > 0 ? `前 ${Math.min(Number(copyN), copyable.length)} 檔` : `全部 ${copyable.length} 檔` }}複製成自製 ETF</button>
+                <button class="small" :disabled="!copyable.length || copying" @click="copyToBasket">{{ copying ? '抓最新成分…' : `${Number(copyN) > 0 ? `前 ${Math.min(Number(copyN), copyable.length)} 檔` : '全部'}複製成自製 ETF` }}</button>
               </span>
             </div>
           </div>

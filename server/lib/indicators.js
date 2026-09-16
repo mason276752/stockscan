@@ -14,17 +14,25 @@ import { yearQuarterPoints } from './quarters.js';
 
 // Concept fallbacks (US-GAAP first, then IFRS). Lists are tried in order.
 export const C = {
-  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers'],
+  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers', 'ifrs-full:RevenueFromSaleOfGoods', 'ifrs-full:RevenueFromRenderingOfServices', 'ifrs-full:RevenueAndOperatingIncome'],
   // banks: net revenue = net interest income + non-interest income
   netInterestIncome: ['us-gaap:InterestIncomeExpenseNet', 'us-gaap:InterestIncomeExpenseAfterProvisionForLoanLoss'],
   interestIncome: ['us-gaap:InterestAndDividendIncomeOperating', 'us-gaap:InterestIncomeOperating'],
   noninterestIncome: ['us-gaap:NoninterestIncome'],
-  costsAndExpenses: ['us-gaap:CostsAndExpenses', 'us-gaap:OperatingCostsAndExpenses'],
+  costsAndExpenses: ['us-gaap:CostsAndExpenses', 'us-gaap:OperatingCostsAndExpenses', 'us-gaap:BenefitsLossesAndExpenses'],
+  // total operating expenses below gross profit (or all costs when there is no cost of revenue)
+  opexTotal: ['us-gaap:OperatingExpenses', 'ifrs-full:OperatingExpense'],
   nonoperating: ['us-gaap:NonoperatingIncomeExpense'],
+  // the usual lines between operating and pre-tax income, for filers without an operating income line
+  interestExpenseNonop: ['us-gaap:InterestExpenseNonoperating', 'us-gaap:InterestExpense', 'us-gaap:InterestExpenseDebt', 'us-gaap:InterestAndDebtExpense', 'us-gaap:InterestIncomeExpenseNonoperatingNet', 'ifrs-full:FinanceCosts'],
+  interestIncomeNonop: ['us-gaap:InvestmentIncomeInterest', 'us-gaap:InvestmentIncomeInterestAndDividend', 'us-gaap:InterestIncomeOther', 'us-gaap:InvestmentIncomeNonoperating', 'ifrs-full:FinanceIncome'],
+  otherNonop: ['us-gaap:OtherNonoperatingIncomeExpense', 'us-gaap:OtherNonoperatingIncome', 'us-gaap:OtherIncome'],
   cogs: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales', 'us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
   // some filers show cost of revenue as a base line plus separate amortisation / depreciation lines (Intuit, Broadcom …)
   cogsTotal: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales'],
   cogsPartial: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization', 'synthetic:CostOfRevenueFromHeading'],
+  cogsPartialReal: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
+  cogsSynthetic: ['synthetic:CostOfRevenueFromHeading'],
   cogsAmort: ['us-gaap:CostOfGoodsAndServicesSoldAmortization'],
   cogsDA: ['us-gaap:CostOfGoodsAndServicesSoldDepreciationAndAmortization', 'us-gaap:CostOfGoodsAndServicesSoldDepreciation'],
   grossProfit: ['us-gaap:GrossProfit', 'ifrs-full:GrossProfit'],
@@ -221,13 +229,24 @@ export function ratios(g) {
     const nii = f('netInterestIncome') ?? f('interestIncome');
     return nii == null ? null : nii + (f('noninterestIncome') ?? 0);
   };
-  // operating income: the concept, else revenue − total costs and expenses, else pre-tax income − non-operating items
+  // operating income: the concept; else revenue − total costs and expenses;
+  // else gross profit (or revenue) − total operating expenses; else pre-tax
+  // income with the non-operating lines (interest, other) added back
   const opIncomeOf = (f) => {
     const direct = f('operatingIncome');
     if (direct != null) return direct;
     const rev = revenueOf(f);
     if (rev != null && f('costsAndExpenses') != null) return rev - f('costsAndExpenses');
-    if (f('pretaxIncome') != null && f('nonoperating') != null) return f('pretaxIncome') - f('nonoperating');
+    if (rev != null && f('opexTotal') != null) {
+      const cogs = f('cogsTotal') ?? (f('cogsPartial') == null ? null : f('cogsPartial') + (f('cogsAmort') ?? 0) + (f('cogsDA') ?? 0));
+      const gross = f('grossProfit') ?? (cogs != null ? rev - cogs : null);
+      return (gross ?? rev) - f('opexTotal');
+    }
+    const pretax = f('pretaxIncome');
+    if (pretax != null && f('nonoperating') != null) return pretax - f('nonoperating');
+    if (pretax != null && (f('interestExpenseNonop') != null || f('interestIncomeNonop') != null || f('otherNonop') != null)) {
+      return pretax + (f('interestExpenseNonop') ?? 0) - (f('interestIncomeNonop') ?? 0) - (f('otherNonop') ?? 0);
+    }
     return null;
   };
 
@@ -256,6 +275,11 @@ export function ratios(g) {
   const gross = g.flow('grossProfit') ?? (revenue != null && cogs != null ? revenue - cogs : null);
   v.grossMargin = pct(gross, revenue);
   v.opMargin = pct(opIncomeOf(g.flow), revenue);
+  // a cost of revenue pieced together from expense lines is an estimate: when
+  // it says the gross margin is deeply negative or below the operating margin
+  // it picked up the wrong lines - better no figure than a wrong one
+  const synthetic = g.flow('cogsTotal') == null && g.flow('cogsPartialReal') == null && g.flow('cogsSynthetic') != null;
+  if (synthetic && v.grossMargin != null && (v.grossMargin < -50 || (v.opMargin != null && v.grossMargin < v.opMargin - 1))) v.grossMargin = null;
   v.opexRatio = v.grossMargin != null && v.opMargin != null ? v.grossMargin - v.opMargin : null;
   v.safetyMargin = pct(v.opMargin, v.grossMargin);
   v.netMargin = pct(g.flow('netIncome'), revenue);

@@ -266,7 +266,39 @@ export async function buildQuarterly(client, company, year) {
 // nine-month figure (Q3 YTD, or Q1..Q3 three-month columns).
 
 const FLOW_TYPES = ['income_statement', 'comprehensive_income', 'cash_flow'];
-const canon = (concept) => (SYNONYMS[concept] ? SYNONYMS[concept][0] : concept);
+// A filer's own extension element that merely re-spells a standard one
+// (BGMS:CostOfSales, ABC:TotalRevenues) counts as the standard concept when
+// the filing has no standard one - the ratios look them up by standard name.
+const EXT_ALIASES = {
+  CostOfSales: 'us-gaap:CostOfRevenue',
+  CostOfRevenue: 'us-gaap:CostOfRevenue',
+  CostOfRevenues: 'us-gaap:CostOfRevenue',
+  TotalCostOfRevenue: 'us-gaap:CostOfRevenue',
+  TotalCostOfRevenues: 'us-gaap:CostOfRevenue',
+  TotalCostOfSales: 'us-gaap:CostOfRevenue',
+  CostOfGoodsSold: 'us-gaap:CostOfGoodsSold',
+  CostOfGoodsAndServicesSold: 'us-gaap:CostOfGoodsAndServicesSold',
+  CostOfServices: 'us-gaap:CostOfServices',
+  CostOfProductsSold: 'us-gaap:CostOfGoodsSold',
+  Revenues: 'us-gaap:Revenues',
+  Revenue: 'us-gaap:Revenues',
+  TotalRevenues: 'us-gaap:Revenues',
+  TotalRevenue: 'us-gaap:Revenues',
+  NetSales: 'us-gaap:Revenues',
+  NetRevenues: 'us-gaap:Revenues',
+  NetRevenue: 'us-gaap:Revenues',
+  GrossProfit: 'us-gaap:GrossProfit',
+  GrossMargin: 'us-gaap:GrossProfit',
+  OperatingIncomeLoss: 'us-gaap:OperatingIncomeLoss',
+  IncomeLossFromOperations: 'us-gaap:OperatingIncomeLoss',
+  NetIncomeLoss: 'us-gaap:NetIncomeLoss',
+};
+const canon = (concept) => {
+  if (SYNONYMS[concept]) return SYNONYMS[concept][0];
+  const [prefix, local] = concept.split(':');
+  if (local && prefix !== 'us-gaap' && prefix !== 'ifrs-full' && EXT_ALIASES[local]) return EXT_ALIASES[local];
+  return concept;
+};
 
 export function factsAt(stmt, colId, into) {
   if (!stmt || !colId) return into;
@@ -277,13 +309,20 @@ export function factsAt(stmt, colId, into) {
   const samePeriod = col
     ? stmt.columns.filter((c) => c.id !== colId && Object.keys(c.dimensions).length === 1 && c.period.instant === col.period.instant && c.period.start === col.period.start && c.period.end === col.period.end)
     : [];
+  // a value that came in through a synonym / extension alias yields to the
+  // real concept when that turns up later (a REIT lists the small
+  // RevenueFromContractWithCustomer line before the Revenues total)
+  const aliased = new Set();
   for (const li of stmt.lineItems) {
     if (li.abstract) continue;
     const key = canon(li.concept);
-    if (key in into) continue;
+    const exact = key === li.concept;
+    if (key in into && !(exact && aliased.has(key))) continue;
     const cell = li.values[colId];
     if (cell && typeof cell.value === 'number') {
       into[key] = cell.value;
+      if (exact) aliased.delete(key);
+      else aliased.add(key);
       continue;
     }
     if (!samePeriod.length) continue;
@@ -296,7 +335,11 @@ export function factsAt(stmt, colId, into) {
       (byAxis[axis] ||= []).push(v.value);
     }
     const axes = Object.values(byAxis);
-    if (axes.length === 1 && axes[0].length) into[key] = axes[0].reduce((a, b) => a + b, 0);
+    if (axes.length === 1 && axes[0].length) {
+      into[key] = axes[0].reduce((a, b) => a + b, 0);
+      if (exact) aliased.delete(key);
+      else aliased.add(key);
+    }
   }
   return into;
 }
@@ -307,22 +350,41 @@ export function factsAt(stmt, colId, into) {
 // items (G&A, selling, R&D, depreciation, impairments, restructuring), so a
 // gross margin can still be estimated. Returns null when a real total exists.
 const COGS_HEADING = /(CostOfRevenue|CostOfGoodsAndServicesSold|CostsAndExpenses)Abstract$/;
-const COGS_TOTALS = /^(us-gaap:)?(CostOfRevenue|CostOfGoodsSold|CostOfGoodsAndServicesSold|CostOfServices|CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses)$/;
+// a plain "Operating expenses" heading mixes direct costs with overhead: only
+// lines that are recognisably the cost of delivering the revenue count -
+// voyage / vessel costs (shipping), production costs, commissions (agencies),
+// royalties, purchases, subcontracting, fuel, freight, occupancy ...
+const EXPENSES_HEADING = /(OperatingExpenses|OperatingCostsAndExpenses|Expenses|CostsAndExpenses|OperatingCosts)Abstract$/;
+const DIRECT_COST = /DirectOperating|FloorBrokerage|Clearance|Voyage|Vessel|Charter|Bunker|Fuel|PortExpense|Crew|Dry[Dd]ock|ProductionCost|Commission|Royalt|Subcontract|ContractCost|DirectCost|Purchase|Merchandise|Materials|Freight|Shipping|ProductCost|ServiceCost|Occupancy|LeaseOperating|Exploration|Transportation|Processing|Gathering|Manufacturing|CostOf(?!Revenue$|GoodsSold$|GoodsAndServicesSold$|Services$)|Program(ming)?Cost|Content|Reinsurance|Claims|PolicyholderBenefits|InterestCreditedToPolicyholders|CostOfSales/;
+const COGS_TOTALS = /^(us-gaap:)?(CostOfRevenue|CostOfGoodsSold|CostOfGoodsAndServicesSold|CostOfServices|CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:(CostOfSales|OperatingExpense)$/;
 const NOT_COGS = /GeneralAndAdministrative|Pension|PostretirementBenefit|DefinedBenefit|SellingAndMarketing|SellingExpense|ResearchAndDevelopment|Depreciation|Amortization|Impairment|Restructuring|MarketingExpense$|AdvertisingExpense|IncomeTax|InterestExpense|ShareBasedCompensation|GainLoss|OtherOperating|OtherCostAndExpense/;
 export function costOfRevenueFromHeading(stmt, colId) {
   if (!stmt || !colId) return null;
   const items = stmt.lineItems;
-  const hasTotal = items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses)$/.test(li.concept) && typeof li.values[colId]?.value === 'number');
+  const hasTotal = items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:OperatingExpense$/.test(li.concept) && typeof li.values[colId]?.value === 'number');
   if (hasTotal) return null;
-  const h = items.findIndex((li) => li.abstract && COGS_HEADING.test(li.concept));
+  let h = items.findIndex((li) => li.abstract && COGS_HEADING.test(li.concept));
+  // under a cost-of-revenue heading everything but overhead is direct cost;
+  // under a generic expenses heading only whitelisted lines are
+  let whitelist = false;
+  if (h < 0) {
+    h = items.findIndex((li) => li.abstract && EXPENSES_HEADING.test(li.concept));
+    whitelist = true;
+  }
   if (h < 0) return null;
   let sum = 0;
   let n = 0;
+  let running = 0; // every line so far, to spot a subtotal line (its value equals what came before it)
   for (let i = h + 1; i < items.length && items[i].depth > items[h].depth; i++) {
     const li = items[i];
-    if (li.abstract || COGS_TOTALS.test(li.concept) || NOT_COGS.test(li.concept)) continue;
+    if (li.abstract) continue;
     const v = li.values[colId]?.value;
     if (typeof v !== 'number') continue;
+    const isTotal = COGS_TOTALS.test(li.concept) || (running > 0 && Math.abs(v - running) <= Math.abs(running) * 0.005);
+    if (isTotal) continue;
+    running += v;
+    if (NOT_COGS.test(li.concept)) continue;
+    if (whitelist && !DIRECT_COST.test(li.concept.split(':').pop())) continue;
     sum += v;
     n++;
   }

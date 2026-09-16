@@ -39,7 +39,8 @@ function makeBasket() {
   if (sicCode.value) parts.push(sicCode.value);
   else if (division.value) parts.push(meta.value?.divisions?.find((d) => d.id === division.value)?.zh || division.value);
   const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${(fieldOf(c.key)?.name || c.key).replace(/（.*?）/g, '')}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
-  createBasket([...parts, ...cond].join(' ') || '尋找股票', rows, { prune: true });
+  const label = [...parts, ...cond].join(' ') || '尋找股票';
+  createBasket(label, rows, { prune: true, source: { type: 'screen', params: { ...params.value }, n: n < basketable.value.length ? n : null, label }, sync: { at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）', added: [], removed: [], changed: 0 } });
   emit('basket');
 }
 const fieldOf = (key) => meta.value?.fields.find((f) => f.key === key) || null;

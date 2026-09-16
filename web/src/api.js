@@ -36,6 +36,7 @@ export const api = {
   browseEtfs: (q = '') => get(`/api/browse/etf${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   etfHoldings: (ticker) => get(`/api/browse/etf/${encodeURIComponent(ticker)}`),
   etfHoldingsUrl: (ticker) => `/api/browse/etf/${encodeURIComponent(ticker)}`,
+  etfLive: (ticker) => get(`/api/browse/etf/${encodeURIComponent(ticker)}/live`),
   // custom ETF charts
   quotesStatus: () => get('/api/quotes/status'),
   ibConnect: () => post('/api/quotes/ib/connect', {}),

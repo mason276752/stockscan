@@ -17,6 +17,7 @@ import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAc
 import { ROWS as INDICATOR_ROWS } from './lib/indicators.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
+import { liveHoldings } from './lib/liveHoldings.js';
 import { RANGES, basketSeries, dailyBars, rebased } from './lib/bars.js';
 import { ibConnect, ibStatus } from './lib/ib.js';
 import { tvStatus } from './lib/tvws.js';
@@ -471,6 +472,15 @@ app.get(
     });
     const limit = Math.min(2000, Math.max(1, Number(q.limit) || 300));
     res.json({ total: rows.length, scored: latestScores().length, count: Math.min(rows.length, limit), rows: rows.slice(0, limit) });
+  }),
+);
+
+// GET /api/browse/etf/QQQ/live -> freshest constituents (issuer daily file /
+// index list, else N-PORT) for copying into and resyncing a custom ETF
+app.get(
+  '/api/browse/etf/:ticker/live',
+  wrap(async (req, res) => {
+    res.json(await dedupe(`etf-live:${req.params.ticker.toUpperCase()}`, () => liveHoldings(client, req.params.ticker)));
   }),
 );
 

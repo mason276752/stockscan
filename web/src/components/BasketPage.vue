@@ -5,7 +5,7 @@ import CompanySearch from './CompanySearch.vue';
 import KlineChart from './KlineChart.vue';
 import TvEmbedChart from './TvEmbedChart.vue';
 import Icon from './Icon.vue';
-import { addConstituent, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents } from '../baskets';
+import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
 import { watchlist } from '../watchlist';
 
 const emit = defineEmits(['open']);
@@ -73,6 +73,71 @@ function removeDelisted() {
   if (!current.value || !delisted.value.length) return;
   const n = removeConstituents(current.value.id, delisted.value);
   pruned.value = `已移除 ${n} 檔`;
+}
+
+// ---- source resync ----
+const syncing = ref(false);
+const syncMsg = ref('');
+const sourceLabel = (src) => (!src ? '' : src.type === 'etf' ? `${src.ticker} 成分股${src.n ? `（前 ${src.n} 檔）` : ''}` : src.type === 'screen' ? `尋找股票：${src.label || ''}${src.n ? `（前 ${src.n} 家）` : ''}` : src.type === 'watch' ? `觀察名單：${src.group === 'all' ? '全部' : src.group}` : '');
+async function fetchSource(src) {
+  if (src.type === 'etf') {
+    const r = await api.etfLive(src.ticker);
+    const rows = r.holdings.filter((h) => h.symbol && h.weight > 0).sort((a, b) => b.weight - a.weight);
+    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.weight })), sourceName: r.source, asOf: r.asOf, note: r.note, approximate: r.approximate };
+  }
+  if (src.type === 'screen') {
+    const r = await api.screen({ ...src.params, limit: src.n || 2000 });
+    const rows = r.rows.filter((x) => x.ticker);
+    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), sourceName: '尋找股票（最新財報指標）', asOf: new Date().toISOString().slice(0, 10) };
+  }
+  if (src.type === 'watch') {
+    const items = (src.group === 'all' ? watchlist.items : watchlist.items.filter((x) => x.groups.includes(src.group))).filter((x) => x.ticker);
+    return { holdings: items.map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), sourceName: '觀察名單', asOf: new Date().toISOString().slice(0, 10) };
+  }
+  throw new Error('unknown source');
+}
+async function resync() {
+  const b = current.value;
+  if (!b?.source || syncing.value) return;
+  syncing.value = true;
+  syncMsg.value = '';
+  try {
+    const r = await fetchSource(b.source);
+    const d = applySource(b, r.holdings, { sourceName: r.sourceName, asOf: r.asOf });
+    b.prune = true; // newly added names may already be delisted
+    const parts = [];
+    if (d.added.length) parts.push(`新增 ${d.added.length} 檔：${d.added.slice(0, 12).join('、')}${d.added.length > 12 ? '…' : ''}`);
+    if (d.removed.length) parts.push(`移除 ${d.removed.length} 檔：${d.removed.slice(0, 12).join('、')}${d.removed.length > 12 ? '…' : ''}`);
+    if (d.changed) parts.push(`${d.changed} 檔來源權重有變`);
+    syncMsg.value = parts.length ? `已同步（${r.sourceName}，資料日 ${r.asOf || '—'}）：${parts.join('；')}` : `已同步（${r.sourceName}，資料日 ${r.asOf || '—'}）：沒有變化`;
+  } catch (e) {
+    syncMsg.value = `同步失敗：${e.message}`;
+  } finally {
+    syncing.value = false;
+  }
+}
+const manualCount = computed(() => (current.value ? current.value.constituents.filter((c) => c.origin === 'manual' || c.manualWeight).length : 0));
+// the constituent tables: one, or split by where each row comes from when the basket has a source
+const groups = computed(() => {
+  if (!current.value) return [];
+  const rowsOf = (pred) => rows.value.filter(pred);
+  if (!current.value.source) return [{ key: 'all', title: '', rows: rows.value }];
+  return [
+    { key: 'source', title: `來源成分（${sourceLabel(current.value.source)}）`, rows: rowsOf((c) => c.origin === 'source' && !c.gone), hint: '重新同步時：權重跟著來源；手動改過權重的（標「手動」）保留' },
+    { key: 'manual', title: '手動新增', rows: rowsOf((c) => c.origin === 'manual'), hint: '重新同步不會動這些' },
+    { key: 'gone', title: '已不在來源（因手動調整而保留）', rows: rowsOf((c) => c.origin === 'source' && c.gone), hint: '來源已移除、但你改過權重所以留著；按 ↺ 就移除' },
+  ].filter((g) => g.rows.length);
+});
+// put an excluded name back: off the list, then a resync brings it in with the source's weight
+async function restore(ticker = null) {
+  if (!current.value) return;
+  restoreExcluded(current.value.id, ticker);
+  await resync();
+}
+function onWeightInput(c, ev) {
+  const v = ev.target.value;
+  if (v === '' || v == null) return;
+  setManualWeight(current.value.id, c.ticker, Number(v));
 }
 const inIndex = (c) => Number(c.weight) > 0 && !isHidden(c);
 
@@ -165,7 +230,10 @@ onMounted(async () => {
   run();
 });
 watch([current, range, benchmark, hidden], () => run());
-watch(current, () => (pruned.value = ''));
+watch(current, () => {
+  pruned.value = '';
+  syncMsg.value = '';
+});
 // weights are typed in: wait for the typing to stop before refetching
 let editTimer = null;
 watch(
@@ -381,6 +449,18 @@ const sourceText = computed(() => {
 
         <p v-if="error" class="error">{{ error }}</p>
         <p v-if="pruned" class="muted small note infobox">{{ pruned }} <button class="mini ghost" @click="pruned = ''">✕</button></p>
+        <div v-if="current.source" class="panel srcbar">
+          <div class="small">
+            <b>來源</b> {{ sourceLabel(current.source) }}
+            <span v-if="current.sync" class="muted">· {{ current.sync.sourceName }}<template v-if="current.sync.asOf">，資料日 {{ current.sync.asOf }}</template> · 上次同步 {{ new Date(current.sync.at).toLocaleString() }}</span>
+            <span v-if="manualCount" class="muted">· 手動 {{ manualCount }} 檔（同步時保留）</span>
+            <span v-if="current.excluded?.length" class="muted">· 已排除 {{ current.excluded.length }} 檔（見最下方）</span>
+          </div>
+          <div class="options">
+            <span v-if="syncMsg" class="small" :class="{ warn: syncMsg.startsWith('同步失敗') }">{{ syncMsg }}</span>
+            <button class="small" :disabled="syncing" title="重新抓來源的最新成分與權重：新增的加進來、移除的拿掉、權重更新；手動新增和手動改過權重的不受影響" @click="resync">{{ syncing ? '同步中…' : '↻ 重新同步' }}</button>
+          </div>
+        </div>
         <p v-if="!current.constituents.length" class="empty muted">這個 ETF 還沒有成分股：在下面搜尋加入，或從尋找股票 / 觀察名單組成。</p>
 
         <div v-if="useTv || result?.bars?.length" class="panel chart">
@@ -414,7 +494,8 @@ const sourceText = computed(() => {
           </div>
         </div>
 
-        <div v-if="current.constituents.length" class="panel wrap">
+        <div v-for="g in groups" :key="g.key" class="panel wrap">
+          <div v-if="g.title" class="ghead"><b>{{ g.title }}</b> <span class="muted small">{{ g.rows.length }} 檔 · {{ g.hint }}</span></div>
           <table>
             <thead>
               <tr>
@@ -424,6 +505,7 @@ const sourceText = computed(() => {
                 <th class="sortable" @click="sortBy('ticker')">代號{{ arrow('ticker') }}</th>
                 <th class="sortable" @click="sortBy('name')">公司{{ arrow('name') }}</th>
                 <th class="num sortable" title="可直接改：百分比，設 0 就不納入指數；合計不是 100 時按比例換算" @click="sortBy('weight')">權重 %{{ arrow('weight') }}</th>
+                <th v-if="current.source" class="num" title="來源目前的權重（同步時更新）">來源權重</th>
                 <th class="num">起點收盤</th>
                 <th class="num">最新收盤</th>
                 <th class="num sortable" @click="sortBy('return')">區間報酬{{ arrow('return') }}</th>
@@ -433,14 +515,17 @@ const sourceText = computed(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in rows" :key="c.ticker" class="row" :class="{ off: isHidden(c) }" @click="emit('open', c)">
+              <tr v-for="c in g.rows" :key="c.ticker" class="row" :class="{ off: isHidden(c) }" @click="emit('open', c)">
                 <td class="eye" :title="isHidden(c) ? '暫時隱藏中，點一下放回指數' : '暫時從指數拿掉，看 K 線怎麼變'" @click.stop="toggleHidden(c)"><Icon :name="isHidden(c) ? 'eye-off' : 'eye'" /></td>
                 <td class="mono"><a :href="`?company=${c.ticker}`" @click.prevent>{{ c.ticker }}</a></td>
                 <td class="name">{{ c.name }}</td>
                 <td class="num weight" @click.stop>
-                  <input v-model.number="c.weight" type="number" min="0" max="100" step="1" class="w" :class="{ zero: !(Number(c.weight) > 0) }" />
+                  <input :value="c.weight" type="number" min="0" max="100" step="1" class="w" :class="{ zero: !(Number(c.weight) > 0), manual: c.manualWeight || c.origin === 'manual' }" @input="onWeightInput(c, $event)" />
                   <span class="mono small muted" :title="scaled ? '依納入指數的合計換算後的實際權重' : ''">{{ isHidden(c) ? '隱藏' : !(Number(c.weight) > 0) ? '未納入' : scaled ? `→ ${pct(weightPct(c), false)}` : '' }}</span>
+                  <span v-if="c.origin === 'source' && c.manualWeight" class="tag manual" title="你改過的權重：重新同步時保留">手動</span>
+                  <button v-if="c.origin === 'source' && c.manualWeight" class="mini ghost" :title="c.gone ? '來源已無此檔：移除' : `改回來源權重 ${c.sourceWeight}%`" @click="revertWeight(current.id, c.ticker)">↺</button>
                 </td>
+                <td v-if="current.source" class="num mono small muted">{{ c.origin === 'source' && c.sourceWeight != null && !c.gone ? f1.format(c.sourceWeight) + '%' : '—' }}</td>
                 <td class="num mono">{{ perf[c.ticker]?.startClose != null ? f2.format(perf[c.ticker].startClose) : '—' }}</td>
                 <td class="num mono">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}</td>
                 <td class="num mono" :class="cls(perf[c.ticker]?.return)">{{ pct(perf[c.ticker]?.return) }}</td>
@@ -453,10 +538,10 @@ const sourceText = computed(() => {
                   <span v-else-if="result?.failed?.find((f) => f.ticker === c.ticker)" class="down">無資料</span>
                   <template v-else>{{ inIndex(c) ? '…' : '—' }}</template>
                 </td>
-                <td class="del" :title="`從 ETF 移除 ${c.ticker}（其餘權重按比例補回 100%）`" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
+                <td class="del" :title="`從 ETF 移除 ${c.ticker}（其餘權重按比例補回 100%${c.origin === 'source' ? '；重新同步不會加回來' : ''}）`" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
               </tr>
             </tbody>
-            <tfoot>
+            <tfoot v-if="g.key === groups.at(-1).key">
               <tr>
                 <td colspan="3" class="muted small">
                   {{ current.constituents.filter(inIndex).length }} 檔納入指數<template v-if="hiddenCount">，暫時隱藏 {{ hiddenCount }} 檔 <button class="mini ghost" @click="showAll">全部顯示</button></template>
@@ -467,9 +552,35 @@ const sourceText = computed(() => {
                   <button v-if="totalOff" class="mini" title="按比例把權重換算成合計 100%" @click="normalizeWeights(current.constituents)">湊成 100%</button>
                   <button v-else class="mini ghost" title="每檔相同權重" @click="equalWeights(current.id)">等權重</button>
                 </td>
-                <td colspan="6" class="muted small">{{ totalOff ? '合計不是 100%，指數依比例換算（右邊小字是實際權重）' : hiddenCount ? '隱藏的權重由其餘成分股按比例分攤（右邊小字是實際權重）' : '' }}</td>
+                <td :colspan="current.source ? 7 : 6" class="muted small">{{ totalOff ? '合計不是 100%，指數依比例換算（右邊小字是實際權重）' : hiddenCount ? '隱藏的權重由其餘成分股按比例分攤（右邊小字是實際權重）' : '' }}</td>
               </tr>
             </tfoot>
+          </table>
+        </div>
+        <div v-if="current.source && current.excluded?.length" class="panel wrap excluded">
+          <div class="ghead">
+            <b>已排除（來源有、你刪掉的）</b> <span class="muted small">{{ current.excluded.length }} 檔 · 重新同步不會加回來；「還原」會加回來並同步</span>
+            <button class="mini" @click="restore()">全部還原</button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>代號</th>
+                <th>公司</th>
+                <th class="num" title="來源目前的權重（同步時更新）">來源權重</th>
+                <th>排除時間</th>
+                <th class="del"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in current.excluded" :key="e.ticker" class="row" @click="emit('open', e)">
+                <td class="mono"><a :href="`?company=${e.ticker}`" @click.prevent>{{ e.ticker }}</a></td>
+                <td class="name">{{ e.name }}</td>
+                <td class="num mono small muted">{{ e.sourceWeight != null ? f1.format(e.sourceWeight) + '%' : '—' }}</td>
+                <td class="small muted">{{ e.at ? new Date(e.at).toLocaleString() : '—' }}</td>
+                <td class="del" @click.stop><button class="mini" :disabled="syncing" title="加回來並重新同步" @click="restore(e.ticker)">還原</button></td>
+              </tr>
+            </tbody>
           </table>
         </div>
         <p class="muted small note">
@@ -676,6 +787,46 @@ button.danger:hover {
   background: #fef3c7;
   border-radius: 8px;
 }
+.srcbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 16px;
+}
+.ghead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--row-alt);
+}
+.excluded tbody td {
+  color: var(--muted);
+}
+.excluded tbody td.mono a {
+  opacity: 0.7;
+}
+.tag {
+  display: inline-block;
+  font-size: 10px;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.tag.manual {
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+}
+input.w.manual {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
 .infobox {
   margin: 0 0 12px;
   padding: 8px 12px;
@@ -719,6 +870,7 @@ button.danger:hover {
 .wrap {
   padding: 0;
   overflow-x: auto;
+  margin-bottom: 12px;
 }
 table {
   width: 100%;
