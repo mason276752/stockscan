@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
+import { url } from '../base';
 import CompanySearch from './CompanySearch.vue';
 import KlineChart from './KlineChart.vue';
 import TvEmbedChart from './TvEmbedChart.vue';
@@ -180,7 +181,7 @@ async function loadQuotes() {
 function loadTvLibrary() {
   return new Promise((resolve) => {
     const s = document.createElement('script');
-    s.src = '/tradingview/charting_library/charting_library.standalone.js';
+    s.src = url('/tradingview/charting_library/charting_library.standalone.js');
     s.onload = resolve;
     s.onerror = resolve;
     document.head.appendChild(s);

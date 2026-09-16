@@ -40,8 +40,27 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`STOCKSCAN_DB`（SQLite 路徑，預設 `./data/stockscan.sqlite`）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_DB`（SQLite 路徑，預設 `./data/stockscan.sqlite`）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
 自製 ETF 的日線：`TV_ENABLED=0`（不用 TradingView websocket）、`IB_HOST`（預設 127.0.0.1）、`IB_PORT`（預設 7496；TWS 模擬帳戶 7497、IB Gateway 4001 / 4002）、`IB_CLIENT_ID`（預設 100 + PORT 的後三位，兩個 server 才不會互踢）、`IB_ENABLED=0`（不連 TWS，改用 Yahoo）。
+
+### 路徑前綴（BASE_URL）
+
+放在反向代理的子路徑下（例如 `https://host/stockscan/`）時設 `BASE_URL=/stockscan`，前後端一起生效：
+API 變成 `/stockscan/api/...`、TradingView 函式庫 `/stockscan/tradingview/...`、網頁在 `/stockscan/`（`/stockscan` 會 301 到有斜線的），前綴外的路徑回 404。
+前端 build 用相對路徑，伺服器送出 `index.html` 時注入前綴，所以**同一份 build 換 `BASE_URL` 不用重編**；
+開發模式 `BASE_URL=/stockscan npm --prefix web run dev` 也會讓 Vite 在同樣前綴下跑並代理到後端（後端位址 `VITE_BACKEND`，預設 `http://localhost:3000`）。
+
+### Docker
+
+```bash
+cp .env.example .env         # 填 SEC_USER_AGENT（必填）、BASE_URL、PORT…
+docker compose up -d --build # http://localhost:3000（或 BASE_URL 下）
+```
+
+- `Dockerfile` 兩階段：先 build 前端（含 `web/assets/tradingview/` 的授權版 Advanced Charts，有放才會複製），再以 Node 24 alpine 跑 server（僅 production 依賴，非 root）。
+- `./data` 掛進容器的 `/app/data`：SQLite（財報、評分、快取）在重建映像後保留。
+- 連主機上的 TWS / IB Gateway：`IB_HOST` 預設 `host.docker.internal`（Linux 由 compose 的 `extra_hosts` 提供）；TWS 的 API 設定要關掉「只允許 localhost 連線」並信任 Docker 網段的 IP，否則自製 ETF 的日線走 TradingView / Yahoo。
+- 健康檢查打 `/api/status`（含前綴）。
 
 ## 網頁
 

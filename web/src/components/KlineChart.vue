@@ -7,6 +7,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { CandlestickSeries, ColorType, CrosshairMode, LineSeries, createChart } from 'lightweight-charts';
 import { makeDatafeed } from '../tvDatafeed';
+import { url } from '../base';
 
 const props = defineProps({
   bars: { type: Array, default: () => [] }, // [{ time: 'YYYY-MM-DD', open, high, low, close }]
@@ -96,7 +97,7 @@ function mountAdvanced() {
   const overlayName = props.overlay.length ? props.overlayLabel : '';
   widget = new TV.widget({
     container: el.value,
-    library_path: '/tradingview/charting_library/',
+    library_path: url('/tradingview/charting_library/'),
     datafeed: makeDatafeed({ name, bars: () => props.bars, overlayName, overlay: () => props.overlay }),
     symbol: name,
     interval: 'D',

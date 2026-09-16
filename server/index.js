@@ -25,6 +25,9 @@ import { tvStatus } from './lib/tvws.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
+// BASE_URL: serve everything under a path prefix (behind a reverse proxy at
+// https://host/stockscan/ set BASE_URL=/stockscan). '' = the root.
+const BASE = `/${String(process.env.BASE_URL || '').trim().replace(/^\/+|\/+$/g, '')}`.replace(/^\/$/, '');
 
 const client = new SecClient();
 openStore();
@@ -641,11 +644,14 @@ app.get('/api/status', (_req, res) => {
   res.json({ store: { file: store.file, ...store.size() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle, tv: tvStatus(), ib: ibStatus() });
 });
 
-// Serve the built Vue app when it exists (npm run build:web).
+// Serve the built Vue app when it exists (npm run build:web). The build uses
+// relative asset URLs, so the same bundle works under any BASE_URL; the page
+// is told the prefix so its API calls go to the right place.
 const dist = path.join(__dirname, '..', 'web', 'dist');
 if (fs.existsSync(dist)) {
-  app.use(express.static(dist));
-  app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+  const page = fs.readFileSync(path.join(dist, 'index.html'), 'utf8').replace('</head>', `<script>window.__STOCKSCAN_BASE__=${JSON.stringify(BASE)}</script></head>`);
+  app.use(express.static(dist, { index: false }));
+  app.get(/^(?!\/api\/).*/, (_req, res) => res.type('html').send(page));
 }
 
 app.use((err, _req, res, _next) => {
@@ -654,8 +660,17 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: err.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`stockscan server listening on http://localhost:${PORT}`);
+// the prefix: /stockscan -> /stockscan/ (relative asset URLs need the slash), everything below it -> app
+let root = app;
+if (BASE) {
+  root = express();
+  root.use((req, res, next) => (req.path === BASE ? res.redirect(301, `${BASE}/${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`) : next()));
+  root.use(BASE, app);
+  root.use((_req, res) => res.status(404).type('text').send(`stockscan is served under ${BASE}/`));
+}
+
+root.listen(PORT, () => {
+  console.log(`stockscan server listening on http://localhost:${PORT}${BASE}/`);
   console.log(`store: ${store.file} (${store.filingCount()} filings saved)`);
   if (crawler.status().enabled) console.log('background crawl of latest filings enabled (STOCKSCAN_CRAWL=0 to disable)');
   if (!fs.existsSync(dist)) console.log('web/dist not found - run "npm run build:web" or use the Vite dev server (npm --prefix web run dev)');
