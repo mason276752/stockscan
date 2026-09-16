@@ -16,6 +16,8 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
   一輪約 5 小時（每份約 3 秒，低優先權、使用者操作時暫停），之後每 30 分鐘讀 EDGAR 的 daily index 抓當天新申報，
   每週再掃一輪。已檢查過的公司會記錄，重啟後從上次的位置繼續。頁面上方顯示進度；`STOCKSCAN_CRAWL=0` 可關閉。
   存檔以 gzip 壓縮（每份約 40 KB，全部約 250 MB）。
+- 財報之外：財務指標與評分、股價估值（Yahoo 報價）、分類瀏覽（SIC / 申報身分 / ETF 成分股）、尋找股票、觀察名單，
+  以及把篩選結果或觀察名單組成**自製 ETF**畫日 K（報價走 IBKR TWS API，沒開 TWS 時用 Yahoo；圖表為 TradingView Lightweight Charts）。
 
 ## 安裝與啟動
 
@@ -36,7 +38,8 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`STOCKSCAN_DB`（SQLite 路徑，預設 `./data/stockscan.sqlite`）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）。
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`STOCKSCAN_DB`（SQLite 路徑，預設 `./data/stockscan.sqlite`）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
+自製 ETF 的報價：`IB_HOST`（預設 127.0.0.1）、`IB_PORT`（預設 7496；TWS 模擬帳戶 7497、IB Gateway 4001 / 4002）、`IB_CLIENT_ID`（預設 100 + PORT 的後三位，兩個 server 才不會互踢）、`IB_ENABLED=0`（不連 TWS，改用 Yahoo）。
 
 ## 網頁
 
@@ -105,6 +108,9 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 | `GET /api/browse/companies?sic=3674` / `?afs=LAF` | 某產業 / 某申報身分的公司（`listed=0` 含沒有股票代號的申報公司，`q=` 篩選） |
 | `GET /api/browse/etf?q=vanguard` | ETF 清單（常用的排前面） |
 | `GET /api/browse/etf/VOO` | 該 ETF 最新 N-PORT 的成分股，每筆附對應到的 `cik` / `symbol` 與權重 |
+| `GET /api/bars/AAPL` | 十年日 K（開高低收量，除權調整）；來源 IBKR TWS，未連線時 Yahoo |
+| `POST /api/basket` `{constituents:[{ticker,weight}], range, rebalance, benchmark}` | 自製 ETF 指數（起點 = 100）的日 K、統計、各成分股報酬與貢獻、大盤 ETF 疊圖 |
+| `GET /api/quotes/status` / `POST /api/quotes/ib/connect` | TWS 連線狀態 / 立刻重試連線 |
 
 `:id` 可以是股票代號或 CIK。`year` / `period` 找不到時回 404，並附上該公司可用的 `available` 清單。
 
@@ -275,6 +281,31 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 - 20-F 的 IFRS 申報若只有一張「Profit or Loss and Other Comprehensive Income」合併報表，會同時放進 `income_statement`。
 - 財報上沒有的比率（毛利率、周轉率等）不在輸出裡，請用 concept 自行計算。
 
+### 自製 ETF（K 線）
+
+- 從**尋找股票**的結果（目前排序前 30 家）、**觀察名單**的某個分類，或自己搜尋加入，組成一籃子股票；存在瀏覽器的 `localStorage`（`stockscan.baskets`）。
+  權重欄可直接改（百分比，預設等權重；設 0 就不納入指數但留在名單；合計不是 100% 時依比例換算，表尾有「湊成 100%」）；「買進持有」= 權重是起點那天的配置、之後隨股價漂移，「每日再平衡」= 每天收盤把權重調回設定值。
+- **指數**：成分股以起點收盤價換算成持有單位後的加權合計，起點 = 100；日 K 的開高低收各自加權（高低點是各股高低的加權和，會略高估真實區間）。
+  區間可選 1 / 3 / 5 / 10 年，起點受最晚上市那檔限制（會註明）。可疊上 SPY / QQQ / DIA / IWM 同期走勢（同樣以起點 = 100），
+  下方列出區間報酬、年化報酬、年化波動、最大回撤、最佳／最差單日，表格列出各成分股的起點／最新收盤、區間報酬與貢獻（權重 × 報酬，買進持有時加總 = 指數報酬）。
+  表格上方的搜尋框直接加入成分股、每列最右的垃圾桶移除；每列的眼睛可暫時把成分股從指數拿掉（不改權重、不儲存），看 K 線怎麼變；左側清單滑過可改名 / 刪除。
+  成交稀少或股價低於 1 美元的成分股標上「低流動性」—— 這類股票單日跳動很大，會扭曲整個指數。
+- **報價來源**：IBKR **TWS API**（`@stoqey/ib`，`reqHistoricalData` 日線、TRADES、除權調整；只讀歷史資料，不碰帳戶與下單）。
+  TWS 或 IB Gateway 要開啟 API（Global Configuration → API → Settings → Enable ActiveX and Socket Clients），啟動時會嘗試連線，
+  沒連上就改用 Yahoo Finance，頁面左下顯示目前來源與「重試連線」；單一代號在 IB 查不到或撞到請求限制（10 分鐘 60 次）時，該檔改抓 Yahoo。
+  日線快取 30 分鐘。股價估值頁維持原本的 Yahoo 未還原價格，不受影響。
+- **K 線圖（預設：TradingView 官方）**：用 TradingView 官方的嵌入式 Advanced Chart widget，資料是 TradingView 自己的（美股 Cboe One）。
+  成分股組成 TradingView 的**價差商品**（spread symbol），例如 `0.1678*AAPL+0.1731*GOOGL+0.082*MSFT+0.2058*TSM`，
+  係數 = 起點時的持有單位（用 TWS / Yahoo 的起點收盤算，起點 = 100，所以圖上的水準跟統計對得上；兩者都拿不到時退回純權重），
+  TradingView 逐根 K 棒算出開高低收；大盤 ETF 以 `compareSymbols` 同軸比較。**限制：一個價差商品最多 10 檔**，
+  納入超過 10 檔時自動改用自算圖（用眼睛暫時隱藏到 10 檔以內就切回）；價差商品是買進持有，「每日再平衡」只反映在統計。
+  區間 1 / 3 / 5 / 10 年對應 widget 的 12M / 36M / 61M / 120M（60M 是 TradingView 的預設值、會改成週線，所以用 61M）。
+- **K 線圖（備用：TWS / Yahoo 自算）**：切換「圖：TWS / Yahoo 自算」，或 TradingView 畫不了時。用 TradingView 授權版 **Advanced Charts**
+  （`charting_library` 放在 `web/assets/tradingview/`，後端以 `/tradingview/` 提供、Vite 開發模式代理過去；資料由 `web/src/tvDatafeed.js`
+  以 Datafeed API 餵入，大盤 ETF 以 Overlay 指標疊同一價格軸，週／月線由函式庫從日線合成），沒有這個資料夾時用開源的
+  [Lightweight Charts](https://github.com/tradingview/lightweight-charts)。統計、成分股表格永遠用 TWS / Yahoo 的日線算。預設紅漲綠跌，可切換。
+- 所有搜尋框（頁首、觀察名單、自製 ETF）的建議清單都顯示該公司最新財報的評分（`GET /api/search` 每筆附 `score`）。
+
 ## 專案結構
 
 | 檔案 | 內容 |
@@ -294,6 +325,8 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/quarters.js` | 季度拆分與 Q4 推算；`yearQuarterPoints` 供指標頁使用 |
 | `server/lib/indicators.js` | 財務指標（五大比率）計算 |
 | `server/lib/prices.js` | Yahoo Finance 現價與十年日線（還原分割）、匯率 |
+| `server/lib/ib.js` | IBKR TWS API 連線與日線（`@stoqey/ib`） |
+| `server/lib/bars.js` | 日 K（IBKR，未連線時 Yahoo）與自製 ETF 指數、統計 |
 | `server/lib/valuation.js` | 估值：近四季數字、股數、各期倍數、絕對模型輸入 |
 | `shared/valuation.js` | 估值模型與倍數公式（伺服器與瀏覽器共用） |
 | `server/lib/score.js` | 單一申報的評分（五大類 × 20 分） |
@@ -301,4 +334,4 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/etf.js` | ETF 清單、N-PORT 成分股、CUSIP → 代號 → CIK 對應 |
 | `server/lib/remoteZip.js` | 用 HTTP Range 從 sec.gov 的 zip 只抽出需要的檔案 |
 | `server/data/sic.json` | SIC 4 碼對照表（SEC 英文名、中文名、大類） |
-| `web/` | Vue 3 + Vite 前端（`CompanySearch`、`FilingPicker`、`StatementTable`、`IndicatorsTable`、`BrowsePage`、`CompanyTable`、`ValuationPanel`、`WatchlistPage`、`ScoreCard`、`ScoreBadge`；`watchlist.js` 為 localStorage 觀察名單） |
+| `web/` | Vue 3 + Vite 前端（`CompanySearch`、`FilingPicker`、`StatementTable`、`IndicatorsTable`、`BrowsePage`、`CompanyTable`、`ValuationPanel`、`WatchlistPage`、`ScreenerPage`、`BasketPage`、`KlineChart`、`TvEmbedChart`、`Icon`、`ScoreCard`、`ScoreBadge`；`watchlist.js` / `baskets.js` 為 localStorage 觀察名單 / 自製 ETF；`tvDatafeed.js` 供 TradingView Advanced Charts；`assets/tradingview/` 放授權的 charting_library） |

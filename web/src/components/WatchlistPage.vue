@@ -4,8 +4,9 @@ import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import CompanySearch from './CompanySearch.vue';
 import { addGroup, removeGroup, removeWatch, renameGroup, setGroups, toggleWatch, watchlist } from '../watchlist';
+import { createBasket } from '../baskets';
 
-const emit = defineEmits(['open']);
+const emit = defineEmits(['open', 'basket']);
 const scores = ref({});
 const loading = ref(false);
 const sortKey = ref('addedAt');
@@ -91,6 +92,13 @@ function deleteGroup(g) {
   removeGroup(g);
   if (current.value === g) current.value = 'all';
 }
+// the stocks on screen (a group, or the whole list) as a new custom ETF
+function makeBasket() {
+  const items = filtered.value.filter((x) => x.ticker);
+  if (!items.length) return;
+  createBasket(current.value === 'all' ? '觀察名單' : current.value === '__none' ? '未分類' : current.value, items);
+  emit('basket');
+}
 // add a company straight into the current group from the search box
 async function addFromSearch(ticker) {
   addMsg.value = '';
@@ -141,6 +149,7 @@ async function addFromSearch(ticker) {
             <span class="muted small">{{ rows.length }} 家</span>
           </div>
           <div class="options">
+            <button class="small" :disabled="!rows.length" title="把這個分類的股票組成自製 ETF，畫成 K 線" @click="makeBasket">組成自製 ETF</button>
             <button class="small" :disabled="loading || !watchlist.items.length" @click="refresh">{{ loading ? '更新中…' : '↻ 更新評分' }}</button>
           </div>
         </div>

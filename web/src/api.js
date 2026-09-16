@@ -5,6 +5,13 @@ async function get(url) {
   return body;
 }
 
+async function post(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  return data;
+}
+
 export const api = {
   search: (q) => get(`/api/search?q=${encodeURIComponent(q)}`),
   company: (id, { refresh = false } = {}) => get(`/api/company/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`),
@@ -29,4 +36,9 @@ export const api = {
   browseEtfs: (q = '') => get(`/api/browse/etf${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   etfHoldings: (ticker) => get(`/api/browse/etf/${encodeURIComponent(ticker)}`),
   etfHoldingsUrl: (ticker) => `/api/browse/etf/${encodeURIComponent(ticker)}`,
+  // custom ETF charts
+  quotesStatus: () => get('/api/quotes/status'),
+  ibConnect: () => post('/api/quotes/ib/connect', {}),
+  bars: (symbol) => get(`/api/bars/${encodeURIComponent(symbol)}`),
+  basket: (body) => post('/api/basket', body),
 };

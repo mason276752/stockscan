@@ -3,8 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import { isWatched, toggleWatch } from '../watchlist';
+import { createBasket } from '../baskets';
 
-const emit = defineEmits(['open']);
+const emit = defineEmits(['open', 'basket']);
 
 const meta = ref(null); // { fields, divisions, filer }
 const sic = ref(null); // /api/browse/sic
@@ -27,6 +28,18 @@ const result = ref(null);
 const loading = ref(false);
 const error = ref(null);
 
+// the first N results (as sorted) as a new custom ETF
+const BASKET_MAX = 30;
+function makeBasket() {
+  const rows = (result.value?.rows || []).filter((r) => r.ticker).slice(0, BASKET_MAX);
+  if (!rows.length) return;
+  const parts = [];
+  if (sicCode.value) parts.push(sicCode.value);
+  else if (division.value) parts.push(meta.value?.divisions?.find((d) => d.id === division.value)?.zh || division.value);
+  const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${(fieldOf(c.key)?.name || c.key).replace(/（.*?）/g, '')}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
+  createBasket([...parts, ...cond].join(' ') || '尋找股票', rows);
+  emit('basket');
+}
 const fieldOf = (key) => meta.value?.fields.find((f) => f.key === key) || null;
 const fieldGroups = computed(() => {
   const out = [];
@@ -201,6 +214,7 @@ onMounted(async () => {
           </div>
           <div class="options">
             <span v-if="loading" class="muted small">搜尋中…</span>
+            <button class="small" :disabled="!result?.rows?.length" :title="`把目前排序的前 ${BASKET_MAX} 家組成自製 ETF，畫成 K 線`" @click="makeBasket">前 {{ Math.min(BASKET_MAX, result?.rows?.length || 0) }} 家組成自製 ETF</button>
             <a :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
           </div>
         </div>

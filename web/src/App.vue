@@ -9,8 +9,10 @@ import ValuationPanel from './components/ValuationPanel.vue';
 import BrowsePage from './components/BrowsePage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
 import ScreenerPage from './components/ScreenerPage.vue';
+import BasketPage from './components/BasketPage.vue';
 import ScoreCard from './components/ScoreCard.vue';
 import { isWatched, toggleWatch, watchlist } from './watchlist';
+import { baskets } from './baskets';
 
 // background crawl progress (server-side), shown in the header
 const status = ref(null);
@@ -31,6 +33,7 @@ const crawlText = computed(() => {
 });
 
 // page: 'report' (statements of one company) | 'browse' (industry / filer status / ETF lists) | 'watch' (watchlist)
+//       | 'screen' (screener) | 'basket' (custom ETF charts)
 const page = ref('report');
 const browseParams = ref({});
 
@@ -274,7 +277,7 @@ watch([company, filing, tab, indMode, view, page, browseParams], () => {
   if (page.value === 'browse') {
     p.set('page', 'browse');
     for (const [k, v] of Object.entries(browseParams.value)) if (v) p.set(k, v);
-  } else if (page.value === 'watch' || page.value === 'screen') {
+  } else if (page.value === 'watch' || page.value === 'screen' || page.value === 'basket') {
     p.set('page', page.value);
   } else {
     if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
@@ -300,7 +303,7 @@ function applyUrl() {
     browseParams.value = { cat: p.get('cat') || 'sic', code: p.get('code') || '', afs: p.get('afs') || '', etf: p.get('etf') || '' };
     return;
   }
-  if (p.get('page') === 'watch' || p.get('page') === 'screen') {
+  if (['watch', 'screen', 'basket'].includes(p.get('page'))) {
     page.value = p.get('page');
     return;
   }
@@ -332,14 +335,16 @@ onMounted(() => {
         <button :class="{ active: page === 'browse' }" @click="page = 'browse'">分類瀏覽</button>
         <button :class="{ active: page === 'screen' }" @click="page = 'screen'">尋找股票</button>
         <button :class="{ active: page === 'watch' }" @click="page = 'watch'">觀察名單<span v-if="watchlist.items.length" class="count">{{ watchlist.items.length }}</span></button>
+        <button :class="{ active: page === 'basket' }" @click="page = 'basket'">自製 ETF<span v-if="baskets.items.length" class="count">{{ baskets.items.length }}</span></button>
       </nav>
       <CompanySearch @select="openCompany" />
     </header>
     <p v-if="crawlText" class="muted small crawl" title="啟動後在背景把每家有代號的公司最新一份 10-K / 10-Q 存到本機，之後點開就不用等下載；使用中會自動讓路">{{ crawlText }}</p>
 
     <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" />
-    <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" />
-    <ScreenerPage v-else-if="page === 'screen'" @open="openCompany" />
+    <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" />
+    <ScreenerPage v-else-if="page === 'screen'" @open="openCompany" @basket="page = 'basket'" />
+    <BasketPage v-else-if="page === 'basket'" @open="openCompany" />
 
     <template v-else>
     <p v-if="error" class="error">{{ error }}</p>

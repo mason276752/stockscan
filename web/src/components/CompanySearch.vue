@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch } from 'vue';
 import { api } from '../api';
+import ScoreBadge from './ScoreBadge.vue';
 
 const emit = defineEmits(['select']);
 const query = ref('');
@@ -81,7 +82,8 @@ function onBlur() {
       <li v-for="r in results" :key="r.ticker" @mousedown.prevent="choose(r)">
         <span class="ticker">{{ r.ticker }}</span>
         <span class="name">{{ r.name }}</span>
-        <span class="muted mono">CIK {{ r.cik }}</span>
+        <span class="score"><ScoreBadge :score="r.score" /></span>
+        <span class="muted mono small">CIK {{ r.cik }}</span>
       </li>
     </ul>
   </div>
@@ -109,10 +111,18 @@ function onBlur() {
 }
 .suggest li {
   display: grid;
-  grid-template-columns: 90px 1fr auto;
+  grid-template-columns: 90px 1fr auto auto;
   gap: 12px;
   padding: 8px 12px;
   cursor: pointer;
+  align-items: center;
+}
+.score {
+  min-width: 64px;
+  text-align: right;
+}
+.small {
+  font-size: 12px;
 }
 .suggest li:hover {
   background: var(--accent-soft);

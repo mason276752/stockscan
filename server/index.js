@@ -17,6 +17,8 @@ import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAc
 import { ROWS as INDICATOR_ROWS } from './lib/indicators.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
+import { RANGES, basketSeries, dailyBars, rebased } from './lib/bars.js';
+import { ibConnect, ibStatus } from './lib/ib.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -40,6 +42,16 @@ setTimeout(() => {
   if (universeStale()) refreshUniverse(client, 'low').catch((e) => console.warn(`universe build failed: ${e.message}`));
 }, 5000);
 setTimeout(() => crawler.start(), 15_000);
+
+// IBKR TWS for the custom-ETF charts: connect once at startup; when TWS is not
+// running the charts use Yahoo Finance and the page offers a retry.
+if (ibStatus().enabled) {
+  setTimeout(() => {
+    ibConnect(4000).then((ok) => {
+      if (!ok) console.log(`ibkr: TWS / IB Gateway not reachable at ${ibStatus().host}:${ibStatus().port} - custom ETF charts use Yahoo Finance (IB_HOST / IB_PORT / IB_ENABLED=0)`);
+    });
+  }, 2000);
+}
 
 // Score every saved filing that has no score yet (new version, or filings
 // saved before scoring existed) - a few ms each, in the background.
@@ -103,11 +115,23 @@ async function filingResponse(req, company, filing) {
   return currentView(data, filing, prev);
 }
 
-// GET /api/search?q=goog  -> ticker / company-name suggestions
+// GET /api/search?q=goog  -> ticker / company-name suggestions, each with the
+// latest-filing score when one is saved (so every search box can show it)
 app.get(
   '/api/search',
   wrap(async (req, res) => {
-    res.json(await searchCompanies(client, String(req.query.q || ''), Number(req.query.limit) || 10));
+    const rows = await searchCompanies(client, String(req.query.q || ''), Number(req.query.limit) || 10);
+    res.json(
+      rows.map((r) => {
+        let score = null;
+        try {
+          score = latestScore(r.cik);
+        } catch {
+          /* unscorable filing: no badge */
+        }
+        return { ...r, score: score ? { score: score.score, coverage: score.coverage, form: score.form, fiscalYear: score.fiscalYear, fiscalPeriod: score.fiscalPeriod, periodEnd: score.periodEnd, categories: score.categories.map((c) => c.score) } : null };
+      }),
+    );
   }),
 );
 
@@ -449,9 +473,88 @@ app.get(
   }),
 );
 
+// ---- custom ETF (basket) charts: daily bars from IBKR TWS, else Yahoo ----
+
+// GET /api/quotes/status -> is TWS / IB Gateway reachable (else bars come from Yahoo)
+// The licensed TradingView Advanced Charts library, when present in
+// web/assets/tradingview/ (charting_library/ + datafeeds/), is served at
+// /tradingview/ and the custom-ETF page uses it instead of Lightweight Charts.
+const TV_DIR = path.join(__dirname, '..', 'web', 'assets', 'tradingview');
+const tvLibrary = () => fs.existsSync(path.join(TV_DIR, 'charting_library', 'charting_library.standalone.js'));
+if (tvLibrary()) app.use('/tradingview', express.static(TV_DIR, { maxAge: '1h' }));
+app.get('/api/quotes/status', (_req, res) => res.json({ ib: ibStatus(), source: ibStatus().connected ? 'IBKR' : 'Yahoo Finance', tvLibrary: tvLibrary() }));
+// POST /api/quotes/ib/connect -> (re)try the TWS connection now
+app.post(
+  '/api/quotes/ib/connect',
+  wrap(async (_req, res) => {
+    await ibConnect(5000);
+    res.json({ ib: ibStatus() });
+  }),
+);
+
+// GET /api/bars/AAPL -> ten years of daily OHLC (split-adjusted)
+app.get(
+  '/api/bars/:symbol',
+  wrap(async (req, res) => {
+    res.json(await dedupe(`bars:${req.params.symbol.toUpperCase()}`, () => dailyBars(req.params.symbol)));
+  }),
+);
+
+// POST /api/basket { constituents: [{ ticker, weight }], range, rebalance, benchmark }
+//  -> index bars (base 100), stats, per-constituent returns, benchmark overlay
+const MAX_BASKET = 60;
+app.post(
+  '/api/basket',
+  wrap(async (req, res) => {
+    const body = req.body || {};
+    const seen = new Set();
+    const wanted = (Array.isArray(body.constituents) ? body.constituents : [])
+      .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
+      .filter((c) => c.ticker && !seen.has(c.ticker) && seen.add(c.ticker));
+    if (!wanted.length) throw Object.assign(new Error('constituents is empty'), { status: 400 });
+    if (wanted.length > MAX_BASKET) throw Object.assign(new Error(`at most ${MAX_BASKET} constituents`), { status: 400 });
+    const range = RANGES[body.range] ? body.range : '5y';
+    const rebalance = body.rebalance === 'daily' ? 'daily' : 'none';
+    const benchmark = body.benchmark ? String(body.benchmark).trim().toUpperCase() : null;
+
+    // a few at a time: IB paces historical requests, Yahoo rate-limits
+    const jobs = [...wanted.map((c) => ({ ...c, bench: false })), ...(benchmark ? [{ ticker: benchmark, weight: 0, bench: true }] : [])];
+    const out = new Array(jobs.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < jobs.length) {
+        const i = next++;
+        const j = jobs[i];
+        try {
+          const h = await dedupe(`bars:${j.ticker}`, () => dailyBars(j.ticker));
+          out[i] = { ...j, symbol: j.ticker, source: h.source, currency: h.currency, days: h.days };
+        } catch (err) {
+          out[i] = { ...j, symbol: j.ticker, error: err.message, days: [] };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
+    const members = out.filter((m) => !m.bench);
+    const bench = out.find((m) => m.bench) || null;
+    const series = basketSeries(members, { range, rebalance });
+    const failed = members.filter((m) => m.error).map((m) => ({ ticker: m.ticker, error: m.error }));
+    for (const f of failed) series.notes.push(`${f.ticker} 沒有價格資料，已排除（${f.error}）`);
+    const sources = [...new Set(members.filter((m) => !m.error).map((m) => m.source))];
+    res.json({
+      range,
+      rebalance,
+      source: sources.join(' + ') || null,
+      ib: ibStatus().connected,
+      ...series,
+      failed,
+      benchmark: bench && !bench.error && series.start ? { symbol: bench.symbol, source: bench.source, startClose: bench.days.find((d) => d.date >= series.start)?.close ?? null, points: rebased(bench, series.start, series.end) } : null,
+    });
+  }),
+);
+
 // GET /api/status -> local store and prefetch queue
 app.get('/api/status', (_req, res) => {
-  res.json({ store: { file: store.file, ...store.size() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle });
+  res.json({ store: { file: store.file, ...store.size() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle, ib: ibStatus() });
 });
 
 // Serve the built Vue app when it exists (npm run build:web).
