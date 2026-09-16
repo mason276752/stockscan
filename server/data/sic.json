@@ -1,0 +1,3174 @@
+{
+"divisions": [
+{
+"id": "A",
+"from": "01",
+"to": "09",
+"zh": "農林漁牧"
+},
+{
+"id": "B",
+"from": "10",
+"to": "14",
+"zh": "礦業"
+},
+{
+"id": "C",
+"from": "15",
+"to": "17",
+"zh": "營造"
+},
+{
+"id": "D",
+"from": "20",
+"to": "39",
+"zh": "製造業"
+},
+{
+"id": "E",
+"from": "40",
+"to": "49",
+"zh": "運輸、通訊與公用事業"
+},
+{
+"id": "F",
+"from": "50",
+"to": "51",
+"zh": "批發"
+},
+{
+"id": "G",
+"from": "52",
+"to": "59",
+"zh": "零售"
+},
+{
+"id": "H",
+"from": "60",
+"to": "67",
+"zh": "金融、保險與不動產"
+},
+{
+"id": "I",
+"from": "70",
+"to": "89",
+"zh": "服務業"
+},
+{
+"id": "J",
+"from": "91",
+"to": "99",
+"zh": "公共行政與其他"
+}
+],
+"codes": [
+{
+"code": "0100",
+"office": "Industrial Applications and Services",
+"title": "AGRICULTURAL PRODUCTION-CROPS",
+"zh": "農作物生產",
+"division": "A"
+},
+{
+"code": "0200",
+"office": "Industrial Applications and Services",
+"title": "AGRICULTURAL PROD-LIVESTOCK & ANIMAL SPECIALTIES",
+"zh": "畜牧與動物養殖",
+"division": "A"
+},
+{
+"code": "0700",
+"office": "Industrial Applications and Services",
+"title": "AGRICULTURAL SERVICES",
+"zh": "農業服務",
+"division": "A"
+},
+{
+"code": "0800",
+"office": "Industrial Applications and Services",
+"title": "FORESTRY",
+"zh": "林業",
+"division": "A"
+},
+{
+"code": "0900",
+"office": "Industrial Applications and Services",
+"title": "FISHING, HUNTING AND TRAPPING",
+"zh": "漁獵",
+"division": "A"
+},
+{
+"code": "1000",
+"office": "Office of Energy & Transportation",
+"title": "METAL MINING",
+"zh": "金屬礦業",
+"division": "B"
+},
+{
+"code": "1040",
+"office": "Office of Energy & Transportation",
+"title": "GOLD AND SILVER ORES",
+"zh": "金銀礦",
+"division": "B"
+},
+{
+"code": "1090",
+"office": "Office of Energy & Transportation",
+"title": "MISCELLANEOUS METAL ORES",
+"zh": "其他金屬礦",
+"division": "B"
+},
+{
+"code": "1220",
+"office": "Office of Energy & Transportation",
+"title": "BITUMINOUS COAL & LIGNITE MINING",
+"zh": "煙煤與褐煤開採",
+"division": "B"
+},
+{
+"code": "1221",
+"office": "Office of Energy & Transportation",
+"title": "BITUMINOUS COAL & LIGNITE SURFACE MINING",
+"zh": "煙煤與褐煤露天開採",
+"division": "B"
+},
+{
+"code": "1311",
+"office": "Office of Energy & Transportation",
+"title": "CRUDE PETROLEUM & NATURAL GAS",
+"zh": "原油與天然氣",
+"division": "B"
+},
+{
+"code": "1381",
+"office": "Office of Energy & Transportation",
+"title": "DRILLING OIL & GAS WELLS",
+"zh": "油氣井鑽探",
+"division": "B"
+},
+{
+"code": "1382",
+"office": "Office of Energy & Transportation",
+"title": "OIL & GAS FIELD EXPLORATION SERVICES",
+"zh": "油氣田探勘服務",
+"division": "B"
+},
+{
+"code": "1389",
+"office": "Office of Energy & Transportation",
+"title": "OIL & GAS FIELD SERVICES, NEC",
+"zh": "其他油氣田服務",
+"division": "B"
+},
+{
+"code": "1400",
+"office": "Office of Energy & Transportation",
+"title": "MINING & QUARRYING OF NONMETALLIC MINERALS (NO FUELS)",
+"zh": "非金屬礦物開採（不含燃料）",
+"division": "B"
+},
+{
+"code": "1520",
+"office": "Office of Real Estate & Construction",
+"title": "GENERAL BLDG CONTRACTORS - RESIDENTIAL BLDGS",
+"zh": "住宅建築總承包",
+"division": "C"
+},
+{
+"code": "1531",
+"office": "Office of Real Estate & Construction",
+"title": "OPERATIVE BUILDERS",
+"zh": "自建自售建商",
+"division": "C"
+},
+{
+"code": "1540",
+"office": "Office of Real Estate & Construction",
+"title": "GENERAL BLDG CONTRACTORS - NONRESIDENTIAL BLDGS",
+"zh": "非住宅建築總承包",
+"division": "C"
+},
+{
+"code": "1600",
+"office": "Office of Real Estate & Construction",
+"title": "HEAVY CONSTRUCTION OTHER THAN BLDG CONST - CONTRACTORS",
+"zh": "重型工程營造（非建築）",
+"division": "C"
+},
+{
+"code": "1623",
+"office": "Office of Real Estate & Construction",
+"title": "WATER, SEWER, PIPELINE, COMM & POWER LINE CONSTRUCTION",
+"zh": "水、下水道、管線、通訊與電力線工程",
+"division": "C"
+},
+{
+"code": "1700",
+"office": "Office of Real Estate & Construction",
+"title": "CONSTRUCTION - SPECIAL TRADE CONTRACTORS",
+"zh": "專業工程承包",
+"division": "C"
+},
+{
+"code": "1731",
+"office": "Office of Real Estate & Construction",
+"title": "ELECTRICAL WORK",
+"zh": "電氣工程",
+"division": "C"
+},
+{
+"code": "2000",
+"office": "Office of Manufacturing",
+"title": "FOOD AND KINDRED PRODUCTS",
+"zh": "食品及相關產品",
+"division": "D"
+},
+{
+"code": "2011",
+"office": "Office of Manufacturing",
+"title": "MEAT PACKING PLANTS",
+"zh": "肉品加工",
+"division": "D"
+},
+{
+"code": "2013",
+"office": "Office of Manufacturing",
+"title": "SAUSAGES & OTHER PREPARED MEAT PRODUCTS",
+"zh": "香腸與肉製品",
+"division": "D"
+},
+{
+"code": "2015",
+"office": "Office of Manufacturing",
+"title": "POULTRY SLAUGHTERING AND PROCESSING",
+"zh": "家禽屠宰加工",
+"division": "D"
+},
+{
+"code": "2020",
+"office": "Office of Manufacturing",
+"title": "DAIRY PRODUCTS",
+"zh": "乳製品",
+"division": "D"
+},
+{
+"code": "2024",
+"office": "Office of Manufacturing",
+"title": "ICE CREAM & FROZEN DESSERTS",
+"zh": "冰淇淋與冷凍甜點",
+"division": "D"
+},
+{
+"code": "2030",
+"office": "Office of Manufacturing",
+"title": "CANNED, FROZEN & PRESERVD FRUIT, VEG & FOOD SPECIALTIES",
+"zh": "罐頭、冷凍與醃漬蔬果及特色食品",
+"division": "D"
+},
+{
+"code": "2033",
+"office": "Office of Manufacturing",
+"title": "CANNED, FRUITS, VEG, PRESERVES, JAMS & JELLIES",
+"zh": "水果蔬菜罐頭、果醬",
+"division": "D"
+},
+{
+"code": "2040",
+"office": "Office of Manufacturing",
+"title": "GRAIN MILL PRODUCTS",
+"zh": "穀物加工品",
+"division": "D"
+},
+{
+"code": "2050",
+"office": "Office of Manufacturing",
+"title": "BAKERY PRODUCTS",
+"zh": "烘焙食品",
+"division": "D"
+},
+{
+"code": "2052",
+"office": "Office of Manufacturing",
+"title": "COOKIES & CRACKERS",
+"zh": "餅乾",
+"division": "D"
+},
+{
+"code": "2060",
+"office": "Office of Manufacturing",
+"title": "SUGAR & CONFECTIONERY PRODUCTS",
+"zh": "糖與糖果",
+"division": "D"
+},
+{
+"code": "2070",
+"office": "Office of Manufacturing",
+"title": "FATS & OILS",
+"zh": "油脂",
+"division": "D"
+},
+{
+"code": "2080",
+"office": "Office of Manufacturing",
+"title": "BEVERAGES",
+"zh": "飲料",
+"division": "D"
+},
+{
+"code": "2082",
+"office": "Office of Manufacturing",
+"title": "MALT BEVERAGES",
+"zh": "麥芽飲料（啤酒）",
+"division": "D"
+},
+{
+"code": "2086",
+"office": "Office of Manufacturing",
+"title": "BOTTLED & CANNED SOFT DRINKS & CARBONATED WATERS",
+"zh": "瓶裝與罐裝軟性飲料",
+"division": "D"
+},
+{
+"code": "2090",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS FOOD PREPARATIONS & KINDRED PRODUCTS",
+"zh": "其他食品",
+"division": "D"
+},
+{
+"code": "2092",
+"office": "Office of Manufacturing",
+"title": "PREPARED FRESH OR FROZEN FISH & SEAFOODS",
+"zh": "鮮魚與冷凍水產",
+"division": "D"
+},
+{
+"code": "2100",
+"office": "Office of Manufacturing",
+"title": "TOBACCO PRODUCTS",
+"zh": "菸草製品",
+"division": "D"
+},
+{
+"code": "2111",
+"office": "Office of Manufacturing",
+"title": "CIGARETTES",
+"zh": "香菸",
+"division": "D"
+},
+{
+"code": "2200",
+"office": "Office of Manufacturing",
+"title": "TEXTILE MILL PRODUCTS",
+"zh": "紡織品",
+"division": "D"
+},
+{
+"code": "2211",
+"office": "Office of Manufacturing",
+"title": "BROADWOVEN FABRIC MILLS, COTTON",
+"zh": "棉織布廠",
+"division": "D"
+},
+{
+"code": "2221",
+"office": "Office of Manufacturing",
+"title": "BROADWOVEN FABRIC MILLS, MAN MADE FIBER & SILK",
+"zh": "人造纖維與絲織布廠",
+"division": "D"
+},
+{
+"code": "2250",
+"office": "Office of Manufacturing",
+"title": "KNITTING MILLS",
+"zh": "針織廠",
+"division": "D"
+},
+{
+"code": "2253",
+"office": "Office of Manufacturing",
+"title": "KNIT OUTERWEAR MILLS",
+"zh": "針織外衣",
+"division": "D"
+},
+{
+"code": "2273",
+"office": "Office of Manufacturing",
+"title": "CARPETS & RUGS",
+"zh": "地毯",
+"division": "D"
+},
+{
+"code": "2300",
+"office": "Office of Manufacturing",
+"title": "APPAREL & OTHER FINISHD PRODS OF FABRICS & SIMILAR MATL",
+"zh": "成衣與其他布製品",
+"division": "D"
+},
+{
+"code": "2320",
+"office": "Office of Manufacturing",
+"title": "MEN'S & BOYS' FURNISHGS, WORK CLOTHG, & ALLIED GARMENTS",
+"zh": "男裝與工作服",
+"division": "D"
+},
+{
+"code": "2330",
+"office": "Office of Manufacturing",
+"title": "WOMEN'S, MISSES', AND JUNIORS OUTERWEAR",
+"zh": "女裝外衣",
+"division": "D"
+},
+{
+"code": "2340",
+"office": "Office of Manufacturing",
+"title": "WOMEN'S, MISSES', CHILDREN'S & INFANTS' UNDERGARMENTS",
+"zh": "女性與兒童內衣",
+"division": "D"
+},
+{
+"code": "2390",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS FABRICATED TEXTILE PRODUCTS",
+"zh": "其他布製品",
+"division": "D"
+},
+{
+"code": "2400",
+"office": "Office of Manufacturing",
+"title": "LUMBER & WOOD PRODUCTS (NO FURNITURE)",
+"zh": "木材與木製品（不含家具）",
+"division": "D"
+},
+{
+"code": "2421",
+"office": "Office of Manufacturing",
+"title": "SAWMILLS & PLANTING MILLS, GENERAL",
+"zh": "鋸木廠",
+"division": "D"
+},
+{
+"code": "2430",
+"office": "Office of Manufacturing",
+"title": "MILLWOOD, VENEER, PLYWOOD, & STRUCTURAL WOOD MEMBERS",
+"zh": "合板、單板與結構木材",
+"division": "D"
+},
+{
+"code": "2451",
+"office": "Office of Manufacturing",
+"title": "MOBILE HOMES",
+"zh": "活動房屋",
+"division": "D"
+},
+{
+"code": "2452",
+"office": "Office of Manufacturing",
+"title": "PREFABRICATED WOOD BLDGS & COMPONENTS",
+"zh": "預製木構建築",
+"division": "D"
+},
+{
+"code": "2510",
+"office": "Office of Manufacturing",
+"title": "HOUSEHOLD FURNITURE",
+"zh": "家用家具",
+"division": "D"
+},
+{
+"code": "2511",
+"office": "Office of Manufacturing",
+"title": "WOOD HOUSEHOLD FURNITURE, (NO UPHOLSTERED)",
+"zh": "木製家用家具",
+"division": "D"
+},
+{
+"code": "2520",
+"office": "Office of Manufacturing",
+"title": "OFFICE FURNITURE",
+"zh": "辦公家具",
+"division": "D"
+},
+{
+"code": "2522",
+"office": "Office of Manufacturing",
+"title": "OFFICE FURNITURE (NO WOOD)",
+"zh": "非木製辦公家具",
+"division": "D"
+},
+{
+"code": "2531",
+"office": "Office of Manufacturing",
+"title": "PUBLIC BLDG & RELATED FURNITURE",
+"zh": "公共建築家具",
+"division": "D"
+},
+{
+"code": "2540",
+"office": "Office of Manufacturing",
+"title": "PARTITIONS, SHELVG, LOCKERS, & OFFICE & STORE FIXTURES",
+"zh": "隔間、貨架與店用裝置",
+"division": "D"
+},
+{
+"code": "2590",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS FURNITURE & FIXTURES",
+"zh": "其他家具與裝置",
+"division": "D"
+},
+{
+"code": "2600",
+"office": "Office of Manufacturing",
+"title": "PAPERS & ALLIED PRODUCTS",
+"zh": "紙與紙製品",
+"division": "D"
+},
+{
+"code": "2611",
+"office": "Office of Manufacturing",
+"title": "PULP MILLS",
+"zh": "紙漿廠",
+"division": "D"
+},
+{
+"code": "2621",
+"office": "Office of Manufacturing",
+"title": "PAPER MILLS",
+"zh": "造紙廠",
+"division": "D"
+},
+{
+"code": "2631",
+"office": "Office of Manufacturing",
+"title": "PAPERBOARD MILLS",
+"zh": "紙板廠",
+"division": "D"
+},
+{
+"code": "2650",
+"office": "Office of Manufacturing",
+"title": "PAPERBOARD CONTAINERS & BOXES",
+"zh": "紙板容器與紙箱",
+"division": "D"
+},
+{
+"code": "2670",
+"office": "Office of Manufacturing",
+"title": "CONVERTED PAPER & PAPERBOARD PRODS (NO CONTANERS/BOXES)",
+"zh": "加工紙與紙板製品",
+"division": "D"
+},
+{
+"code": "2673",
+"office": "Office of Manufacturing",
+"title": "PLASTICS, FOIL & COATED PAPER BAGS",
+"zh": "塑膠、鋁箔與塗布紙袋",
+"division": "D"
+},
+{
+"code": "2711",
+"office": "Office of Manufacturing",
+"title": "NEWSPAPERS: PUBLISHING OR PUBLISHING & PRINTING",
+"zh": "報紙出版",
+"division": "D"
+},
+{
+"code": "2721",
+"office": "Office of Manufacturing",
+"title": "PERIODICALS: PUBLISHING OR PUBLISHING & PRINTING",
+"zh": "期刊出版",
+"division": "D"
+},
+{
+"code": "2731",
+"office": "Office of Manufacturing",
+"title": "BOOKS: PUBLISHING OR PUBLISHING & PRINTING",
+"zh": "圖書出版",
+"division": "D"
+},
+{
+"code": "2732",
+"office": "Office of Manufacturing",
+"title": "BOOK PRINTING",
+"zh": "圖書印刷",
+"division": "D"
+},
+{
+"code": "2741",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS PUBLISHING",
+"zh": "其他出版",
+"division": "D"
+},
+{
+"code": "2750",
+"office": "Office of Manufacturing",
+"title": "COMMERCIAL PRINTING",
+"zh": "商業印刷",
+"division": "D"
+},
+{
+"code": "2761",
+"office": "Office of Manufacturing",
+"title": "MANIFOLD BUSINESS FORMS",
+"zh": "商業表單",
+"division": "D"
+},
+{
+"code": "2771",
+"office": "Office of Manufacturing",
+"title": "GREETING CARDS",
+"zh": "賀卡",
+"division": "D"
+},
+{
+"code": "2780",
+"office": "Office of Manufacturing",
+"title": "BLANKBOOKS, LOOSELEAF BINDERS & BOOKBINDG & RELATD WORK",
+"zh": "簿冊與裝訂",
+"division": "D"
+},
+{
+"code": "2790",
+"office": "Office of Manufacturing",
+"title": "SERVICE INDUSTRIES FOR THE PRINTING TRADE",
+"zh": "印刷業相關服務",
+"division": "D"
+},
+{
+"code": "2800",
+"office": "Industrial Applications and Services",
+"title": "CHEMICALS & ALLIED PRODUCTS",
+"zh": "化學品及相關產品",
+"division": "D"
+},
+{
+"code": "2810",
+"office": "Industrial Applications and Services",
+"title": "INDUSTRIAL INORGANIC CHEMICALS",
+"zh": "工業無機化學品",
+"division": "D"
+},
+{
+"code": "2820",
+"office": "Industrial Applications and Services",
+"title": "PLASTIC MATERIAL, SYNTH RESIN/RUBBER, CELLULOS (NO GLASS)",
+"zh": "塑膠原料、合成樹脂與橡膠",
+"division": "D"
+},
+{
+"code": "2821",
+"office": "Industrial Applications and Services",
+"title": "PLASTIC MATERIALS, SYNTH RESINS & NONVULCAN ELASTOMERS",
+"zh": "塑膠原料與合成樹脂",
+"division": "D"
+},
+{
+"code": "2833",
+"office": "Office of Life Sciences",
+"title": "MEDICINAL CHEMICALS & BOTANICAL PRODUCTS",
+"zh": "藥用化學品與植物製品",
+"division": "D"
+},
+{
+"code": "2834",
+"office": "Office of Life Sciences",
+"title": "PHARMACEUTICAL PREPARATIONS",
+"zh": "藥品製劑",
+"division": "D"
+},
+{
+"code": "2835",
+"office": "Office of Life Sciences",
+"title": "IN VITRO & IN VIVO DIAGNOSTIC SUBSTANCES",
+"zh": "體外與體內診斷試劑",
+"division": "D"
+},
+{
+"code": "2836",
+"office": "Office of Life Sciences",
+"title": "BIOLOGICAL PRODUCTS, (NO DIAGNOSTIC SUBSTANCES)",
+"zh": "生物製劑（不含診斷）",
+"division": "D"
+},
+{
+"code": "2840",
+"office": "Industrial Applications and Services",
+"title": "SOAP, DETERGENTS, CLEANG PREPARATIONS, PERFUMES, COSMETICS",
+"zh": "肥皂、清潔劑、香水與化妝品",
+"division": "D"
+},
+{
+"code": "2842",
+"office": "Industrial Applications and Services",
+"title": "SPECIALTY CLEANING, POLISHING AND SANITATION PREPARATIONS",
+"zh": "特殊清潔與拋光製劑",
+"division": "D"
+},
+{
+"code": "2844",
+"office": "Industrial Applications and Services",
+"title": "PERFUMES, COSMETICS & OTHER TOILET PREPARATIONS",
+"zh": "香水、化妝品與盥洗用品",
+"division": "D"
+},
+{
+"code": "2851",
+"office": "Industrial Applications and Services",
+"title": "PAINTS, VARNISHES, LACQUERS, ENAMELS & ALLIED PRODS",
+"zh": "油漆、清漆與塗料",
+"division": "D"
+},
+{
+"code": "2860",
+"office": "Industrial Applications and Services",
+"title": "INDUSTRIAL ORGANIC CHEMICALS",
+"zh": "工業有機化學品",
+"division": "D"
+},
+{
+"code": "2870",
+"office": "Industrial Applications and Services",
+"title": "AGRICULTURAL CHEMICALS",
+"zh": "農業化學品",
+"division": "D"
+},
+{
+"code": "2890",
+"office": "Industrial Applications and Services",
+"title": "MISCELLANEOUS CHEMICAL PRODUCTS",
+"zh": "其他化學產品",
+"division": "D"
+},
+{
+"code": "2891",
+"office": "Industrial Applications and Services",
+"title": "ADHESIVES & SEALANTS",
+"zh": "黏著劑與密封劑",
+"division": "D"
+},
+{
+"code": "2911",
+"office": "Office of Energy & Transportation",
+"title": "PETROLEUM REFINING",
+"zh": "石油煉製",
+"division": "D"
+},
+{
+"code": "2950",
+"office": "Office of Energy & Transportation",
+"title": "ASPHALT PAVING & ROOFING MATERIALS",
+"zh": "瀝青鋪面與屋頂材料",
+"division": "D"
+},
+{
+"code": "2990",
+"office": "Office of Energy & Transportation",
+"title": "MISCELLANEOUS PRODUCTS OF PETROLEUM & COAL",
+"zh": "其他石油與煤製品",
+"division": "D"
+},
+{
+"code": "3011",
+"office": "Office of Manufacturing",
+"title": "TIRES & INNER TUBES",
+"zh": "輪胎與內胎",
+"division": "D"
+},
+{
+"code": "3021",
+"office": "Office of Manufacturing",
+"title": "RUBBER & PLASTICS FOOTWEAR",
+"zh": "橡膠與塑膠鞋",
+"division": "D"
+},
+{
+"code": "3050",
+"office": "Office of Manufacturing",
+"title": "GASKETS, PACKG & SEALG DEVICES & RUBBER & PLASTICS HOSE",
+"zh": "墊片、密封件與橡塑軟管",
+"division": "D"
+},
+{
+"code": "3060",
+"office": "Office of Manufacturing",
+"title": "FABRICATED RUBBER PRODUCTS, NEC",
+"zh": "其他橡膠製品",
+"division": "D"
+},
+{
+"code": "3080",
+"office": "Industrial Applications and Services",
+"title": "MISCELLANEOUS PLASTICS PRODUCTS",
+"zh": "其他塑膠製品",
+"division": "D"
+},
+{
+"code": "3081",
+"office": "Industrial Applications and Services",
+"title": "UNSUPPORTED PLASTICS FILM & SHEET",
+"zh": "塑膠薄膜與板材",
+"division": "D"
+},
+{
+"code": "3086",
+"office": "Industrial Applications and Services",
+"title": "PLASTICS FOAM PRODUCTS",
+"zh": "塑膠發泡製品",
+"division": "D"
+},
+{
+"code": "3089",
+"office": "Industrial Applications and Services",
+"title": "PLASTICS PRODUCTS, NEC",
+"zh": "其他塑膠產品",
+"division": "D"
+},
+{
+"code": "3100",
+"office": "Office of Manufacturing",
+"title": "LEATHER & LEATHER PRODUCTS",
+"zh": "皮革與皮革製品",
+"division": "D"
+},
+{
+"code": "3140",
+"office": "Office of Manufacturing",
+"title": "FOOTWEAR, (NO RUBBER)",
+"zh": "鞋類（不含橡膠）",
+"division": "D"
+},
+{
+"code": "3211",
+"office": "Office of Manufacturing",
+"title": "FLAT GLASS",
+"zh": "平板玻璃",
+"division": "D"
+},
+{
+"code": "3220",
+"office": "Office of Manufacturing",
+"title": "GLASS & GLASSWARE, PRESSED OR BLOWN",
+"zh": "玻璃與玻璃器皿",
+"division": "D"
+},
+{
+"code": "3221",
+"office": "Office of Manufacturing",
+"title": "GLASS CONTAINERS",
+"zh": "玻璃容器",
+"division": "D"
+},
+{
+"code": "3231",
+"office": "Office of Manufacturing",
+"title": "GLASS PRODUCTS, MADE OF PURCHASED GLASS",
+"zh": "加工玻璃製品",
+"division": "D"
+},
+{
+"code": "3241",
+"office": "Office of Manufacturing",
+"title": "CEMENT, HYDRAULIC",
+"zh": "水泥",
+"division": "D"
+},
+{
+"code": "3250",
+"office": "Office of Manufacturing",
+"title": "STRUCTURAL CLAY PRODUCTS",
+"zh": "結構黏土製品",
+"division": "D"
+},
+{
+"code": "3260",
+"office": "Office of Manufacturing",
+"title": "POTTERY & RELATED PRODUCTS",
+"zh": "陶瓷製品",
+"division": "D"
+},
+{
+"code": "3270",
+"office": "Office of Manufacturing",
+"title": "CONCRETE, GYPSUM & PLASTER PRODUCTS",
+"zh": "混凝土、石膏與灰泥製品",
+"division": "D"
+},
+{
+"code": "3272",
+"office": "Office of Manufacturing",
+"title": "CONCRETE PRODUCTS, EXCEPT BLOCK & BRICK",
+"zh": "混凝土製品",
+"division": "D"
+},
+{
+"code": "3281",
+"office": "Office of Manufacturing",
+"title": "CUT STONE & STONE PRODUCTS",
+"zh": "石材製品",
+"division": "D"
+},
+{
+"code": "3290",
+"office": "Office of Manufacturing",
+"title": "ABRASIVE, ASBESTOS & MISC NONMETALLIC MINERAL PRODS",
+"zh": "研磨材、石棉與其他非金屬礦物製品",
+"division": "D"
+},
+{
+"code": "3310",
+"office": "Office of Manufacturing",
+"title": "STEEL WORKS, BLAST FURNACES & ROLLING & FINISHING MILLS",
+"zh": "鋼鐵廠、高爐與軋延",
+"division": "D"
+},
+{
+"code": "3312",
+"office": "Office of Manufacturing",
+"title": "STEEL WORKS, BLAST FURNACES & ROLLING MILLS (COKE OVENS)",
+"zh": "鋼鐵廠與軋鋼廠（含焦爐）",
+"division": "D"
+},
+{
+"code": "3317",
+"office": "Office of Manufacturing",
+"title": "STEEL PIPE & TUBES",
+"zh": "鋼管",
+"division": "D"
+},
+{
+"code": "3320",
+"office": "Office of Manufacturing",
+"title": "IRON & STEEL FOUNDRIES",
+"zh": "鋼鐵鑄造",
+"division": "D"
+},
+{
+"code": "3330",
+"office": "Office of Manufacturing",
+"title": "PRIMARY SMELTING & REFINING OF NONFERROUS METALS",
+"zh": "非鐵金屬冶煉",
+"division": "D"
+},
+{
+"code": "3334",
+"office": "Office of Manufacturing",
+"title": "PRIMARY PRODUCTION OF ALUMINUM",
+"zh": "鋁初級生產",
+"division": "D"
+},
+{
+"code": "3341",
+"office": "Office of Manufacturing",
+"title": "SECONDARY SMELTING & REFINING OF NONFERROUS METALS",
+"zh": "非鐵金屬二次冶煉",
+"division": "D"
+},
+{
+"code": "3350",
+"office": "Office of Manufacturing",
+"title": "ROLLING DRAWING & EXTRUDING OF NONFERROUS METALS",
+"zh": "非鐵金屬軋延與擠型",
+"division": "D"
+},
+{
+"code": "3357",
+"office": "Office of Manufacturing",
+"title": "DRAWING & INSULATING OF NONFERROUS WIRE",
+"zh": "非鐵金屬線材",
+"division": "D"
+},
+{
+"code": "3360",
+"office": "Office of Manufacturing",
+"title": "NONFERROUS FOUNDRIES (CASTINGS)",
+"zh": "非鐵金屬鑄造",
+"division": "D"
+},
+{
+"code": "3390",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS PRIMARY METAL PRODUCTS",
+"zh": "其他初級金屬產品",
+"division": "D"
+},
+{
+"code": "3411",
+"office": "Office of Manufacturing",
+"title": "METAL CANS",
+"zh": "金屬罐",
+"division": "D"
+},
+{
+"code": "3412",
+"office": "Office of Manufacturing",
+"title": "METAL SHIPPING BARRELS, DRUMS, KEGS & PAILS",
+"zh": "金屬桶",
+"division": "D"
+},
+{
+"code": "3420",
+"office": "Office of Manufacturing",
+"title": "CUTLERY, HANDTOOLS & GENERAL HARDWARE",
+"zh": "刀具、手工具與五金",
+"division": "D"
+},
+{
+"code": "3430",
+"office": "Office of Manufacturing",
+"title": "HEATING EQUIP, EXCEPT ELEC & WARM AIR; & PLUMBING FIXTURES",
+"zh": "暖氣設備與衛浴設備",
+"division": "D"
+},
+{
+"code": "3433",
+"office": "Office of Manufacturing",
+"title": "HEATING EQUIPMENT, EXCEPT ELECTRIC & WARM AIR FURNACES",
+"zh": "暖氣設備（非電氣）",
+"division": "D"
+},
+{
+"code": "3440",
+"office": "Office of Manufacturing",
+"title": "FABRICATED STRUCTURAL METAL PRODUCTS",
+"zh": "金屬結構製品",
+"division": "D"
+},
+{
+"code": "3442",
+"office": "Office of Manufacturing",
+"title": "METAL DOORS, SASH, FRAMES, MOLDINGS & TRIM",
+"zh": "金屬門窗框",
+"division": "D"
+},
+{
+"code": "3443",
+"office": "Office of Manufacturing",
+"title": "FABRICATED PLATE WORK (BOILER SHOPS)",
+"zh": "金屬板加工（鍋爐）",
+"division": "D"
+},
+{
+"code": "3444",
+"office": "Office of Manufacturing",
+"title": "SHEET METAL WORK",
+"zh": "鈑金加工",
+"division": "D"
+},
+{
+"code": "3448",
+"office": "Office of Manufacturing",
+"title": "PREFABRICATED METAL BUILDINGS & COMPONENTS",
+"zh": "預製金屬建築",
+"division": "D"
+},
+{
+"code": "3451",
+"office": "Office of Manufacturing",
+"title": "SCREW MACHINE PRODUCTS",
+"zh": "螺絲機械製品",
+"division": "D"
+},
+{
+"code": "3452",
+"office": "Office of Manufacturing",
+"title": "BOLTS, NUTS, SCREWS, RIVETS & WASHERS",
+"zh": "螺栓、螺帽與鉚釘",
+"division": "D"
+},
+{
+"code": "3460",
+"office": "Office of Manufacturing",
+"title": "METAL FORGINGS & STAMPINGS",
+"zh": "金屬鍛造與衝壓",
+"division": "D"
+},
+{
+"code": "3470",
+"office": "Office of Manufacturing",
+"title": "COATING, ENGRAVING & ALLIED SERVICES",
+"zh": "塗層、雕刻與相關服務",
+"division": "D"
+},
+{
+"code": "3480",
+"office": "Office of Manufacturing",
+"title": "ORDNANCE & ACCESSORIES, (NO VEHICLES/GUIDED MISSILES)",
+"zh": "軍械與配件",
+"division": "D"
+},
+{
+"code": "3490",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS FABRICATED METAL PRODUCTS",
+"zh": "其他金屬製品",
+"division": "D"
+},
+{
+"code": "3510",
+"office": "Office of Technology",
+"title": "ENGINES & TURBINES",
+"zh": "引擎與渦輪機",
+"division": "D"
+},
+{
+"code": "3523",
+"office": "Office of Technology",
+"title": "FARM MACHINERY & EQUIPMENT",
+"zh": "農業機械",
+"division": "D"
+},
+{
+"code": "3524",
+"office": "Office of Technology",
+"title": "LAWN & GARDEN TRACTORS & HOME LAWN & GARDENS EQUIP",
+"zh": "草坪與園藝機具",
+"division": "D"
+},
+{
+"code": "3530",
+"office": "Office of Technology",
+"title": "CONSTRUCTION, MINING & MATERIALS HANDLING MACHINERY & EQUIP",
+"zh": "營建、採礦與物料搬運機械",
+"division": "D"
+},
+{
+"code": "3531",
+"office": "Office of Technology",
+"title": "CONSTRUCTION MACHINERY & EQUIP",
+"zh": "營建機械",
+"division": "D"
+},
+{
+"code": "3532",
+"office": "Office of Technology",
+"title": "MINING MACHINERY & EQUIP (NO OIL & GAS FIELD MACH & EQUIP)",
+"zh": "採礦機械",
+"division": "D"
+},
+{
+"code": "3533",
+"office": "Office of Energy & Transportation",
+"title": "OIL & GAS FIELD MACHINERY & EQUIPMENT",
+"zh": "油氣田機械",
+"division": "D"
+},
+{
+"code": "3537",
+"office": "Office of Technology",
+"title": "INDUSTRIAL TRUCKS, TRACTORS, TRAILORS & STACKERS",
+"zh": "工業車輛與堆高機",
+"division": "D"
+},
+{
+"code": "3540",
+"office": "Office of Technology",
+"title": "METALWORKG MACHINERY & EQUIPMENT",
+"zh": "金屬加工機械",
+"division": "D"
+},
+{
+"code": "3541",
+"office": "Office of Technology",
+"title": "MACHINE TOOLS, METAL CUTTING TYPES",
+"zh": "金屬切削工具機",
+"division": "D"
+},
+{
+"code": "3550",
+"office": "Office of Technology",
+"title": "SPECIAL INDUSTRY MACHINERY (NO METALWORKING MACHINERY)",
+"zh": "特殊產業機械",
+"division": "D"
+},
+{
+"code": "3555",
+"office": "Office of Technology",
+"title": "PRINTING TRADES MACHINERY & EQUIPMENT",
+"zh": "印刷機械",
+"division": "D"
+},
+{
+"code": "3559",
+"office": "Office of Technology",
+"title": "SPECIAL INDUSTRY MACHINERY, NEC",
+"zh": "其他特殊產業機械",
+"division": "D"
+},
+{
+"code": "3560",
+"office": "Office of Technology",
+"title": "GENERAL INDUSTRIAL MACHINERY & EQUIPMENT",
+"zh": "一般工業機械",
+"division": "D"
+},
+{
+"code": "3561",
+"office": "Office of Technology",
+"title": "PUMPS & PUMPING EQUIPMENT",
+"zh": "泵浦",
+"division": "D"
+},
+{
+"code": "3562",
+"office": "Office of Technology",
+"title": "BALL & ROLLER BEARINGS",
+"zh": "滾珠與滾柱軸承",
+"division": "D"
+},
+{
+"code": "3564",
+"office": "Office of Technology",
+"title": "INDUSTRIAL & COMMERCIAL FANS & BLOWERS & AIR PURIFING EQUIP",
+"zh": "工業風扇與空氣淨化設備",
+"division": "D"
+},
+{
+"code": "3567",
+"office": "Office of Technology",
+"title": "INDUSTRIAL PROCESS FURNACES & OVENS",
+"zh": "工業爐",
+"division": "D"
+},
+{
+"code": "3569",
+"office": "Office of Technology",
+"title": "GENERAL INDUSTRIAL MACHINERY & EQUIPMENT, NEC",
+"zh": "其他一般工業機械",
+"division": "D"
+},
+{
+"code": "3570",
+"office": "Office of Technology",
+"title": "COMPUTER & OFFICE EQUIPMENT",
+"zh": "電腦與辦公設備",
+"division": "D"
+},
+{
+"code": "3571",
+"office": "Office of Technology",
+"title": "ELECTRONIC COMPUTERS",
+"zh": "電子計算機（電腦）",
+"division": "D"
+},
+{
+"code": "3572",
+"office": "Office of Technology",
+"title": "COMPUTER STORAGE DEVICES",
+"zh": "電腦儲存裝置",
+"division": "D"
+},
+{
+"code": "3575",
+"office": "Office of Technology",
+"title": "COMPUTER TERMINALS",
+"zh": "電腦終端機",
+"division": "D"
+},
+{
+"code": "3576",
+"office": "Office of Technology",
+"title": "COMPUTER COMMUNICATIONS EQUIPMENT",
+"zh": "電腦通訊設備",
+"division": "D"
+},
+{
+"code": "3577",
+"office": "Office of Technology",
+"title": "COMPUTER PERIPHERAL EQUIPMENT, NEC",
+"zh": "其他電腦周邊",
+"division": "D"
+},
+{
+"code": "3578",
+"office": "Office of Technology",
+"title": "CALCULATING & ACCOUNTING MACHINES (NO ELECTRONIC COMPUTERS)",
+"zh": "計算與會計機器",
+"division": "D"
+},
+{
+"code": "3579",
+"office": "Office of Technology",
+"title": "OFFICE MACHINES, NEC",
+"zh": "其他辦公機器",
+"division": "D"
+},
+{
+"code": "3580",
+"office": "Office of Technology",
+"title": "REFRIGERATION & SERVICE INDUSTRY MACHINERY",
+"zh": "冷凍與服務業機械",
+"division": "D"
+},
+{
+"code": "3585",
+"office": "Office of Technology",
+"title": "AIR-COND & WARM AIR HEATG EQUIP & COMM & INDL REFRIG EQUIP",
+"zh": "空調、暖氣與商用冷凍設備",
+"division": "D"
+},
+{
+"code": "3590",
+"office": "Office of Technology",
+"title": "MISC INDUSTRIAL & COMMERCIAL MACHINERY & EQUIPMENT",
+"zh": "其他工業與商業機械",
+"division": "D"
+},
+{
+"code": "3600",
+"office": "Office of Manufacturing",
+"title": "ELECTRONIC & OTHER ELECTRICAL EQUIPMENT (NO COMPUTER EQUIP)",
+"zh": "電子與其他電機設備（不含電腦）",
+"division": "D"
+},
+{
+"code": "3612",
+"office": "Office of Manufacturing",
+"title": "POWER, DISTRIBUTION & SPECIALTY TRANSFORMERS",
+"zh": "變壓器",
+"division": "D"
+},
+{
+"code": "3613",
+"office": "Office of Manufacturing",
+"title": "SWITCHGEAR & SWITCHBOARD APPARATUS",
+"zh": "開關與配電設備",
+"division": "D"
+},
+{
+"code": "3620",
+"office": "Office of Manufacturing",
+"title": "ELECTRICAL INDUSTRIAL APPARATUS",
+"zh": "工業用電機設備",
+"division": "D"
+},
+{
+"code": "3621",
+"office": "Office of Manufacturing",
+"title": "MOTORS & GENERATORS",
+"zh": "馬達與發電機",
+"division": "D"
+},
+{
+"code": "3630",
+"office": "Office of Manufacturing",
+"title": "HOUSEHOLD APPLIANCES",
+"zh": "家用電器",
+"division": "D"
+},
+{
+"code": "3634",
+"office": "Office of Manufacturing",
+"title": "ELECTRIC HOUSEWARES & FANS",
+"zh": "小家電與風扇",
+"division": "D"
+},
+{
+"code": "3640",
+"office": "Office of Manufacturing",
+"title": "ELECTRIC LIGHTING & WIRING EQUIPMENT",
+"zh": "照明與配線設備",
+"division": "D"
+},
+{
+"code": "3651",
+"office": "Office of Manufacturing",
+"title": "HOUSEHOLD AUDIO & VIDEO EQUIPMENT",
+"zh": "家用視聽設備",
+"division": "D"
+},
+{
+"code": "3652",
+"office": "Office of Manufacturing",
+"title": "PHONOGRAPH RECORDS & PRERECORDED AUDIO TAPES & DISKS",
+"zh": "唱片與預錄音帶",
+"division": "D"
+},
+{
+"code": "3661",
+"office": "Office of Manufacturing",
+"title": "TELEPHONE & TELEGRAPH APPARATUS",
+"zh": "電話與電報設備",
+"division": "D"
+},
+{
+"code": "3663",
+"office": "Office of Manufacturing",
+"title": "RADIO & TV BROADCASTING & COMMUNICATIONS EQUIPMENT",
+"zh": "廣播與通訊設備",
+"division": "D"
+},
+{
+"code": "3669",
+"office": "Office of Manufacturing",
+"title": "COMMUNICATIONS EQUIPMENT, NEC",
+"zh": "其他通訊設備",
+"division": "D"
+},
+{
+"code": "3670",
+"office": "Office of Manufacturing",
+"title": "ELECTRONIC COMPONENTS & ACCESSORIES",
+"zh": "電子零組件",
+"division": "D"
+},
+{
+"code": "3672",
+"office": "Office of Manufacturing",
+"title": "PRINTED CIRCUIT BOARDS",
+"zh": "印刷電路板",
+"division": "D"
+},
+{
+"code": "3674",
+"office": "Office of Manufacturing",
+"title": "SEMICONDUCTORS & RELATED DEVICES",
+"zh": "半導體及相關元件",
+"division": "D"
+},
+{
+"code": "3677",
+"office": "Office of Manufacturing",
+"title": "ELECTRONIC COILS, TRANSFORMERS & OTHER INDUCTORS",
+"zh": "電子線圈與變壓器",
+"division": "D"
+},
+{
+"code": "3678",
+"office": "Office of Manufacturing",
+"title": "ELECTRONIC CONNECTORS",
+"zh": "電子連接器",
+"division": "D"
+},
+{
+"code": "3679",
+"office": "Office of Manufacturing",
+"title": "ELECTRONIC COMPONENTS, NEC",
+"zh": "其他電子零組件",
+"division": "D"
+},
+{
+"code": "3690",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS ELECTRICAL MACHINERY, EQUIPMENT & SUPPLIES",
+"zh": "其他電機設備",
+"division": "D"
+},
+{
+"code": "3695",
+"office": "Office of Manufacturing",
+"title": "MAGNETIC & OPTICAL RECORDING MEDIA",
+"zh": "磁性與光學記錄媒體",
+"division": "D"
+},
+{
+"code": "3711",
+"office": "Office of Manufacturing",
+"title": "MOTOR VEHICLES & PASSENGER CAR BODIES",
+"zh": "汽車與車身",
+"division": "D"
+},
+{
+"code": "3713",
+"office": "Office of Manufacturing",
+"title": "TRUCK & BUS BODIES",
+"zh": "卡車與巴士車身",
+"division": "D"
+},
+{
+"code": "3714",
+"office": "Office of Manufacturing",
+"title": "MOTOR VEHICLE PARTS & ACCESSORIES",
+"zh": "汽車零組件",
+"division": "D"
+},
+{
+"code": "3715",
+"office": "Office of Manufacturing",
+"title": "TRUCK TRAILERS",
+"zh": "卡車拖車",
+"division": "D"
+},
+{
+"code": "3716",
+"office": "Office of Manufacturing",
+"title": "MOTOR HOMES",
+"zh": "露營車",
+"division": "D"
+},
+{
+"code": "3720",
+"office": "Office of Manufacturing",
+"title": "AIRCRAFT & PARTS",
+"zh": "航空器與零件",
+"division": "D"
+},
+{
+"code": "3721",
+"office": "Office of Manufacturing",
+"title": "AIRCRAFT",
+"zh": "航空器",
+"division": "D"
+},
+{
+"code": "3724",
+"office": "Office of Manufacturing",
+"title": "AIRCRAFT ENGINES & ENGINE PARTS",
+"zh": "航空引擎",
+"division": "D"
+},
+{
+"code": "3728",
+"office": "Office of Manufacturing",
+"title": "AIRCRAFT PARTS & AUXILIARY EQUIPMENT, NEC",
+"zh": "其他航空器零件",
+"division": "D"
+},
+{
+"code": "3730",
+"office": "Office of Manufacturing",
+"title": "SHIP & BOAT BUILDING & REPAIRING",
+"zh": "造船與修船",
+"division": "D"
+},
+{
+"code": "3743",
+"office": "Office of Manufacturing",
+"title": "RAILROAD EQUIPMENT",
+"zh": "鐵路設備",
+"division": "D"
+},
+{
+"code": "3751",
+"office": "Office of Manufacturing",
+"title": "MOTORCYCLES, BICYCLES & PARTS",
+"zh": "機車與自行車",
+"division": "D"
+},
+{
+"code": "3760",
+"office": "Office of Manufacturing",
+"title": "GUIDED MISSILES & SPACE VEHICLES & PARTS",
+"zh": "導彈與太空載具",
+"division": "D"
+},
+{
+"code": "3790",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS TRANSPORTATION EQUIPMENT",
+"zh": "其他運輸設備",
+"division": "D"
+},
+{
+"code": "3812",
+"office": "Office of Manufacturing",
+"title": "SEARCH, DETECTION, NAVAGATION, GUIDANCE, AERONAUTICAL SYS",
+"zh": "搜索、偵測、導航與航空系統",
+"division": "D"
+},
+{
+"code": "3821",
+"office": "Industrial Applications and Services",
+"title": "LABORATORY APPARATUS & FURNITURE",
+"zh": "實驗室設備",
+"division": "D"
+},
+{
+"code": "3822",
+"office": "Industrial Applications and Services",
+"title": "AUTO CONTROLS FOR REGULATING RESIDENTIAL & COMML ENVIRONMENTS",
+"zh": "環境自動控制",
+"division": "D"
+},
+{
+"code": "3823",
+"office": "Industrial Applications and Services",
+"title": "INDUSTRIAL INSTRUMENTS FOR MEASUREMENT, DISPLAY, AND CONTROL",
+"zh": "工業量測與控制儀器",
+"division": "D"
+},
+{
+"code": "3824",
+"office": "Industrial Applications and Services",
+"title": "TOTALIZING FLUID METERS & COUNTING DEVICES",
+"zh": "流量計與計數裝置",
+"division": "D"
+},
+{
+"code": "3825",
+"office": "Industrial Applications and Services",
+"title": "INSTRUMENTS FOR MEAS & TESTING OF ELECTRICITY & ELEC SIGNALS",
+"zh": "電力與電子訊號量測儀器",
+"division": "D"
+},
+{
+"code": "3826",
+"office": "Industrial Applications and Services",
+"title": "LABORATORY ANALYTICAL INSTRUMENTS",
+"zh": "實驗室分析儀器",
+"division": "D"
+},
+{
+"code": "3827",
+"office": "Industrial Applications and Services",
+"title": "OPTICAL INSTRUMENTS & LENSES",
+"zh": "光學儀器與鏡片",
+"division": "D"
+},
+{
+"code": "3829",
+"office": "Industrial Applications and Services",
+"title": "MEASURING & CONTROLLING DEVICES, NEC",
+"zh": "其他量測與控制裝置",
+"division": "D"
+},
+{
+"code": "3841",
+"office": "Industrial Applications and Services",
+"title": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS",
+"zh": "外科與醫療器械",
+"division": "D"
+},
+{
+"code": "3842",
+"office": "Industrial Applications and Services",
+"title": "ORTHOPEDIC, PROSTHETIC & SURGICAL APPLIANCES & SUPPLIES",
+"zh": "骨科、義肢與外科用品",
+"division": "D"
+},
+{
+"code": "3843",
+"office": "Industrial Applications and Services",
+"title": "DENTAL EQUIPMENT & SUPPLIES",
+"zh": "牙科設備",
+"division": "D"
+},
+{
+"code": "3844",
+"office": "Industrial Applications and Services",
+"title": "X-RAY APPARATUS & TUBES & RELATED IRRADIATION APPARATUS",
+"zh": "X 光設備",
+"division": "D"
+},
+{
+"code": "3845",
+"office": "Industrial Applications and Services",
+"title": "ELECTROMEDICAL & ELECTROTHERAPEUTIC APPARATUS",
+"zh": "電子醫療設備",
+"division": "D"
+},
+{
+"code": "3851",
+"office": "Industrial Applications and Services",
+"title": "OPHTHALMIC GOODS",
+"zh": "眼科用品",
+"division": "D"
+},
+{
+"code": "3861",
+"office": "Industrial Applications and Services",
+"title": "PHOTOGRAPHIC EQUIPMENT & SUPPLIES",
+"zh": "攝影設備",
+"division": "D"
+},
+{
+"code": "3873",
+"office": "Industrial Applications and Services",
+"title": "WATCHES, CLOCKS, CLOCKWORK OPERATED DEVICES/PARTS",
+"zh": "鐘錶",
+"division": "D"
+},
+{
+"code": "3910",
+"office": "Office of Manufacturing",
+"title": "JEWELRY, SILVERWARE & PLATED WARE",
+"zh": "珠寶與銀器",
+"division": "D"
+},
+{
+"code": "3911",
+"office": "Office of Manufacturing",
+"title": "JEWELRY, PRECIOUS METAL",
+"zh": "貴金屬珠寶",
+"division": "D"
+},
+{
+"code": "3931",
+"office": "Office of Manufacturing",
+"title": "MUSICAL INSTRUMENTS",
+"zh": "樂器",
+"division": "D"
+},
+{
+"code": "3942",
+"office": "Office of Manufacturing",
+"title": "DOLLS & STUFFED TOYS",
+"zh": "玩偶與填充玩具",
+"division": "D"
+},
+{
+"code": "3944",
+"office": "Office of Manufacturing",
+"title": "GAMES, TOYS & CHILDREN'S VEHICLES (NO DOLLS & BICYCLES)",
+"zh": "遊戲與玩具",
+"division": "D"
+},
+{
+"code": "3949",
+"office": "Office of Manufacturing",
+"title": "SPORTING & ATHLETIC GOODS, NEC",
+"zh": "運動用品",
+"division": "D"
+},
+{
+"code": "3950",
+"office": "Office of Manufacturing",
+"title": "PENS, PENCILS & OTHER ARTISTS' MATERIALS",
+"zh": "筆與美術用品",
+"division": "D"
+},
+{
+"code": "3960",
+"office": "Office of Manufacturing",
+"title": "COSTUME JEWELRY & NOVELTIES",
+"zh": "飾品",
+"division": "D"
+},
+{
+"code": "3990",
+"office": "Office of Manufacturing",
+"title": "MISCELLANEOUS MANUFACTURING INDUSTRIES",
+"zh": "其他製造業",
+"division": "D"
+},
+{
+"code": "4011",
+"office": "Office of Energy & Transportation",
+"title": "RAILROADS, LINE-HAUL OPERATING",
+"zh": "鐵路運輸",
+"division": "E"
+},
+{
+"code": "4013",
+"office": "Office of Energy & Transportation",
+"title": "RAILROAD SWITCHING & TERMINAL ESTABLISHMENTS",
+"zh": "鐵路調度與場站",
+"division": "E"
+},
+{
+"code": "4100",
+"office": "Office of Energy & Transportation",
+"title": "LOCAL & SUBURBAN TRANSIT & INTERURBAN HWY PASSENGER TRANS",
+"zh": "公路客運",
+"division": "E"
+},
+{
+"code": "4210",
+"office": "Office of Energy & Transportation",
+"title": "TRUCKING & COURIER SERVICES (NO AIR)",
+"zh": "貨運與快遞（非空運）",
+"division": "E"
+},
+{
+"code": "4213",
+"office": "Office of Energy & Transportation",
+"title": "TRUCKING (NO LOCAL)",
+"zh": "長途貨運",
+"division": "E"
+},
+{
+"code": "4220",
+"office": "Office of Energy & Transportation",
+"title": "PUBLIC WAREHOUSING & STORAGE",
+"zh": "倉儲",
+"division": "E"
+},
+{
+"code": "4231",
+"office": "Office of Energy & Transportation",
+"title": "TERMINAL MAINTENANCE FACILITIES FOR MOTOR FREIGHT TRANSPORT",
+"zh": "貨運場站",
+"division": "E"
+},
+{
+"code": "4400",
+"office": "Office of Energy & Transportation",
+"title": "WATER TRANSPORTATION",
+"zh": "水上運輸",
+"division": "E"
+},
+{
+"code": "4412",
+"office": "Office of Energy & Transportation",
+"title": "DEEP SEA FOREIGN TRANSPORTATION OF FREIGHT",
+"zh": "遠洋貨運",
+"division": "E"
+},
+{
+"code": "4512",
+"office": "Office of Energy & Transportation",
+"title": "AIR TRANSPORTATION, SCHEDULED",
+"zh": "定期航空運輸",
+"division": "E"
+},
+{
+"code": "4513",
+"office": "Office of Energy & Transportation",
+"title": "AIR COURIER SERVICES",
+"zh": "航空快遞",
+"division": "E"
+},
+{
+"code": "4522",
+"office": "Office of Energy & Transportation",
+"title": "AIR TRANSPORTATION, NONSCHEDULED",
+"zh": "非定期航空運輸",
+"division": "E"
+},
+{
+"code": "4581",
+"office": "Office of Energy & Transportation",
+"title": "AIRPORTS, FLYING FIELDS & AIRPORT TERMINAL SERVICES",
+"zh": "機場與航站服務",
+"division": "E"
+},
+{
+"code": "4610",
+"office": "Office of Energy & Transportation",
+"title": "PIPE LINES (NO NATURAL GAS)",
+"zh": "管線運輸（非天然氣）",
+"division": "E"
+},
+{
+"code": "4700",
+"office": "Office of Energy & Transportation",
+"title": "TRANSPORTATION SERVICES",
+"zh": "運輸服務",
+"division": "E"
+},
+{
+"code": "4731",
+"office": "Office of Energy & Transportation",
+"title": "ARRANGEMENT OF TRANSPORTATION OF FREIGHT & CARGO",
+"zh": "貨運承攬",
+"division": "E"
+},
+{
+"code": "4812",
+"office": "Office of Technology",
+"title": "RADIOTELEPHONE COMMUNICATIONS",
+"zh": "無線電話通訊（行動通訊）",
+"division": "E"
+},
+{
+"code": "4813",
+"office": "Office of Technology",
+"title": "TELEPHONE COMMUNICATIONS (NO RADIOTELEPHONE)",
+"zh": "電話通訊",
+"division": "E"
+},
+{
+"code": "4822",
+"office": "Office of Technology",
+"title": "TELEGRAPH & OTHER MESSAGE COMMUNICATIONS",
+"zh": "電報與訊息通訊",
+"division": "E"
+},
+{
+"code": "4832",
+"office": "Office of Technology",
+"title": "RADIO BROADCASTING STATIONS",
+"zh": "廣播電台",
+"division": "E"
+},
+{
+"code": "4833",
+"office": "Office of Technology",
+"title": "TELEVISION BROADCASTING STATIONS",
+"zh": "電視台",
+"division": "E"
+},
+{
+"code": "4841",
+"office": "Office of Technology",
+"title": "CABLE & OTHER PAY TELEVISION SERVICES",
+"zh": "有線與付費電視",
+"division": "E"
+},
+{
+"code": "4899",
+"office": "Office of Technology",
+"title": "COMMUNICATIONS SERVICES, NEC",
+"zh": "其他通訊服務",
+"division": "E"
+},
+{
+"code": "4900",
+"office": "Office of Energy & Transportation",
+"title": "ELECTRIC, GAS & SANITARY SERVICES",
+"zh": "電力、瓦斯與衛生服務",
+"division": "E"
+},
+{
+"code": "4911",
+"office": "Office of Energy & Transportation",
+"title": "ELECTRIC SERVICES",
+"zh": "電力公司",
+"division": "E"
+},
+{
+"code": "4922",
+"office": "Office of Energy & Transportation",
+"title": "NATURAL GAS TRANSMISSION",
+"zh": "天然氣輸送",
+"division": "E"
+},
+{
+"code": "4923",
+"office": "Office of Energy & Transportation",
+"title": "NATURAL GAS TRANSMISISON & DISTRIBUTION",
+"zh": "天然氣輸送與配送",
+"division": "E"
+},
+{
+"code": "4924",
+"office": "Office of Energy & Transportation",
+"title": "NATURAL GAS DISTRIBUTION",
+"zh": "天然氣配送",
+"division": "E"
+},
+{
+"code": "4931",
+"office": "Office of Energy & Transportation",
+"title": "ELECTRIC & OTHER SERVICES COMBINED",
+"zh": "電力與其他綜合公用事業",
+"division": "E"
+},
+{
+"code": "4932",
+"office": "Office of Energy & Transportation",
+"title": "GAS & OTHER SERVICES COMBINED",
+"zh": "瓦斯與其他綜合公用事業",
+"division": "E"
+},
+{
+"code": "4941",
+"office": "Office of Energy & Transportation",
+"title": "WATER SUPPLY",
+"zh": "自來水",
+"division": "E"
+},
+{
+"code": "4950",
+"office": "Office of Energy & Transportation",
+"title": "SANITARY SERVICES",
+"zh": "衛生服務",
+"division": "E"
+},
+{
+"code": "4953",
+"office": "Office of Energy & Transportation",
+"title": "REFUSE SYSTEMS",
+"zh": "廢棄物處理",
+"division": "E"
+},
+{
+"code": "4955",
+"office": "Office of Energy & Transportation",
+"title": "HAZARDOUS WASTE MANAGEMENT",
+"zh": "有害廢棄物管理",
+"division": "E"
+},
+{
+"code": "4961",
+"office": "Office of Energy & Transportation",
+"title": "STEAM & AIR-CONDITIONING SUPPLY",
+"zh": "蒸汽與空調供應",
+"division": "E"
+},
+{
+"code": "4991",
+"office": "Office of Energy & Transportation",
+"title": "COGENERATION SERVICES & SMALL POWER PRODUCERS",
+"zh": "汽電共生與小型發電",
+"division": "E"
+},
+{
+"code": "5000",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-DURABLE GOODS",
+"zh": "批發－耐久財",
+"division": "F"
+},
+{
+"code": "5010",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-MOTOR VEHICLES & MOTOR VEHICLE PARTS & SUPPLIES",
+"zh": "批發－汽車與零件",
+"division": "F"
+},
+{
+"code": "5013",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-MOTOR VEHICLE SUPPLIES & NEW PARTS",
+"zh": "批發－汽車用品與新零件",
+"division": "F"
+},
+{
+"code": "5020",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-FURNITURE & HOME FURNISHINGS",
+"zh": "批發－家具與家飾",
+"division": "F"
+},
+{
+"code": "5030",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-LUMBER & OTHER CONSTRUCTION MATERIALS",
+"zh": "批發－木材與建材",
+"division": "F"
+},
+{
+"code": "5031",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-LUMBER, PLYWOOD, MILLWORK & WOOD PANELS",
+"zh": "批發－木材、合板",
+"division": "F"
+},
+{
+"code": "5040",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-PROFESSIONAL & COMMERCIAL EQUIPMENT & SUPPLIES",
+"zh": "批發－專業與商業設備",
+"division": "F"
+},
+{
+"code": "5045",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-COMPUTERS & PERIPHERAL EQUIPMENT & SOFTWARE",
+"zh": "批發－電腦、周邊與軟體",
+"division": "F"
+},
+{
+"code": "5047",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-MEDICAL, DENTAL & HOSPITAL EQUIPMENT & SUPPLIES",
+"zh": "批發－醫療與牙科設備",
+"division": "F"
+},
+{
+"code": "5050",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-METALS & MINERALS (NO PETROLEUM)",
+"zh": "批發－金屬與礦產",
+"division": "F"
+},
+{
+"code": "5051",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-METALS SERVICE CENTERS & OFFICES",
+"zh": "批發－金屬服務中心",
+"division": "F"
+},
+{
+"code": "5063",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-ELECTRICAL APPARATUS & EQUIPMENT, WIRING SUPPLIES",
+"zh": "批發－電氣設備與配線",
+"division": "F"
+},
+{
+"code": "5064",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-ELECTRICAL APPLIANCES, TV & RADIO SETS",
+"zh": "批發－電器與視聽",
+"division": "F"
+},
+{
+"code": "5065",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-ELECTRONIC PARTS & EQUIPMENT, NEC",
+"zh": "批發－電子零件",
+"division": "F"
+},
+{
+"code": "5070",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-HARDWARE & PLUMBING & HEATING EQUIPMENT & SUPPLIES",
+"zh": "批發－五金與水電暖設備",
+"division": "F"
+},
+{
+"code": "5072",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-HARDWARE",
+"zh": "批發－五金",
+"division": "F"
+},
+{
+"code": "5080",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-MACHINERY, EQUIPMENT & SUPPLIES",
+"zh": "批發－機械設備",
+"division": "F"
+},
+{
+"code": "5082",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-CONSTRUCTION & MINING (NO PETRO) MACHINERY & EQUIP",
+"zh": "批發－營建與採礦機械",
+"division": "F"
+},
+{
+"code": "5084",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-INDUSTRIAL MACHINERY & EQUIPMENT",
+"zh": "批發－工業機械",
+"division": "F"
+},
+{
+"code": "5090",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-MISC DURABLE GOODS",
+"zh": "批發－其他耐久財",
+"division": "F"
+},
+{
+"code": "5094",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-JEWELRY, WATCHES, PRECIOUS STONES & METALS",
+"zh": "批發－珠寶、鐘錶與貴金屬",
+"division": "F"
+},
+{
+"code": "5099",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-DURABLE GOODS, NEC",
+"zh": "批發－其他耐久財",
+"division": "F"
+},
+{
+"code": "5110",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-PAPER & PAPER PRODUCTS",
+"zh": "批發－紙製品",
+"division": "F"
+},
+{
+"code": "5122",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-DRUGS, PROPRIETARIES & DRUGGISTS' SUNDRIES",
+"zh": "批發－藥品",
+"division": "F"
+},
+{
+"code": "5130",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-APPAREL, PIECE GOODS & NOTIONS",
+"zh": "批發－服飾與布料",
+"division": "F"
+},
+{
+"code": "5140",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-GROCERIES & RELATED PRODUCTS",
+"zh": "批發－食品雜貨",
+"division": "F"
+},
+{
+"code": "5141",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-GROCERIES, GENERAL LINE",
+"zh": "批發－綜合食品雜貨",
+"division": "F"
+},
+{
+"code": "5150",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-FARM PRODUCT RAW MATERIALS",
+"zh": "批發－農產原料",
+"division": "F"
+},
+{
+"code": "5160",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-CHEMICALS & ALLIED PRODUCTS",
+"zh": "批發－化學品",
+"division": "F"
+},
+{
+"code": "5171",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-PETROLEUM BULK STATIONS & TERMINALS",
+"zh": "批發－石油儲運站",
+"division": "F"
+},
+{
+"code": "5172",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-PETROLEUM & PETROLEUM PRODUCTS (NO BULK STATIONS)",
+"zh": "批發－石油產品",
+"division": "F"
+},
+{
+"code": "5180",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-BEER, WINE & DISTILLED ALCOHOLIC BEVERAGES",
+"zh": "批發－酒類",
+"division": "F"
+},
+{
+"code": "5190",
+"office": "Office of Trade & Services",
+"title": "WHOLESALE-MISCELLANEOUS NONDURABLE GOODS",
+"zh": "批發－其他非耐久財",
+"division": "F"
+},
+{
+"code": "5200",
+"office": "Office of Trade & Services",
+"title": "RETAIL-BUILDING MATERIALS, HARDWARE, GARDEN SUPPLY",
+"zh": "零售－建材、五金與園藝",
+"division": "G"
+},
+{
+"code": "5211",
+"office": "Office of Trade & Services",
+"title": "RETAIL-LUMBER & OTHER BUILDING MATERIALS DEALERS",
+"zh": "零售－木材與建材",
+"division": "G"
+},
+{
+"code": "5271",
+"office": "Office of Trade & Services",
+"title": "RETAIL-MOBILE HOME DEALERS",
+"zh": "零售－活動房屋",
+"division": "G"
+},
+{
+"code": "5311",
+"office": "Office of Trade & Services",
+"title": "RETAIL-DEPARTMENT STORES",
+"zh": "零售－百貨公司",
+"division": "G"
+},
+{
+"code": "5331",
+"office": "Office of Trade & Services",
+"title": "RETAIL-VARIETY STORES",
+"zh": "零售－雜貨店",
+"division": "G"
+},
+{
+"code": "5399",
+"office": "Office of Trade & Services",
+"title": "RETAIL-MISC GENERAL MERCHANDISE STORES",
+"zh": "零售－其他綜合商品",
+"division": "G"
+},
+{
+"code": "5400",
+"office": "Office of Trade & Services",
+"title": "RETAIL-FOOD STORES",
+"zh": "零售－食品",
+"division": "G"
+},
+{
+"code": "5411",
+"office": "Office of Trade & Services",
+"title": "RETAIL-GROCERY STORES",
+"zh": "零售－超市",
+"division": "G"
+},
+{
+"code": "5412",
+"office": "Office of Trade & Services",
+"title": "RETAIL-CONVENIENCE STORES",
+"zh": "零售－便利商店",
+"division": "G"
+},
+{
+"code": "5500",
+"office": "Office of Trade & Services",
+"title": "RETAIL-AUTO DEALERS & GASOLINE STATIONS",
+"zh": "零售－汽車經銷與加油站",
+"division": "G"
+},
+{
+"code": "5531",
+"office": "Office of Trade & Services",
+"title": "RETAIL-AUTO & HOME SUPPLY STORES",
+"zh": "零售－汽車與居家用品",
+"division": "G"
+},
+{
+"code": "5600",
+"office": "Office of Trade & Services",
+"title": "RETAIL-APPAREL & ACCESSORY STORES",
+"zh": "零售－服飾",
+"division": "G"
+},
+{
+"code": "5621",
+"office": "Office of Trade & Services",
+"title": "RETAIL-WOMEN'S CLOTHING STORES",
+"zh": "零售－女裝",
+"division": "G"
+},
+{
+"code": "5651",
+"office": "Office of Trade & Services",
+"title": "RETAIL-FAMILY CLOTHING STORES",
+"zh": "零售－家庭服飾",
+"division": "G"
+},
+{
+"code": "5661",
+"office": "Office of Trade & Services",
+"title": "RETAIL-SHOE STORES",
+"zh": "零售－鞋店",
+"division": "G"
+},
+{
+"code": "5700",
+"office": "Office of Trade & Services",
+"title": "RETAIL-HOME FURNITURE, FURNISHINGS & EQUIPMENT STORES",
+"zh": "零售－家具與家用設備",
+"division": "G"
+},
+{
+"code": "5712",
+"office": "Office of Trade & Services",
+"title": "RETAIL-FURNITURE STORES",
+"zh": "零售－家具",
+"division": "G"
+},
+{
+"code": "5731",
+"office": "Office of Trade & Services",
+"title": "RETAIL-RADIO, TV & CONSUMER ELECTRONICS STORES",
+"zh": "零售－消費電子",
+"division": "G"
+},
+{
+"code": "5734",
+"office": "Office of Trade & Services",
+"title": "RETAIL-COMPUTER & COMPUTER SOFTWARE STORES",
+"zh": "零售－電腦與軟體",
+"division": "G"
+},
+{
+"code": "5735",
+"office": "Office of Trade & Services",
+"title": "RETAIL-RECORD & PRERECORDED TAPE STORES",
+"zh": "零售－唱片",
+"division": "G"
+},
+{
+"code": "5810",
+"office": "Office of Trade & Services",
+"title": "RETAIL-EATING & DRINKING PLACES",
+"zh": "零售－餐飲",
+"division": "G"
+},
+{
+"code": "5812",
+"office": "Office of Trade & Services",
+"title": "RETAIL-EATING PLACES",
+"zh": "零售－餐廳",
+"division": "G"
+},
+{
+"code": "5900",
+"office": "Office of Trade & Services",
+"title": "RETAIL-MISCELLANEOUS RETAIL",
+"zh": "零售－其他",
+"division": "G"
+},
+{
+"code": "5912",
+"office": "Office of Trade & Services",
+"title": "RETAIL-DRUG STORES AND PROPRIETARY STORES",
+"zh": "零售－藥局",
+"division": "G"
+},
+{
+"code": "5940",
+"office": "Office of Trade & Services",
+"title": "RETAIL-MISCELLANEOUS SHOPPING GOODS STORES",
+"zh": "零售－購物商品",
+"division": "G"
+},
+{
+"code": "5944",
+"office": "Office of Trade & Services",
+"title": "RETAIL-JEWELRY STORES",
+"zh": "零售－珠寶",
+"division": "G"
+},
+{
+"code": "5945",
+"office": "Office of Trade & Services",
+"title": "RETAIL-HOBBY, TOY & GAME SHOPS",
+"zh": "零售－玩具與遊戲",
+"division": "G"
+},
+{
+"code": "5960",
+"office": "Office of Trade & Services",
+"title": "RETAIL-NONSTORE RETAILERS",
+"zh": "零售－無店面",
+"division": "G"
+},
+{
+"code": "5961",
+"office": "Office of Trade & Services",
+"title": "RETAIL-CATALOG & MAIL-ORDER HOUSES",
+"zh": "零售－郵購與網購",
+"division": "G"
+},
+{
+"code": "5990",
+"office": "Office of Trade & Services",
+"title": "RETAIL-RETAIL STORES, NEC",
+"zh": "零售－其他店面",
+"division": "G"
+},
+{
+"code": "6021",
+"office": "Office of Finance",
+"title": "NATIONAL COMMERCIAL BANKS",
+"zh": "國家商業銀行",
+"division": "H"
+},
+{
+"code": "6022",
+"office": "Office of Finance",
+"title": "STATE COMMERCIAL BANKS",
+"zh": "州立商業銀行",
+"division": "H"
+},
+{
+"code": "6029",
+"office": "Office of Finance",
+"title": "COMMERCIAL BANKS, NEC",
+"zh": "其他商業銀行",
+"division": "H"
+},
+{
+"code": "6035",
+"office": "Office of Finance",
+"title": "SAVINGS INSTITUTION, FEDERALLY CHARTERED",
+"zh": "聯邦特許儲蓄機構",
+"division": "H"
+},
+{
+"code": "6036",
+"office": "Office of Finance",
+"title": "SAVINGS INSTITUTIONS, NOT FEDERALLY CHARTERED",
+"zh": "非聯邦特許儲蓄機構",
+"division": "H"
+},
+{
+"code": "6099",
+"office": "Office of Finance",
+"title": "FUNCTIONS RELATED TO DEPOSITORY BANKING, NEC",
+"zh": "其他存款相關業務",
+"division": "H"
+},
+{
+"code": "6111",
+"office": "Office of Finance",
+"title": "FEDERAL & FEDERALLY-SPONSORED CREDIT AGENCIES",
+"zh": "聯邦信貸機構",
+"division": "H"
+},
+{
+"code": "6141",
+"office": "Office of Finance",
+"title": "PERSONAL CREDIT INSTITUTIONS",
+"zh": "個人信貸",
+"division": "H"
+},
+{
+"code": "6153",
+"office": "Office of Finance",
+"title": "SHORT-TERM BUSINESS CREDIT INSTITUTIONS",
+"zh": "短期商業信貸",
+"division": "H"
+},
+{
+"code": "6159",
+"office": "Office of Finance",
+"title": "MISCELLANEOUS BUSINESS CREDIT INSTITUTION",
+"zh": "其他商業信貸",
+"division": "H"
+},
+{
+"code": "6162",
+"office": "Office of Finance",
+"title": "MORTGAGE BANKERS & LOAN CORRESPONDENTS",
+"zh": "抵押貸款銀行",
+"division": "H"
+},
+{
+"code": "6163",
+"office": "Office of Finance",
+"title": "LOAN BROKERS",
+"zh": "貸款仲介",
+"division": "H"
+},
+{
+"code": "6172",
+"office": "Office of Finance",
+"title": "FINANCE LESSORS",
+"zh": "融資租賃",
+"division": "H"
+},
+{
+"code": "6189",
+"office": "Office of Structured Finance",
+"title": "ASSET-BACKED SECURITIES",
+"zh": "資產擔保證券",
+"division": "H"
+},
+{
+"code": "6199",
+"office": "Office of Finance or Office of Crypto Assets",
+"title": "FINANCE SERVICES",
+"zh": "金融服務",
+"division": "H"
+},
+{
+"code": "6200",
+"office": "Office of Crypto Assets",
+"title": "SECURITY & COMMODITY BROKERS, DEALERS, EXCHANGES & SERVICES",
+"zh": "證券與商品經紀、交易所",
+"division": "H"
+},
+{
+"code": "6211",
+"office": "Office of Finance or Office of Crypto Assets",
+"title": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES",
+"zh": "證券經紀與承銷",
+"division": "H"
+},
+{
+"code": "6221",
+"office": "Office of Crypto Assets",
+"title": "COMMODITY CONTRACTS BROKERS & DEALERS",
+"zh": "商品期貨經紀",
+"division": "H"
+},
+{
+"code": "6282",
+"office": "Office of Finance",
+"title": "INVESTMENT ADVICE",
+"zh": "投資顧問",
+"division": "H"
+},
+{
+"code": "6311",
+"office": "Office of Finance",
+"title": "LIFE INSURANCE",
+"zh": "人壽保險",
+"division": "H"
+},
+{
+"code": "6321",
+"office": "Office of Finance",
+"title": "ACCIDENT & HEALTH INSURANCE",
+"zh": "意外與健康保險",
+"division": "H"
+},
+{
+"code": "6324",
+"office": "Office of Finance",
+"title": "HOSPITAL & MEDICAL SERVICE PLANS",
+"zh": "醫療服務計畫",
+"division": "H"
+},
+{
+"code": "6331",
+"office": "Office of Finance",
+"title": "FIRE, MARINE & CASUALTY INSURANCE",
+"zh": "火災、海上與意外保險（產險）",
+"division": "H"
+},
+{
+"code": "6351",
+"office": "Office of Finance",
+"title": "SURETY INSURANCE",
+"zh": "保證保險",
+"division": "H"
+},
+{
+"code": "6361",
+"office": "Office of Finance",
+"title": "TITLE INSURANCE",
+"zh": "產權保險",
+"division": "H"
+},
+{
+"code": "6399",
+"office": "Office of Finance",
+"title": "INSURANCE CARRIERS, NEC",
+"zh": "其他保險",
+"division": "H"
+},
+{
+"code": "6411",
+"office": "Office of Finance",
+"title": "INSURANCE AGENTS, BROKERS & SERVICE",
+"zh": "保險代理與經紀",
+"division": "H"
+},
+{
+"code": "6500",
+"office": "Office of Real Estate & Construction",
+"title": "REAL ESTATE",
+"zh": "不動產",
+"division": "H"
+},
+{
+"code": "6510",
+"office": "Office of Real Estate & Construction",
+"title": "REAL ESTATE OPERATORS (NO DEVELOPERS) & LESSORS",
+"zh": "不動產經營與出租",
+"division": "H"
+},
+{
+"code": "6512",
+"office": "Office of Real Estate & Construction",
+"title": "OPERATORS OF NONRESIDENTIAL BUILDINGS",
+"zh": "非住宅建築經營",
+"division": "H"
+},
+{
+"code": "6513",
+"office": "Office of Real Estate & Construction",
+"title": "OPERATORS OF APARTMENT BUILDINGS",
+"zh": "公寓經營",
+"division": "H"
+},
+{
+"code": "6519",
+"office": "Office of Real Estate & Construction",
+"title": "LESSORS OF REAL PROPERTY, NEC",
+"zh": "其他不動產出租",
+"division": "H"
+},
+{
+"code": "6531",
+"office": "Office of Real Estate & Construction",
+"title": "REAL ESTATE AGENTS & MANAGERS (FOR OTHERS)",
+"zh": "不動產仲介與管理",
+"division": "H"
+},
+{
+"code": "6532",
+"office": "Office of Real Estate & Construction",
+"title": "REAL ESTATE DEALERS (FOR THEIR OWN ACCOUNT)",
+"zh": "不動產自營買賣",
+"division": "H"
+},
+{
+"code": "6552",
+"office": "Office of Real Estate & Construction",
+"title": "LAND SUBDIVIDERS & DEVELOPERS (NO CEMETERIES)",
+"zh": "土地開發",
+"division": "H"
+},
+{
+"code": "6770",
+"office": "Multiple Offices",
+"title": "BLANK CHECKS",
+"zh": "空白支票公司（SPAC）",
+"division": "H"
+},
+{
+"code": "6792",
+"office": "Office of Energy & Transportation",
+"title": "OIL ROYALTY TRADERS",
+"zh": "石油權利金信託",
+"division": "H"
+},
+{
+"code": "6794",
+"office": "Office of Real Estate & Construction",
+"title": "PATENT OWNERS & LESSORS",
+"zh": "專利授權",
+"division": "H"
+},
+{
+"code": "6795",
+"office": "Office of Energy & Transportation",
+"title": "MINERAL ROYALTY TRADERS",
+"zh": "礦產權利金",
+"division": "H"
+},
+{
+"code": "6798",
+"office": "Office of Real Estate & Construction",
+"title": "REAL ESTATE INVESTMENT TRUSTS",
+"zh": "不動產投資信託（REIT）",
+"division": "H"
+},
+{
+"code": "6799",
+"office": "Office of Real Estate & Construction",
+"title": "INVESTORS, NEC",
+"zh": "其他投資",
+"division": "H"
+},
+{
+"code": "7000",
+"office": "Office of Real Estate & Construction",
+"title": "HOTELS, ROOMING HOUSES, CAMPS & OTHER LODGING PLACES",
+"zh": "旅館與住宿",
+"division": "I"
+},
+{
+"code": "7011",
+"office": "Office of Real Estate & Construction",
+"title": "HOTELS & MOTELS",
+"zh": "飯店與汽車旅館",
+"division": "I"
+},
+{
+"code": "7200",
+"office": "Office of Trade & Services",
+"title": "SERVICES-PERSONAL SERVICES",
+"zh": "個人服務",
+"division": "I"
+},
+{
+"code": "7310",
+"office": "Office of Trade & Services",
+"title": "SERVICES-ADVERTISING",
+"zh": "廣告",
+"division": "I"
+},
+{
+"code": "7311",
+"office": "Office of Trade & Services",
+"title": "SERVICES-ADVERTISING AGENCIES",
+"zh": "廣告代理",
+"division": "I"
+},
+{
+"code": "7320",
+"office": "Office of Trade & Services",
+"title": "SERVICES-CONSUMER CREDIT REPORTING, COLLECTION AGENCIES",
+"zh": "消費信用報告與催收",
+"division": "I"
+},
+{
+"code": "7330",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MAILING, REPRODUCTION, COMMERCIAL ART & PHOTOGRAPHY",
+"zh": "郵寄、複製與商業美術",
+"division": "I"
+},
+{
+"code": "7331",
+"office": "Office of Trade & Services",
+"title": "SERVICES-DIRECT MAIL ADVERTISING SERVICES",
+"zh": "直效郵件廣告",
+"division": "I"
+},
+{
+"code": "7340",
+"office": "Office of Trade & Services",
+"title": "SERVICES-TO DWELLINGS & OTHER BUILDINGS",
+"zh": "建築物服務",
+"division": "I"
+},
+{
+"code": "7350",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MISCELLANEOUS EQUIPMENT RENTAL & LEASING",
+"zh": "設備租賃",
+"division": "I"
+},
+{
+"code": "7359",
+"office": "Office of Trade & Services",
+"title": "SERVICES-EQUIPMENT RENTAL & LEASING, NEC",
+"zh": "其他設備租賃",
+"division": "I"
+},
+{
+"code": "7361",
+"office": "Office of Trade & Services",
+"title": "SERVICES-EMPLOYMENT AGENCIES",
+"zh": "職業介紹",
+"division": "I"
+},
+{
+"code": "7363",
+"office": "Office of Trade & Services",
+"title": "SERVICES-HELP SUPPLY SERVICES",
+"zh": "人力派遣",
+"division": "I"
+},
+{
+"code": "7370",
+"office": "Office of Technology",
+"title": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC.",
+"zh": "電腦程式、資料處理等服務",
+"division": "I"
+},
+{
+"code": "7371",
+"office": "Office of Technology",
+"title": "SERVICES-COMPUTER PROGRAMMING SERVICES",
+"zh": "電腦程式設計服務",
+"division": "I"
+},
+{
+"code": "7372",
+"office": "Office of Technology",
+"title": "SERVICES-PREPACKAGED SOFTWARE",
+"zh": "套裝軟體",
+"division": "I"
+},
+{
+"code": "7373",
+"office": "Office of Technology",
+"title": "SERVICES-COMPUTER INTEGRATED SYSTEMS DESIGN",
+"zh": "電腦系統整合設計",
+"division": "I"
+},
+{
+"code": "7374",
+"office": "Office of Technology",
+"title": "SERVICES-COMPUTER PROCESSING & DATA PREPARATION",
+"zh": "資料處理",
+"division": "I"
+},
+{
+"code": "7377",
+"office": "Office of Trade & Services",
+"title": "SERVICES-COMPUTER RENTAL & LEASING",
+"zh": "電腦租賃",
+"division": "I"
+},
+{
+"code": "7380",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MISCELLANEOUS BUSINESS SERVICES",
+"zh": "其他商業服務",
+"division": "I"
+},
+{
+"code": "7381",
+"office": "Office of Trade & Services",
+"title": "SERVICES-DETECTIVE, GUARD & ARMORED CAR SERVICES",
+"zh": "保全與運鈔",
+"division": "I"
+},
+{
+"code": "7384",
+"office": "Office of Trade & Services",
+"title": "SERVICES-PHOTOFINISHING LABORATORIES",
+"zh": "沖印",
+"division": "I"
+},
+{
+"code": "7385",
+"office": "Office of Trade & Services",
+"title": "SERVICES-TELEPHONE INTERCONNECT SYSTEMS",
+"zh": "電話互連系統",
+"division": "I"
+},
+{
+"code": "7389",
+"office": "Office of Trade & Services or Office of Energy & Transportation",
+"title": "SERVICES-BUSINESS SERVICES, NEC",
+"zh": "其他商業服務",
+"division": "I"
+},
+{
+"code": "7500",
+"office": "Office of Trade & Services",
+"title": "SERVICES-AUTOMOTIVE REPAIR, SERVICES & PARKING",
+"zh": "汽車修理與停車",
+"division": "I"
+},
+{
+"code": "7510",
+"office": "Office of Trade & Services",
+"title": "SERVICES-AUTO RENTAL & LEASING (NO DRIVERS)",
+"zh": "汽車租賃",
+"division": "I"
+},
+{
+"code": "7600",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MISCELLANEOUS REPAIR SERVICES",
+"zh": "其他修理服務",
+"division": "I"
+},
+{
+"code": "7812",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MOTION PICTURE & VIDEO TAPE PRODUCTION",
+"zh": "電影與影片製作",
+"division": "I"
+},
+{
+"code": "7819",
+"office": "Office of Trade & Services",
+"title": "SERVICES-ALLIED TO MOTION PICTURE PRODUCTION",
+"zh": "電影製作相關服務",
+"division": "I"
+},
+{
+"code": "7822",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MOTION PICTURE & VIDEO TAPE DISTRIBUTION",
+"zh": "電影與影片發行",
+"division": "I"
+},
+{
+"code": "7829",
+"office": "Office of Trade & Services",
+"title": "SERVICES-ALLIED TO MOTION PICTURE DISTRIBUTION",
+"zh": "電影發行相關服務",
+"division": "I"
+},
+{
+"code": "7830",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MOTION PICTURE THEATERS",
+"zh": "電影院",
+"division": "I"
+},
+{
+"code": "7841",
+"office": "Office of Trade & Services",
+"title": "SERVICES-VIDEO TAPE RENTAL",
+"zh": "錄影帶出租",
+"division": "I"
+},
+{
+"code": "7900",
+"office": "Office of Trade & Services",
+"title": "SERVICES-AMUSEMENT & RECREATION SERVICES",
+"zh": "娛樂與休閒",
+"division": "I"
+},
+{
+"code": "7948",
+"office": "Office of Trade & Services",
+"title": "SERVICES-RACING, INCLUDING TRACK OPERATION",
+"zh": "賽馬與賽車場",
+"division": "I"
+},
+{
+"code": "7990",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MISCELLANEOUS AMUSEMENT & RECREATION",
+"zh": "其他娛樂與休閒",
+"division": "I"
+},
+{
+"code": "7997",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MEMBERSHIP SPORTS & RECREATION CLUBS",
+"zh": "會員制運動俱樂部",
+"division": "I"
+},
+{
+"code": "8000",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-HEALTH SERVICES",
+"zh": "醫療服務",
+"division": "I"
+},
+{
+"code": "8011",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-OFFICES & CLINICS OF DOCTORS OF MEDICINE",
+"zh": "診所",
+"division": "I"
+},
+{
+"code": "8050",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-NURSING & PERSONAL CARE FACILITIES",
+"zh": "護理與照護機構",
+"division": "I"
+},
+{
+"code": "8051",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-SKILLED NURSING CARE FACILITIES",
+"zh": "專業護理機構",
+"division": "I"
+},
+{
+"code": "8060",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-HOSPITALS",
+"zh": "醫院",
+"division": "I"
+},
+{
+"code": "8062",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-GENERAL MEDICAL & SURGICAL HOSPITALS, NEC",
+"zh": "綜合醫院",
+"division": "I"
+},
+{
+"code": "8071",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-MEDICAL LABORATORIES",
+"zh": "醫學檢驗",
+"division": "I"
+},
+{
+"code": "8082",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-HOME HEALTH CARE SERVICES",
+"zh": "居家照護",
+"division": "I"
+},
+{
+"code": "8090",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-MISC HEALTH & ALLIED SERVICES, NEC",
+"zh": "其他醫療服務",
+"division": "I"
+},
+{
+"code": "8093",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-SPECIALTY OUTPATIENT FACILITIES, NEC",
+"zh": "專科門診",
+"division": "I"
+},
+{
+"code": "8111",
+"office": "Office of Trade & Services",
+"title": "SERVICES-LEGAL SERVICES",
+"zh": "法律服務",
+"division": "I"
+},
+{
+"code": "8200",
+"office": "Office of Trade & Services",
+"title": "SERVICES-EDUCATIONAL SERVICES",
+"zh": "教育服務",
+"division": "I"
+},
+{
+"code": "8300",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-SOCIAL SERVICES",
+"zh": "社會服務",
+"division": "I"
+},
+{
+"code": "8351",
+"office": "Office of Trade & Services",
+"title": "SERVICES-CHILD DAY CARE SERVICES",
+"zh": "托育",
+"division": "I"
+},
+{
+"code": "8600",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MEMBERSHIP ORGANIZATIONS",
+"zh": "會員組織",
+"division": "I"
+},
+{
+"code": "8700",
+"office": "Office of Trade & Services",
+"title": "SERVICES-ENGINEERING, ACCOUNTING, RESEARCH, MANAGEMENT",
+"zh": "工程、會計、研究與管理服務",
+"division": "I"
+},
+{
+"code": "8711",
+"office": "Office of Trade & Services",
+"title": "SERVICES-ENGINEERING SERVICES",
+"zh": "工程服務",
+"division": "I"
+},
+{
+"code": "8731",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-COMMERCIAL PHYSICAL & BIOLOGICAL RESEARCH",
+"zh": "商業研發（物理與生物）",
+"division": "I"
+},
+{
+"code": "8734",
+"office": "Industrial Applications and Services",
+"title": "SERVICES-TESTING LABORATORIES",
+"zh": "檢測實驗室",
+"division": "I"
+},
+{
+"code": "8741",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MANAGEMENT SERVICES",
+"zh": "管理服務",
+"division": "I"
+},
+{
+"code": "8742",
+"office": "Office of Trade & Services",
+"title": "SERVICES-MANAGEMENT CONSULTING SERVICES",
+"zh": "管理顧問",
+"division": "I"
+},
+{
+"code": "8744",
+"office": "Office of Trade & Services",
+"title": "SERVICES-FACILITIES SUPPORT MANAGEMENT SERVICES",
+"zh": "設施支援管理",
+"division": "I"
+},
+{
+"code": "8880",
+"office": "Office of International Corp Fin",
+"title": "AMERICAN DEPOSITARY RECEIPTS",
+"zh": "美國存託憑證（ADR）",
+"division": "I"
+},
+{
+"code": "8888",
+"office": "Office of International Corp Fin",
+"title": "FOREIGN GOVERNMENTS",
+"zh": "外國政府",
+"division": "I"
+},
+{
+"code": "8900",
+"office": "Office of Trade & Services",
+"title": "SERVICES-SERVICES, NEC",
+"zh": "其他服務",
+"division": "I"
+},
+{
+"code": "9721",
+"office": "Office of International Corp Fin",
+"title": "INTERNATIONAL AFFAIRS",
+"zh": "國際事務",
+"division": "J"
+},
+{
+"code": "9995",
+"office": "Office of Real Estate & Construction",
+"title": "NON-OPERATING ESTABLISHMENTS",
+"zh": "非營運事業",
+"division": "J"
+}
+]
+}

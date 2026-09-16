@@ -8,10 +8,10 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
   加上同資料夾的 extension taxonomy（`.xsd` / `_pre.xml` / `_lab.xml`），用來決定報表分類、行順序與標籤。
 - 數值為 XBRL 原值（已套用 `scale` 與 `sign`，未依 `negatedLabel` 翻轉），並保留顯示文字 `raw`。
 - 公司的申報清單每 10 分鐘重新向 SEC 抓一次，所以永遠看得到最新一份；已申報的文件不會變，
-  解析結果存在本機 SQLite（`data/stockscan.sqlite`，Node 內建 `node:sqlite`，不需額外安裝），重啟不用重抓。
+  解析結果存在本機 `data/store/`（一份財報一個 brotli 壓縮的 JSON 小檔，可以直接 commit 進 git，見「資料存放」），重啟不用重抓。
 - 一份申報的 Inline XBRL 可能拆成多個檔（10-K 的財報放在 `xxx_d2.htm`），依 FilingSummary.xml 的 InputFiles 全部解析後合併；
   同一個命名空間宣告兩個前綴（`xmlns:i` 與 `xmlns:xbrli`）或 linkbase 同時有預設命名空間與前綴的申報也能解析。存檔裡報表沒有任何欄位的會在讀取時重新解析。
-- 公司代號表也存在 SQLite，啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
+- 公司代號表也存在本機快取（`data/cache.sqlite`），啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
 - 閒置時背景預抓：看某一份申報時，會在沒有使用者請求 3 秒後，悄悄下載前後一期、去年/明年同一季、以及同年度其他申報
   （讓 Q4 推算即時）。預抓請求一律讓路給使用者操作。`GET /api/status` 可看存檔數與預抓佇列。
 - 啟動後背景爬蟲：把每家有股票代號的公司（約 6,300 家，公眾流通市值大的先）最近 5 期 10-K / 10-Q / 20-F 存到本機
@@ -40,8 +40,22 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_DB`（SQLite 路徑，預設 `./data/stockscan.sqlite`）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 `./data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `./data/cache.sqlite`）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
 自製 ETF 的日線：`TV_ENABLED=0`（不用 TradingView websocket）、`IB_HOST`（預設 127.0.0.1）、`IB_PORT`（預設 7496；TWS 模擬帳戶 7497、IB Gateway 4001 / 4002）、`IB_CLIENT_ID`（預設 100 + PORT 的後三位，兩個 server 才不會互踢）、`IB_ENABLED=0`（不連 TWS，改用 Yahoo）。
+
+### 資料存放（可進 git）
+
+```
+data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.br   一份財報一檔（brotli JSON，約 16 KB）
+data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.br            一份財報一個評分（約 4 KB）
+data/store/documentation.json                                             標準科目的 SEC 定義，全站一份（不再每份財報重複存）
+data/cache.sqlite                                                         快取：代號表、申報清單、日線、市場快照…（.gitignore）
+```
+
+- 財報一旦申報就不會變，所以每個檔寫一次就不動；解析或評分版本升級時舊檔刪掉重建。檔名就是索引（啟動時掃目錄，約 0.6 秒），沒有另外的索引檔會不同步。
+- 這樣設計是為了 **直接 `git add data/store` commit & push 到 GitHub**：全是小檔（沒有任何檔接近 100 MB 上限）、不需要 Git LFS；目前約 9,900 份財報 ≈ 200 MB，每月成長約 30 MB。`.gitignore` 已設成只收 `data/store/`，快取與舊 SQLite 不進。
+- 儲存時把重複的四大報表引用（`statements` 只是 `allStatements` 的子集）拿掉、標準科目的 SEC 定義集中到 `documentation.json`，比原本 SQLite 的 gzip 版本小 60%。
+- **從舊版搬移**：第一次啟動時若 `data/store/` 是空的而 `data/stockscan.sqlite` 存在，會自動搬（約 1 分鐘，log 有進度），搬完舊檔可刪。
 
 ### 路徑前綴（BASE_URL）
 
@@ -58,7 +72,7 @@ docker compose up -d --build # http://localhost:3000（或 BASE_URL 下）
 ```
 
 - `Dockerfile` 兩階段：先 build 前端（含 `web/assets/tradingview/` 的授權版 Advanced Charts，有放才會複製），再以 Node 24 alpine 跑 server（僅 production 依賴，非 root）。
-- `./data` 掛進容器的 `/app/data`：SQLite（財報、評分、快取）在重建映像後保留。
+- `./data` 掛進容器的 `/app/data`：`data/store/`（財報、評分，也是 git 裡的那份）與 `data/cache.sqlite` 在重建映像後保留；映像本身不含資料。
 - 連主機上的 TWS / IB Gateway：`IB_HOST` 預設 `host.docker.internal`（Linux 由 compose 的 `extra_hosts` 提供）；TWS 的 API 設定要關掉「只允許 localhost 連線」並信任 Docker 網段的 IP，否則自製 ETF 的日線走 TradingView / Yahoo。
 - 健康檢查打 `/api/status`（含前綴）。
 
@@ -99,7 +113,7 @@ docker compose up -d --build # http://localhost:3000（或 BASE_URL 下）
 
 - **產業分類 (SIC)**：左側依 SIC 大類（A 農林漁牧 … I 服務業）展開 4 碼產業（中文名稱，tooltip 為 SEC 英文原名），右側列出該產業的公司。
   資料來自 SEC「Financial Statement Data Sets」最近四季的 `sub.txt`（每份 10-K / 10-Q / 20-F 的 SIC 與申報身分），
-  只從 zip 抽出 `sub.txt`（HTTP Range），不必下載整個 60 MB 的檔案；每週更新一次，存在 SQLite。
+  只從 zip 抽出 `sub.txt`（HTTP Range），不必下載整個 60 MB 的檔案；每週更新一次，存在快取。
 - **規模與申報身分**：SEC 依公眾流通市值（非關係人持股市值）把申報公司分為大型加速申報公司（≥ 7 億美元）、加速申報公司
   （7,500 萬 ～ 7 億）、非加速申報公司三種，決定 10-K / 10-Q 的申報期限；WKSI 另外標示。公司清單依公眾流通市值排序，
   市值來自 XBRL frames API 的 `dei:EntityPublicFloat`（10-K 揭露、以第二季末為準）。有些公司把這個數字標錯單位（大 1,000 倍），
@@ -169,7 +183,7 @@ C1、C2、C3 取各季 10-Q 的年初至今欄（沒有就用上一季累計 + �
   打開估值頁時抓一次、快取 30 分鐘，沒有即時報價：「最新」= 最後一根日線的收盤。三個來源的收盤都是分割調整後的，
   但申報書裡的 EPS、股數是當時的數字，所以用 Yahoo 的分割事件（快取一天）把收盤還原成當時的報價，才能算當時的本益比；
   分割事件抓不到時舊價格不還原，頁面會註明。
-  現價每 10 分鐘更新、日線存 SQLite 一天。
+  現價每 10 分鐘更新、日線快取一天。
 - **股價基準**：預設用所選申報的**期末收盤價**（跟各期表一致），可切換成**申報日收盤**（看到財報時的價格）或**現在**的價格，也可自訂；
   倍數、合理價與絕對估值模型都用這個基準價。頁首同時列出三個價格。
 - **流通股數**：SEC companyconcept API 的 `dei:EntityCommonStockSharesOutstanding`（申報封面），依 accession 對到各期；
@@ -224,7 +238,7 @@ C1、C2、C3 取各季 10-Q 的年初至今欄（沒有就用上一季累計 + �
 - 分類瀏覽與 ETF 成分股表格多了「評分」欄（可排序），顯示每家公司**最新一份已下載財報**的評分；背景爬蟲存好財報後立即計分，
   尚未下載的顯示「—」。財務指標分頁上方有該份申報的評分卡，可展開看每個項目的數值、標準與得分。
 - API：`GET /api/score?ciks=320193,1045810` 批次取最新評分；`GET /api/score/:cik/:accession` 取一份申報的完整明細。
-  評分存在 SQLite 的 `scores` 表，`SCORE_VERSION` 變更時啟動會重算。
+  評分存在 `data/store/scores/`（一份財報一檔），`SCORE_VERSION` 變更時啟動會重算。
 
 ### 財務指標的判斷標準
 
@@ -378,7 +392,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 |---|---|
 | `server/index.js` | Express 路由、靜態檔案 |
 | `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、高/低優先權（預抓讓路） |
-| `server/lib/store.js` | SQLite 存檔：解析後的申報、代號表、申報清單 |
+| `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |
 | `server/lib/prefetch.js` | 閒置時背景預抓相鄰申報 |
 | `server/lib/crawler.js` | 背景爬蟲：掃過所有有代號公司的最近 5 期申報，並每 30 分鐘監看 EDGAR daily index |
 | `server/lib/market.js` | TradingView 市場快照：全美股的股價、市值、估值倍數、成交量（每半小時） |
