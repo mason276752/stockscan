@@ -96,7 +96,7 @@ function deleteGroup(g) {
 function makeBasket() {
   const items = filtered.value.filter((x) => x.ticker);
   if (!items.length) return;
-  createBasket(current.value === 'all' ? '觀察名單' : current.value === '__none' ? '未分類' : current.value, items);
+  createBasket(current.value === 'all' ? '觀察名單' : current.value === '__none' ? '未分類' : current.value, items, { prune: true });
   emit('basket');
 }
 // add a company straight into the current group from the search box

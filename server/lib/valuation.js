@@ -7,7 +7,8 @@
 // dei:EntityCommonStockSharesOutstanding); prices from Yahoo Finance.
 
 import { C, first, loadPoints, quarterKeys } from './indicators.js';
-import { closeOn, history, quote } from './prices.js';
+import { closeOn, history } from './prices.js';
+import { priceSeries } from './priceSeries.js';
 import { pickFiling } from './edgar.js';
 import { scrapeFiling } from './scrape.js';
 import { store } from './store.js';
@@ -128,12 +129,15 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
   }
 
   // --- shares, prices, currency (in parallel) ------------------------------
-  const [shares, hist, q, reporting] = await Promise.all([
+  // prices: TradingView -> TWS -> Yahoo daily closes (fetched on view, no live quote: "now" = last close)
+  const [shares, hist, reporting] = await Promise.all([
     sharesByAccession(client, company.cik),
-    ticker ? history(ticker).catch((e) => ({ error: e.message, days: [] })) : { days: [] },
-    ticker ? quote(ticker).catch((e) => ({ error: e.message, price: null })) : { price: null, error: 'no ticker' },
+    ticker ? priceSeries(ticker).catch((e) => ({ error: e.message, days: [] })) : { days: [], error: 'no ticker' },
     reportingCurrency(client, company, year, period),
   ]);
+  const q = hist.last
+    ? { symbol: hist.symbol, price: hist.last.close, time: `${hist.last.date}T21:00:00Z`, date: hist.last.date, currency: hist.currency, source: hist.source, live: false }
+    : { price: null, error: hist.error || 'no price data', source: null };
   // statements in another currency than the quote (20-F filers, ADRs): convert
   // per-share figures with the FX rate of each date, times the ADR ratio
   const quoteCurrency = q.currency || 'USD';
@@ -302,7 +306,7 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
     quote: { ...q, source: q.source || null },
     currency: { reporting, quote: quoteCurrency, fxNow: reporting === quoteCurrency ? 1 : fxNow, fxSource: fxHist ? `${reporting}${quoteCurrency}=X` : null, adr },
     nowPerShare: nowPs,
-    priceHistory: { source: hist.source || null, from: hist.days?.[0]?.date || null, to: hist.days?.at?.(-1)?.date || null, splits: hist.splits || [], error: hist.error || null },
+    priceHistory: { source: hist.source || null, from: hist.days?.[0]?.date || null, to: hist.days?.at?.(-1)?.date || null, splits: hist.splits || [], error: hist.error || null, eventsError: hist.eventsError || null, fetchedAt: hist.fetchedAt || null },
     shares: latest ? { value: latest.shares, source: latest.sharesSource, asOf: latest.periodEnd } : null,
     columns,
     now,

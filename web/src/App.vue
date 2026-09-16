@@ -341,7 +341,7 @@ onMounted(() => {
     </header>
     <p v-if="crawlText" class="muted small crawl" title="啟動後在背景把每家有代號的公司最新一份 10-K / 10-Q 存到本機，之後點開就不用等下載；使用中會自動讓路">{{ crawlText }}</p>
 
-    <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" />
+    <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" @basket="page = 'basket'" />
     <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" />
     <ScreenerPage v-else-if="page === 'screen'" @open="openCompany" @basket="page = 'basket'" />
     <BasketPage v-else-if="page === 'basket'" @open="openCompany" />

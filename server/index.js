@@ -19,6 +19,7 @@ import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, 
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 import { RANGES, basketSeries, dailyBars, rebased } from './lib/bars.js';
 import { ibConnect, ibStatus } from './lib/ib.js';
+import { tvStatus } from './lib/tvws.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -482,7 +483,7 @@ app.get(
 const TV_DIR = path.join(__dirname, '..', 'web', 'assets', 'tradingview');
 const tvLibrary = () => fs.existsSync(path.join(TV_DIR, 'charting_library', 'charting_library.standalone.js'));
 if (tvLibrary()) app.use('/tradingview', express.static(TV_DIR, { maxAge: '1h' }));
-app.get('/api/quotes/status', (_req, res) => res.json({ ib: ibStatus(), source: ibStatus().connected ? 'IBKR' : 'Yahoo Finance', tvLibrary: tvLibrary() }));
+app.get('/api/quotes/status', (_req, res) => res.json({ tv: tvStatus(), ib: ibStatus(), source: tvStatus().enabled ? 'TradingView' : ibStatus().connected ? 'IBKR' : 'Yahoo Finance', tvLibrary: tvLibrary() }));
 // POST /api/quotes/ib/connect -> (re)try the TWS connection now
 app.post(
   '/api/quotes/ib/connect',
@@ -502,7 +503,6 @@ app.get(
 
 // POST /api/basket { constituents: [{ ticker, weight }], range, rebalance, benchmark }
 //  -> index bars (base 100), stats, per-constituent returns, benchmark overlay
-const MAX_BASKET = 60;
 app.post(
   '/api/basket',
   wrap(async (req, res) => {
@@ -512,7 +512,6 @@ app.post(
       .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
       .filter((c) => c.ticker && !seen.has(c.ticker) && seen.add(c.ticker));
     if (!wanted.length) throw Object.assign(new Error('constituents is empty'), { status: 400 });
-    if (wanted.length > MAX_BASKET) throw Object.assign(new Error(`at most ${MAX_BASKET} constituents`), { status: 400 });
     const range = RANGES[body.range] ? body.range : '5y';
     const rebalance = body.rebalance === 'daily' ? 'daily' : 'none';
     const benchmark = body.benchmark ? String(body.benchmark).trim().toUpperCase() : null;
@@ -533,7 +532,7 @@ app.post(
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(8, jobs.length) }, worker));
     const members = out.filter((m) => !m.bench);
     const bench = out.find((m) => m.bench) || null;
     const series = basketSeries(members, { range, rebalance });
@@ -545,6 +544,7 @@ app.post(
       rebalance,
       source: sources.join(' + ') || null,
       ib: ibStatus().connected,
+      tv: tvStatus().connected,
       ...series,
       failed,
       benchmark: bench && !bench.error && series.start ? { symbol: bench.symbol, source: bench.source, startClose: bench.days.find((d) => d.date >= series.start)?.close ?? null, points: rebased(bench, series.start, series.end) } : null,
@@ -554,7 +554,7 @@ app.post(
 
 // GET /api/status -> local store and prefetch queue
 app.get('/api/status', (_req, res) => {
-  res.json({ store: { file: store.file, ...store.size() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle, ib: ibStatus() });
+  res.json({ store: { file: store.file, ...store.size() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle, tv: tvStatus(), ib: ibStatus() });
 });
 
 // Serve the built Vue app when it exists (npm run build:web).

@@ -38,11 +38,11 @@ const basisPrice = computed(() => {
 });
 const price = computed(() => typedPrice.value ?? basisPrice.value);
 const basisDate = computed(() => {
-  if (basis.value === 'now') return props.data.quote?.time ? new Date(props.data.quote.time).toLocaleString() : '';
+  if (basis.value === 'now') return props.data.quote?.date || (props.data.quote?.time ? new Date(props.data.quote.time).toLocaleString() : '');
   if (basis.value === 'filingDate') return latest.value?.priceAtFilingDate || latest.value?.filingDate || '';
   return latest.value?.priceDate || latest.value?.periodEnd || '';
 });
-const basisLabel = computed(() => (basis.value === 'now' ? '現在' : basis.value === 'filingDate' ? '申報日' : '所選期末'));
+const basisLabel = computed(() => (basis.value === 'now' ? '最新' : basis.value === 'filingDate' ? '申報日' : '所選期末'));
 // per-share figures matching the basis: period-end FX for historical prices, today's FX for the quote
 const nowPs = computed(() => (basis.value === 'now' ? props.data.nowPerShare : latest.value?.perShareQuote) || null);
 const nowNetDebt = computed(() => (nowPs.value ? (nowPs.value.debtps ?? 0) - (nowPs.value.cashps ?? 0) : null));
@@ -154,13 +154,13 @@ const tipStyle = computed(() => {
         <div class="muted small basis-line">
           所選期末 {{ latest?.priceDate || '—' }} <b>{{ money(latest?.price) }}</b>
           · 申報日 {{ latest?.filingDate || '—' }} <b>{{ money(latest?.priceAtFiling) }}</b>
-          · 現在 <b>{{ money(data.quote?.price) }}</b><span v-if="data.quote?.time">（{{ new Date(data.quote.time).toLocaleString() }}）</span>
+          · 最新 <b>{{ money(data.quote?.price) }}</b><span v-if="data.quote?.date">（{{ data.quote.date }} 收盤）</span><span v-else-if="data.quote?.time">（{{ new Date(data.quote.time).toLocaleString() }}）</span>
         </div>
         <div class="muted small">
           市值 {{ big(marketCap) }} · 流通股數 {{ shares(latest?.shares) }}<span v-if="latest?.sharesSource === 'diluted'">（稀釋加權平均）</span><span v-else-if="latest?.periodEnd">（{{ latest.periodEnd }} 申報封面）</span>
           · 近四季至 {{ latest?.periodEnd || '—' }}
           <template v-if="foreign"> · 財報幣別 {{ data.currency.reporting }}，以 {{ data.currency.fxSource }} 匯率 {{ data.currency.fxNow.toFixed(4) }}（各期用當期期末匯率）換算為 {{ data.currency.quote }}</template>
-          · 歷史股價 {{ data.priceHistory?.from || '—' }} ～ {{ data.priceHistory?.to || '—' }}<span v-if="data.priceHistory?.splits?.length">，已還原分割（{{ data.priceHistory.splits.map((s) => `${s.date} ${s.ratio}:1`).join('、') }}）</span>
+          · 歷史股價 {{ data.priceHistory?.source || '—' }} {{ data.priceHistory?.from || '—' }} ～ {{ data.priceHistory?.to || '—' }}<span v-if="data.priceHistory?.splits?.length">，已還原分割（{{ data.priceHistory.splits.map((s) => `${s.date} ${s.ratio}:1`).join('、') }}）</span><span v-if="data.priceHistory?.eventsError" class="error-inline">，分割資料抓不到（{{ data.priceHistory.eventsError }}），舊價格未還原</span>
         </div>
       </div>
       <div class="controls">
@@ -169,7 +169,7 @@ const tipStyle = computed(() => {
           <select v-model="basis">
             <option value="periodEnd">所選期末</option>
             <option value="filingDate">申報日</option>
-            <option value="now">現在</option>
+            <option value="now">最新收盤</option>
           </select>
         </label>
         <label v-if="foreign" class="small" title="一單位 ADR（在美國掛牌的一股）代表幾股普通股；例如台積電 ADR = 5 股普通股。SEC 資料沒有這個比率，請自行填入">

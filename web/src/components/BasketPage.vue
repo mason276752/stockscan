@@ -5,7 +5,7 @@ import CompanySearch from './CompanySearch.vue';
 import KlineChart from './KlineChart.vue';
 import TvEmbedChart from './TvEmbedChart.vue';
 import Icon from './Icon.vue';
-import { addConstituent, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent } from '../baskets';
+import { addConstituent, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents } from '../baskets';
 import { watchlist } from '../watchlist';
 
 const emit = defineEmits(['open']);
@@ -27,9 +27,10 @@ const BENCHMARKS = [
 const range = ref(localStorage.getItem('stockscan.basket.range') || '3y');
 const benchmark = ref(localStorage.getItem('stockscan.basket.bench') ?? 'SPY');
 const colors = ref(localStorage.getItem('stockscan.kcolors') || 'tw');
-// chart: 'tv' = TradingView's official widget on TradingView data (spread symbol),
-//        'own' = drawn from the TWS / Yahoo bars the stats use anyway
-const chartSource = ref(localStorage.getItem('stockscan.basket.chart') || 'tv');
+// chart: 'own'    = Advanced Charts / Lightweight Charts on the bars the server fetched
+//                   (TradingView websocket, else TWS, else Yahoo) - any number of stocks
+//        'widget' = TradingView's embeddable widget on a spread symbol (its own data, at most 10 stocks)
+const chartSource = ref(localStorage.getItem('stockscan.basket.chart') === 'widget' ? 'widget' : 'own');
 watch(chartSource, (v) => localStorage.setItem('stockscan.basket.chart', v));
 watch(range, (v) => localStorage.setItem('stockscan.basket.range', v));
 watch(benchmark, (v) => localStorage.setItem('stockscan.basket.bench', v));
@@ -43,6 +44,7 @@ const error = ref(null);
 const newName = ref('');
 const addMsg = ref('');
 const renaming = ref(false); // title inline rename
+const pruned = ref(''); // "removed X, Y" message after an automatic prune
 const sideRename = ref(null); // { id, to } rename in the sidebar list
 
 // temporarily hidden constituents (eye toggle): left out of the index, weights
@@ -61,6 +63,17 @@ function showAll() {
   if (current.value) hidden.value = { ...hidden.value, [current.value.id]: new Set() };
 }
 const hiddenCount = computed(() => (current.value ? current.value.constituents.filter((c) => isHidden(c)).length : 0));
+// names whose price data stopped (delisted, taken private) or that no source knows
+const delisted = computed(() => {
+  if (!result.value || !current.value) return [];
+  const gone = new Set([...result.value.constituents.filter((c) => c.delisted).map((c) => c.symbol), ...(result.value.failed || []).map((f) => f.ticker)]);
+  return current.value.constituents.filter((c) => gone.has(c.ticker)).map((c) => c.ticker);
+});
+function removeDelisted() {
+  if (!current.value || !delisted.value.length) return;
+  const n = removeConstituents(current.value.id, delisted.value);
+  pruned.value = `已移除 ${n} 檔`;
+}
 const inIndex = (c) => Number(c.weight) > 0 && !isHidden(c);
 
 const current = computed(() => basketOf(baskets.current) || baskets.items[0] || null);
@@ -93,7 +106,7 @@ function loadTvLibrary() {
 async function reconnect() {
   try {
     const r = await api.ibConnect();
-    quotes.value = { ...(quotes.value || {}), ib: r.ib, source: r.ib.connected ? 'IBKR' : 'Yahoo Finance' };
+    quotes.value = { ...(quotes.value || {}), ib: r.ib };
     if (r.ib.connected) run();
   } catch {
     /* status poll will tell */
@@ -127,8 +140,18 @@ async function run(force = false) {
     const r = await api.basket(body);
     if (id !== seq) return;
     result.value = r;
+    // a basket copied from an ETF / list: names that no longer trade go now that the prices show which they are
+    if (b.prune) {
+      b.prune = false;
+      const gone = r.constituents.filter((c) => c.delisted).map((c) => c.symbol);
+      for (const f of r.failed || []) gone.push(f.ticker); // no price data anywhere: not tradeable either
+      if (gone.length) {
+        removeConstituents(b.id, gone);
+        pruned.value = `已移除目前買不到的 ${gone.length} 檔（下市 / 查無報價）：${gone.join('、')}`;
+      }
+    }
     // TWS may have come up (or gone) since the page loaded
-    if (quotes.value && r.ib !== quotes.value.ib?.connected) api.quotesStatus().then((q) => (quotes.value = q)).catch(() => {});
+    if (quotes.value && (r.ib !== quotes.value.ib?.connected || r.tv !== quotes.value.tv?.connected)) api.quotesStatus().then((q) => (quotes.value = q)).catch(() => {});
   } catch (e) {
     if (id !== seq) return;
     error.value = e.message;
@@ -142,6 +165,7 @@ onMounted(async () => {
   run();
 });
 watch([current, range, benchmark, hidden], () => run());
+watch(current, () => (pruned.value = ''));
 // weights are typed in: wait for the typing to stop before refetching
 let editTimer = null;
 watch(
@@ -211,7 +235,7 @@ const totalWeight = computed(() => (current.value ? current.value.constituents.r
 // what the index actually uses: hidden rows drop out and the rest share their weight
 const activeWeight = computed(() => (current.value ? current.value.constituents.reduce((s, c) => s + (inIndex(c) ? Number(c.weight) : 0), 0) : 0));
 const weightPct = (c) => (activeWeight.value && inIndex(c) ? Number(c.weight) / activeWeight.value : 0);
-const totalOff = computed(() => Math.abs(totalWeight.value - 100) > 0.05);
+const totalOff = computed(() => Math.abs(totalWeight.value - 100) > 0.5); // 30 × 3.33 is 100 enough
 const scaled = computed(() => totalOff.value || hiddenCount.value > 0);
 const f1 = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 });
 const perf = computed(() => Object.fromEntries((result.value?.constituents || []).map((c) => [c.symbol, c])));
@@ -266,16 +290,19 @@ const tvCompare = computed(() => {
   return p ? `${sig(100 / p)}*${tvSymbol(benchmark.value)}` : tvSymbol(benchmark.value);
 });
 // wait for the first stats result so the coefficients are right from the start (or for its failure: then plain weights)
-const useTv = computed(() => chartSource.value === 'tv' && tvIncluded.value.length > 0 && !tvTooMany.value && (result.value || error.value));
+const useTv = computed(() => chartSource.value === 'widget' && tvIncluded.value.length > 0 && !tvTooMany.value && (result.value || error.value));
 
 const upColor = computed(() => (colors.value === 'us' ? '#16a34a' : '#dc2626'));
 const downColor = computed(() => (colors.value === 'us' ? '#dc2626' : '#16a34a'));
+// the data chain: TradingView websocket, then TWS, then Yahoo
 const sourceText = computed(() => {
   const q = quotes.value;
   if (!q) return '';
-  if (q.ib?.connected) return `報價來源：IBKR TWS（${q.ib.host}:${q.ib.port}）`;
-  if (!q.ib?.enabled) return '報價來源：Yahoo Finance（IBKR 已停用）';
-  return `報價來源：Yahoo Finance — TWS / IB Gateway 未連線（${q.ib.host}:${q.ib.port}${q.ib.lastError ? `，${q.ib.lastError}` : ''}）`;
+  const parts = [];
+  parts.push(!q.tv?.enabled ? 'TradingView 已停用' : q.tv.connected ? 'TradingView ✓' : `TradingView（${q.tv.lastError || '尚未連線'}）`);
+  parts.push(!q.ib?.enabled ? 'IBKR 已停用' : q.ib.connected ? `IBKR ✓（${q.ib.host}:${q.ib.port}）` : `IBKR 未連線（${q.ib.host}:${q.ib.port}）`);
+  parts.push('Yahoo');
+  return `日線來源，依序：${parts.join(' → ')}`;
 });
 </script>
 
@@ -339,9 +366,9 @@ const sourceText = computed(() => {
             <select v-model="benchmark" class="small" title="疊上大盤 ETF 做比較（同樣以起點 = 100）">
               <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label }}</option>
             </select>
-            <select v-model="chartSource" class="small" title="TradingView 官方：用 TradingView 自己的資料把成分股組成價差商品畫 K 線（最多 10 檔）；自算：用 TWS / Yahoo 日線自己算指數">
-              <option value="tv">圖：TradingView 官方</option>
-              <option value="own">圖：TWS / Yahoo 自算</option>
+            <select v-model="chartSource" class="small" title="Advanced Charts：伺服器抓各成分股日線（TradingView，備用 TWS、Yahoo）自己組成指數，檔數不限；TradingView widget：官方嵌入圖，成分股組成價差商品由 TradingView 計算，最多 10 檔">
+              <option value="own">圖：Advanced Charts</option>
+              <option value="widget">圖：TradingView widget</option>
             </select>
             <select v-model="colors" class="small" title="K 棒顏色">
               <option value="tw">紅漲綠跌</option>
@@ -353,6 +380,7 @@ const sourceText = computed(() => {
         </div>
 
         <p v-if="error" class="error">{{ error }}</p>
+        <p v-if="pruned" class="muted small note infobox">{{ pruned }} <button class="mini ghost" @click="pruned = ''">✕</button></p>
         <p v-if="!current.constituents.length" class="empty muted">這個 ETF 還沒有成分股：在下面搜尋加入，或從尋找股票 / 觀察名單組成。</p>
 
         <div v-if="useTv || result?.bars?.length" class="panel chart">
@@ -369,13 +397,13 @@ const sourceText = computed(() => {
             <div><span class="muted small">交易日</span><b class="mono">{{ result.stats.days }}</b></div>
           </div>
           <p v-if="useTv" class="muted small note">
-            圖：TradingView 官方資料，成分股組成價差商品 <span class="mono">{{ tvExpression }}</span>{{ tvCompare ? `，比較 ${tvCompare}` : '' }}（係數 = 起點時的持有單位，起點 = 100）；
+            圖：TradingView widget，成分股組成價差商品 <span class="mono">{{ tvExpression }}</span>{{ tvCompare ? `，比較 ${tvCompare}` : '' }}（係數 = 起點時的持有單位，起點 = 100）；
             統計與下表{{ result ? `：${result.source}` : '：等 TWS / Yahoo 的日線' }}。{{ current.rebalance === 'daily' ? 'TradingView 的價差商品是買進持有，每日再平衡只反映在統計。' : '' }}
           </p>
           <p v-for="n in result?.notes || []" :key="n" class="muted small note">※ {{ n }}</p>
         </div>
-        <p v-if="chartSource === 'tv' && tvTooMany" class="muted small note warnbox">
-          TradingView 的價差商品最多 10 檔，這個 ETF 納入 {{ tvIncluded.length }} 檔，改用 TWS / Yahoo 自算的圖；用眼睛暫時隱藏到 10 檔以內就會切回 TradingView。
+        <p v-if="chartSource === 'widget' && tvTooMany" class="muted small note warnbox">
+          TradingView widget 的價差商品最多 10 檔，這個 ETF 納入 {{ tvIncluded.length }} 檔，改用 Advanced Charts（資料同樣來自 TradingView）；用眼睛暫時隱藏到 10 檔以內就會切回 widget。
         </p>
 
         <div v-if="current" class="panel editor">
@@ -413,12 +441,15 @@ const sourceText = computed(() => {
                   <input v-model.number="c.weight" type="number" min="0" max="100" step="1" class="w" :class="{ zero: !(Number(c.weight) > 0) }" />
                   <span class="mono small muted" :title="scaled ? '依納入指數的合計換算後的實際權重' : ''">{{ isHidden(c) ? '隱藏' : !(Number(c.weight) > 0) ? '未納入' : scaled ? `→ ${pct(weightPct(c), false)}` : '' }}</span>
                 </td>
-                <td class="num mono">{{ perf[c.ticker] ? f2.format(perf[c.ticker].startClose) : '—' }}</td>
-                <td class="num mono">{{ perf[c.ticker] ? f2.format(perf[c.ticker].endClose) : '—' }}</td>
+                <td class="num mono">{{ perf[c.ticker]?.startClose != null ? f2.format(perf[c.ticker].startClose) : '—' }}</td>
+                <td class="num mono">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}</td>
                 <td class="num mono" :class="cls(perf[c.ticker]?.return)">{{ pct(perf[c.ticker]?.return) }}</td>
                 <td class="num mono" :class="cls(perf[c.ticker]?.contribution)">{{ pct(perf[c.ticker]?.contribution) }}</td>
                 <td class="small muted">
-                  <template v-if="perf[c.ticker]"><span v-if="perf[c.ticker].illiquid" class="warn" title="成交稀少或股價低於 1 美元：單日跳動可能很大，會扭曲整個指數">⚠ 低流動性</span> {{ perf[c.ticker].source }} · {{ perf[c.ticker].first }} 起</template>
+                  <template v-if="perf[c.ticker]">
+                    <span v-if="perf[c.ticker].illiquid" class="warn" title="成交稀少或股價低於 1 美元：單日跳動可能很大，會扭曲整個指數">⚠ 低流動性</span>
+                    {{ perf[c.ticker].source }} · {{ perf[c.ticker].first }} 起<span v-if="perf[c.ticker].joined && perf[c.ticker].joined !== result.start" class="warn">，{{ perf[c.ticker].joined }} 納入</span><span v-if="perf[c.ticker].delisted" class="warn" title="最近兩週沒有成交資料：下市、被收購或更名，目前買不到">，{{ perf[c.ticker].last }} 後無報價（已下市）</span><span v-else-if="perf[c.ticker].left" class="warn">，{{ perf[c.ticker].left }} 除名</span><span v-else-if="!perf[c.ticker].joined" class="warn">，區間內無資料</span>
+                  </template>
                   <span v-else-if="result?.failed?.find((f) => f.ticker === c.ticker)" class="down">無資料</span>
                   <template v-else>{{ inIndex(c) ? '…' : '—' }}</template>
                 </td>
@@ -427,7 +458,10 @@ const sourceText = computed(() => {
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="3" class="muted small">{{ current.constituents.filter(inIndex).length }} 檔納入指數<template v-if="hiddenCount">，暫時隱藏 {{ hiddenCount }} 檔 <button class="mini ghost" @click="showAll">全部顯示</button></template></td>
+                <td colspan="3" class="muted small">
+                  {{ current.constituents.filter(inIndex).length }} 檔納入指數<template v-if="hiddenCount">，暫時隱藏 {{ hiddenCount }} 檔 <button class="mini ghost" @click="showAll">全部顯示</button></template>
+                  <template v-if="delisted.length"> · <span class="warn">{{ delisted.length }} 檔已下市 / 查無報價</span> <button class="mini" title="移除目前買不到的成分股，其餘權重按比例補回 100%" @click="removeDelisted">移除已下市</button></template>
+                </td>
                 <td class="num weight">
                   <b class="mono" :class="{ off: totalOff }">{{ f1.format(totalWeight) }}%</b>
                   <button v-if="totalOff" class="mini" title="按比例把權重換算成合計 100%" @click="normalizeWeights(current.constituents)">湊成 100%</button>
@@ -640,6 +674,12 @@ button.danger:hover {
   margin: 0 0 12px;
   padding: 8px 12px;
   background: #fef3c7;
+  border-radius: 8px;
+}
+.infobox {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--accent-soft);
   border-radius: 8px;
 }
 .add {

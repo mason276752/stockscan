@@ -78,7 +78,7 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
             <span v-else class="muted">—</span>
           </td>
           <td v-if="showAfs" class="small">
-            {{ AFS_ZH[c.afs] || (c.afs ? c.afs : '—') }}<span v-if="c.wksi" class="badge" title="Well-known seasoned issuer：可用自動生效的 S-3 註冊聲明">WKSI</span>
+            {{ AFS_ZH[c.afs] || (c.afs ? c.afs : '—') }}<span v-if="c.wksi" class="tag" title="Well-known seasoned issuer：可用自動生效的 S-3 註冊聲明">WKSI</span>
           </td>
           <td class="num" :title="c.floatAdjusted ? '申報的 EntityPublicFloat 疑似單位錯誤（大 1,000 倍），已除以 1,000' : ''">
             {{ fmtFloat(c.float) }}<span v-if="c.floatAdjusted" class="warn">*</span>
@@ -155,7 +155,8 @@ tbody tr:nth-child(even) td {
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.badge {
+/* not "badge": that name would leak into ScoreBadge's root element through the scoped attribute */
+.tag {
   display: inline-block;
   font-size: 10px;
   color: var(--accent);

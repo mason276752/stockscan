@@ -1,5 +1,7 @@
 // Custom ETFs ("baskets") kept in localStorage (per browser).
-//   [{ id, name, createdAt, rebalance: 'none' | 'daily', constituents: [{ ticker, cik, name, weight }] }]
+//   [{ id, name, createdAt, rebalance: 'none' | 'daily', prune, constituents: [{ ticker, cik, name, weight }] }]
+// prune: drop delisted names as soon as the first price data shows which
+// ones they are (set when a basket is copied from an ETF / screener / list)
 // weight is a percentage (the page keeps them summing to 100; 0 leaves the
 // stock out of the index while keeping it in the list)
 import { reactive, watch } from 'vue';
@@ -31,7 +33,7 @@ const clean = (b) => {
     .map((c) => ({ ticker: String(c.ticker).toUpperCase(), cik: c.cik ?? null, name: c.name || '', weight: Number(c.weight) > 0 ? Number(c.weight) : 0 }));
   // relative weights (every one "1": new baskets, and those saved before weights were percentages) -> percentages
   if (constituents.length && constituents.every((c) => c.weight === 1)) normalizeWeights(constituents);
-  return { id: String(b.id || newId()), name: String(b.name || '自製 ETF'), createdAt: b.createdAt || new Date().toISOString(), rebalance: b.rebalance === 'daily' ? 'daily' : 'none', constituents };
+  return { id: String(b.id || newId()), name: String(b.name || '自製 ETF'), createdAt: b.createdAt || new Date().toISOString(), rebalance: b.rebalance === 'daily' ? 'daily' : 'none', prune: !!b.prune, constituents };
 };
 
 export const baskets = reactive({
@@ -55,9 +57,9 @@ watch(
 export const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 export const basketOf = (id) => baskets.items.find((b) => b.id === id) || null;
 
-// Create a basket from a list of companies (equal weights) and make it current.
-export function createBasket(name, companies = [], { rebalance = 'none' } = {}) {
-  const b = clean({ id: newId(), name, rebalance, constituents: companies.map((c) => ({ ticker: c.ticker || c.tickers?.[0], cik: c.cik, name: c.name, weight: 1 })) });
+// Create a basket from a list of companies (their `weight` when given, else equal) and make it current.
+export function createBasket(name, companies = [], { rebalance = 'none', prune = false } = {}) {
+  const b = clean({ id: newId(), name, rebalance, prune, constituents: companies.map((c) => ({ ticker: c.ticker || c.tickers?.[0], cik: c.cik, name: c.name, weight: Number(c.weight) > 0 ? Number(c.weight) : 1 })) });
   baskets.items.unshift(b);
   baskets.current = b.id;
   return b;
@@ -83,11 +85,18 @@ export function addConstituent(id, company) {
 }
 
 export function removeConstituent(id, ticker) {
+  removeConstituents(id, [ticker]);
+}
+
+// remove several at once; the rest are rescaled to 100 in proportion
+export function removeConstituents(id, tickers) {
   const b = basketOf(id);
-  if (!b) return;
-  const i = b.constituents.findIndex((c) => c.ticker === ticker);
-  if (i >= 0) b.constituents.splice(i, 1);
-  if (b.constituents.length) normalizeWeights(b.constituents);
+  if (!b) return 0;
+  const drop = new Set(tickers);
+  const before = b.constituents.length;
+  b.constituents = b.constituents.filter((c) => !drop.has(c.ticker));
+  if (b.constituents.length && b.constituents.length < before) normalizeWeights(b.constituents);
+  return before - b.constituents.length;
 }
 
 export function equalWeights(id) {

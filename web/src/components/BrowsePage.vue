@@ -1,13 +1,14 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
+import { createBasket, normalizeWeights } from '../baskets';
 import CompanyTable from './CompanyTable.vue';
 import ScoreBadge from './ScoreBadge.vue';
 import { isWatched, toggleWatch } from '../watchlist';
 
 // params: { cat: 'sic'|'filer'|'etf', code, afs, etf }
 const props = defineProps({ params: { type: Object, default: () => ({}) } });
-const emit = defineEmits(['open', 'navigate']);
+const emit = defineEmits(['open', 'navigate', 'basket']);
 
 const cat = ref(props.params.cat || 'sic');
 const code = ref(props.params.code || '');
@@ -154,6 +155,18 @@ const visibleHoldings = computed(() => {
     (h) => (!equityOnly.value || h.assetCat === 'EC') && (!q || h.name.toUpperCase().includes(q) || (h.symbol || '').startsWith(q)),
   );
 });
+// copy the ETF's holdings (the ones with a ticker; all of them, or the top N
+// by weight) into a custom ETF with the N-PORT weights, to be edited there
+const copyN = ref('');
+const copyable = computed(() => visibleHoldings.value.filter((h) => h.symbol && h.pctVal > 0));
+function copyToBasket() {
+  const n = Number(copyN.value) > 0 ? Math.floor(Number(copyN.value)) : copyable.value.length;
+  const rows = copyable.value.slice(0, n).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.pctVal }));
+  if (!rows.length) return;
+  normalizeWeights(rows);
+  createBasket(`${holdings.value.etf.ticker} 複製${rows.length < copyable.value.length ? `（前 ${rows.length} 檔）` : ''}`, rows, { prune: true });
+  emit('basket');
+}
 const popular = computed(() => {
   if (!etfs.value) return [];
   const by = new Map(etfs.value.etfs.map((e) => [e.ticker, e]));
@@ -313,6 +326,10 @@ onMounted(async () => {
               <label class="small"><input v-model="equityOnly" type="checkbox" /> 只看股票</label>
               <input v-model="filter" type="text" placeholder="篩選代號 / 名稱" class="filter" />
               <span class="muted small">{{ visibleHoldings.length }} 筆 · 可查財報 {{ holdings.stats.mapped }}/{{ holdings.stats.total }}</span>
+              <span class="copy" title="把成分股（依權重排序、有代號的）複製成自製 ETF，權重照 N-PORT 比例換算成 100%，之後可以自己增減、改權重；留空 = 全部">
+                前 <input v-model="copyN" type="number" min="1" class="n" :placeholder="String(copyable.length)" /> 檔
+                <button class="small" :disabled="!copyable.length" @click="copyToBasket">{{ Number(copyN) > 0 ? `前 ${Math.min(Number(copyN), copyable.length)} 檔` : `全部 ${copyable.length} 檔` }}複製成自製 ETF</button>
+              </span>
             </div>
           </div>
           <div class="wrap">
@@ -564,5 +581,23 @@ tbody tr:nth-child(even) td {
     position: static;
     max-height: none;
   }
+}
+.copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.copy input.n {
+  width: 56px;
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-align: right;
+}
+.copy button.small {
+  font-size: 12px;
+  padding: 4px 10px;
 }
 </style>

@@ -28,16 +28,18 @@ const result = ref(null);
 const loading = ref(false);
 const error = ref(null);
 
-// the first N results (as sorted) as a new custom ETF
-const BASKET_MAX = 30;
+// the results (as sorted; all of them, or the first N) as a new custom ETF
+const basketN = ref('');
+const basketable = computed(() => (result.value?.rows || []).filter((r) => r.ticker));
 function makeBasket() {
-  const rows = (result.value?.rows || []).filter((r) => r.ticker).slice(0, BASKET_MAX);
+  const n = Number(basketN.value) > 0 ? Math.floor(Number(basketN.value)) : basketable.value.length;
+  const rows = basketable.value.slice(0, n);
   if (!rows.length) return;
   const parts = [];
   if (sicCode.value) parts.push(sicCode.value);
   else if (division.value) parts.push(meta.value?.divisions?.find((d) => d.id === division.value)?.zh || division.value);
   const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${(fieldOf(c.key)?.name || c.key).replace(/（.*?）/g, '')}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
-  createBasket([...parts, ...cond].join(' ') || '尋找股票', rows);
+  createBasket([...parts, ...cond].join(' ') || '尋找股票', rows, { prune: true });
   emit('basket');
 }
 const fieldOf = (key) => meta.value?.fields.find((f) => f.key === key) || null;
@@ -214,7 +216,10 @@ onMounted(async () => {
           </div>
           <div class="options">
             <span v-if="loading" class="muted small">搜尋中…</span>
-            <button class="small" :disabled="!result?.rows?.length" :title="`把目前排序的前 ${BASKET_MAX} 家組成自製 ETF，畫成 K 線`" @click="makeBasket">前 {{ Math.min(BASKET_MAX, result?.rows?.length || 0) }} 家組成自製 ETF</button>
+            <span class="copy" title="把目前排序的結果組成自製 ETF（等權重），畫成 K 線；留空 = 全部">
+              前 <input v-model="basketN" type="number" min="1" class="n" :placeholder="String(basketable.length)" /> 家
+              <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ Number(basketN) > 0 ? `前 ${Math.min(Number(basketN), basketable.length)} 家` : `全部 ${basketable.length} 家` }}組成自製 ETF</button>
+            </span>
             <a :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
           </div>
         </div>
@@ -432,5 +437,19 @@ td.star .on {
     position: static;
     max-height: none;
   }
+}
+.copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.copy input.n {
+  width: 56px;
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-align: right;
 }
 </style>
