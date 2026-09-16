@@ -24,7 +24,7 @@ export const C = {
   cogs: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales', 'us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
   // some filers show cost of revenue as a base line plus separate amortisation / depreciation lines (Intuit, Broadcom …)
   cogsTotal: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales'],
-  cogsPartial: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
+  cogsPartial: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization', 'synthetic:CostOfRevenueFromHeading'],
   cogsAmort: ['us-gaap:CostOfGoodsAndServicesSoldAmortization'],
   cogsDA: ['us-gaap:CostOfGoodsAndServicesSoldDepreciationAndAmortization', 'us-gaap:CostOfGoodsAndServicesSoldDepreciation'],
   grossProfit: ['us-gaap:GrossProfit', 'ifrs-full:GrossProfit'],
@@ -45,7 +45,7 @@ export const C = {
   // balances
   cash: ['us-gaap:CashAndCashEquivalentsAtCarryingValue', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations', 'us-gaap:CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations', 'us-gaap:CashAndDueFromBanks', 'us-gaap:CashCashEquivalentsAndFederalFundsSold', 'us-gaap:CashCashEquivalentsAndShortTermInvestments', 'us-gaap:Cash', 'us-gaap:CashEquivalentsAtCarryingValue', 'ifrs-full:CashAndCashEquivalents'],
   ar: ['us-gaap:AccountsReceivableNetCurrent', 'us-gaap:ReceivablesNetCurrent', 'us-gaap:AccountsNotesAndLoansReceivableNetCurrent', 'us-gaap:AccountsAndOtherReceivablesNetCurrent', 'us-gaap:AccountsReceivableNet', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLossCurrent', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLoss', 'us-gaap:PremiumsReceivableAtCarryingValue', 'us-gaap:AccountsReceivableGrossCurrent', 'ifrs-full:CurrentTradeReceivables', 'ifrs-full:TradeAndOtherCurrentReceivables', 'ifrs-full:TradeReceivables'],
-  inventory: ['us-gaap:InventoryNet', 'us-gaap:InventoryFinishedGoodsNetOfReserves', 'ifrs-full:Inventories'],
+  inventory: ['us-gaap:InventoryNet', 'us-gaap:InventoryGross', 'us-gaap:InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings', 'us-gaap:EnergyRelatedInventory', 'us-gaap:RetailRelatedInventoryMerchandise', 'us-gaap:AirlineRelatedInventoryNet', 'us-gaap:InventoryRealEstate', 'us-gaap:InventoryOperativeBuilders', 'us-gaap:FIFOInventoryAmount', 'us-gaap:InventoryFinishedGoodsNetOfReserves', 'us-gaap:InventoryRawMaterialsAndSupplies', 'us-gaap:EnergyRelatedInventoryNaturalGasInStorage', 'ifrs-full:Inventories'],
   prepaid: ['us-gaap:PrepaidExpenseCurrent'],
   currentAssets: ['us-gaap:AssetsCurrent', 'ifrs-full:CurrentAssets'],
   totalAssets: ['us-gaap:Assets', 'ifrs-full:Assets'],

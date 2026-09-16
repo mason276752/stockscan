@@ -17,11 +17,11 @@
 // five years.
 
 import { C, ROWS, first, ratios } from './indicators.js';
-import { balancesAt, factsAt, months, statementOf } from './quarters.js';
+import { balancesAt, costOfRevenueFromHeading, factsAt, months, statementOf } from './quarters.js';
 import { store } from './store.js';
 import { reclassify } from './statements.js';
 
-export const SCORE_VERSION = 7;
+export const SCORE_VERSION = 9;
 
 const CATEGORY_OF = { debtRatio: '財務結構', ltCapToPpe: '財務結構', currentRatio: '償債能力', quickRatio: '償債能力', dso: '經營能力', dio: '經營能力', cycle: '經營能力', assetTurnover: '經營能力', grossMargin: '獲利能力', opMargin: '獲利能力', netMargin: '獲利能力', eps: '獲利能力', roe: '獲利能力', cfRatio: '現金流量', cfAdequacy: '現金流量', cfReinvest: '現金流量', cashPct: '現金流量' };
 export const CATEGORIES = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
@@ -100,6 +100,10 @@ export function singleFilingInputs(data) {
     const m = best.m || 12;
     if (type === 'income_statement' || !monthsLen) monthsLen = m;
     const raw = factsAt(stmt, best.c.id, {});
+    if (type === 'income_statement') {
+      const est = costOfRevenueFromHeading(stmt, best.c.id);
+      if (est != null) raw['synthetic:CostOfRevenueFromHeading'] = est;
+    }
     for (const [k, v] of Object.entries(raw)) {
       if (k in flows) continue;
       flows[k] = v;

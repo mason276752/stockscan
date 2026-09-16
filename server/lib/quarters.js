@@ -301,12 +301,44 @@ export function factsAt(stmt, colId, into) {
   return into;
 }
 
-function flowsAt(data, { end, monthsLen }) {
+// Some filers (oil & gas, utilities, services) have no cost-of-revenue total:
+// their direct costs sit as separate lines under a "Cost of revenue" /
+// "Operating expenses" heading. Sum those lines, leaving out overhead-type
+// items (G&A, selling, R&D, depreciation, impairments, restructuring), so a
+// gross margin can still be estimated. Returns null when a real total exists.
+const COGS_HEADING = /(CostOfRevenue|CostOfGoodsAndServicesSold|CostsAndExpenses)Abstract$/;
+const COGS_TOTALS = /^(us-gaap:)?(CostOfRevenue|CostOfGoodsSold|CostOfGoodsAndServicesSold|CostOfServices|CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses)$/;
+const NOT_COGS = /GeneralAndAdministrative|Pension|PostretirementBenefit|DefinedBenefit|SellingAndMarketing|SellingExpense|ResearchAndDevelopment|Depreciation|Amortization|Impairment|Restructuring|MarketingExpense$|AdvertisingExpense|IncomeTax|InterestExpense|ShareBasedCompensation|GainLoss|OtherOperating|OtherCostAndExpense/;
+export function costOfRevenueFromHeading(stmt, colId) {
+  if (!stmt || !colId) return null;
+  const items = stmt.lineItems;
+  const hasTotal = items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses)$/.test(li.concept) && typeof li.values[colId]?.value === 'number');
+  if (hasTotal) return null;
+  const h = items.findIndex((li) => li.abstract && COGS_HEADING.test(li.concept));
+  if (h < 0) return null;
+  let sum = 0;
+  let n = 0;
+  for (let i = h + 1; i < items.length && items[i].depth > items[h].depth; i++) {
+    const li = items[i];
+    if (li.abstract || COGS_TOTALS.test(li.concept) || NOT_COGS.test(li.concept)) continue;
+    const v = li.values[colId]?.value;
+    if (typeof v !== 'number') continue;
+    sum += v;
+    n++;
+  }
+  return n ? sum : null;
+}
+
+export function flowsAt(data, { end, monthsLen }) {
   const out = {};
   for (const type of FLOW_TYPES) {
     const stmt = statementOf(data, type);
     const col = findColumn(stmt, { dims: '', end, monthsLen });
     factsAt(stmt, col?.id, out);
+    if (type === 'income_statement') {
+      const est = costOfRevenueFromHeading(stmt, col?.id);
+      if (est != null) out['synthetic:CostOfRevenueFromHeading'] = est;
+    }
   }
   return out;
 }
