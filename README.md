@@ -64,6 +64,8 @@ npm run build:static        # -> web/dist-static/（約 210 MB：網頁 + data/s
 **GitHub Actions 自動部署**（[.github/workflows/pages.yml](.github/workflows/pages.yml)）：push 到 `main` 就 build 並發佈到 GitHub Pages。要先做兩件事：
 repo 的 Settings → Pages → Source 選 **GitHub Actions**；Settings → Secrets → 新增 `SEC_USER_AGENT`（`名字 email`）。
 Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報與申報清單直接用 repo 裡的 `data/store`。
+除了 push，也**定時**在財報最常出現的時段跑（美東 08:30、17:45、19:45、22:30，週一到週五）：先 `npm run fetch:new` 從 EDGAR 每日索引把最近幾天新的 10-K / 10-Q 抓下來、解析、評分，
+commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workflow），再用新資料重建網站。`fetch:new` 在本機也能跑，等於爬蟲「監看新申報」那一步跑一次就結束。
 
 - 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json` 以 build 時間為版本，換一次 build 才重抓。
 
@@ -434,7 +436,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/index.js` | Express 路由、靜態檔案 |
 | `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、高/低優先權（預抓讓路） |
 | `server/lib/filings.js`、`statementTypes.js`、`storeFormat.js`、`scoreModel.js`、`screen.js`、`marketFields.js`、`sic.js` | 純計算 / 純資料模組（無 Node I/O），伺服器與純前端版共用：申報清單工具、報表分類、存檔格式還原、評分模型、尋找股票與分類瀏覽的篩選排序、市場欄位、SIC 表 |
-| `server/tools/build-static.mjs` | 產生純前端版（`npm run build:static`） |
+| `server/tools/build-static.mjs`、`fetch-new.mjs` | 產生純前端版（`npm run build:static`）；一次性抓最近幾天的新申報（`npm run fetch:new`，排程用） |
 | `web/src/api.js`、`api.http.js`、`api.static.js`、`staticData.js` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（讀靜態檔 + 瀏覽器內計算、WASM zstd） |
 | `server/lib/barStore.js` | 日線快取：一檔一個 brotli 檔、記憶體 LRU、增量接續（`mergeDays` 核對重疊段）、一個月未用清除；舊 kv 裡的日線第一次啟動會搬過來 |
 | `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |

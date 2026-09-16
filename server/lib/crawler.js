@@ -190,12 +190,13 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
       try {
         text = await low.text(dailyIndexUrl(day));
       } catch (err) {
-        if (err.status === 404) {
-          if (day < today) done[day] = true; // weekend / holiday
+        // no index for a weekend / holiday: SEC answers 404, or 403 for some paths
+        if (err.status === 404 || (err.status === 403 && day < today)) {
+          if (day < today) done[day] = true;
           continue;
         }
         console.warn(`daily index ${day}: ${err.message}`);
-        break;
+        continue;
       }
       const rows = parseDailyIndex(text).filter((r) => FORMS.has(r.form) && known.has(r.cik) && !store.hasFiling(r.accession));
       for (const r of rows) {
@@ -248,6 +249,12 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   return {
     start() {
       if (enabled) run();
+    },
+    // one pass over the daily index (the last WATCH_DAYS days), then stop:
+    // for a scheduled job that tops the store up with today's filings
+    async watchOnce() {
+      await watch();
+      return { watched: state.watched, failed: state.failed, log: state.watchLog };
     },
     status: () => ({ ...state }),
   };

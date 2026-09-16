@@ -1,23 +1,37 @@
-# Publish the pure-frontend build (web/dist-static) to GitHub Pages on every
-# push to main. Needs: Settings → Pages → Source = "GitHub Actions", and a
-# repository secret SEC_USER_AGENT ("Name email") - the build fetches the
-# ticker table, the SIC / filer universe and ETF lists from SEC; the market
-# snapshot comes from TradingView. The filings themselves are in the repo.
+# Publish the pure-frontend build (web/dist-static) to GitHub Pages:
+#   - on every push to main (the data you committed, as is)
+#   - on a schedule around the hours filings land on EDGAR: first the day's new
+#     10-K / 10-Q / 20-F / 40-F are fetched, parsed, scored and committed to
+#     main, then the site is rebuilt with them (a push made by the workflow's
+#     own token does not trigger the workflow again, so no loop)
+#   - by hand (Actions → Run workflow)
+# Needs: Settings → Pages → Source = "GitHub Actions", and a repository secret
+# SEC_USER_AGENT ("Name email") - the build fetches the ticker table, the
+# SIC / filer universe and ETF lists from SEC; the market snapshot comes from
+# TradingView.
 name: Deploy static site to GitHub Pages
 
 on:
   push:
     branches: [main]
+  schedule:
+    # cron is UTC. EDGAR accepts filings 06:00–22:00 US Eastern; most 10-Q /
+    # 10-K arrive right after the market close (16:00–17:30 ET) and in the
+    # morning before the open. Times below straddle daylight-saving time.
+    - cron: '30 12 * * 1-5' # 08:30 EDT / 07:30 EST - the morning's filings
+    - cron: '45 21 * * 1-5' # 17:45 EDT / 16:45 EST - right after the close
+    - cron: '45 23 * * 1-5' # 19:45 EDT / 18:45 EST - the late-afternoon batch
+    - cron: '30 2 * * 2-6'  # 22:30 EDT / 21:30 EST - the end of EDGAR's day (UTC next day)
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,7 +47,31 @@ jobs:
             web/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm --prefix web ci
-      - run: npm run build:static
+
+      # scheduled / manual runs: top the store up with the newest filings and commit them
+      - name: Fetch new filings from EDGAR
+        if: github.event_name != 'push'
+        run: npm run fetch:new
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          IB_ENABLED: '0'
+          TV_ENABLED: '0'
+      - name: Commit new filings
+        if: github.event_name != 'push'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -A data/store
+          if git diff --cached --quiet; then
+            echo "no new filings"
+          else
+            git commit -m "data: 新申報 $(date -u +%Y-%m-%d) [ci]"
+            git pull --rebase --autostash origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Build the static site
+        run: npm run build:static
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           STOCKSCAN_CRAWL: '0'
