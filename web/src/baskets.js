@@ -237,6 +237,15 @@ export function removeConstituent(id, ticker) {
 
 // remove several at once; the rest are rescaled to 100 in proportion. Source
 // rows go on the excluded list so a resync does not bring them back.
+// the company trades under a new ticker (EDGAR moved the CIK): follow it
+export function renameConstituent(id, from, to) {
+  const b = basketOf(id);
+  const c = b?.constituents.find((x) => x.ticker === from);
+  if (!c || !to || b.constituents.some((x) => x.ticker === to)) return false;
+  c.ticker = String(to).toUpperCase();
+  return true;
+}
+
 export function removeConstituents(id, tickers) {
   const b = basketOf(id);
   if (!b) return 0;

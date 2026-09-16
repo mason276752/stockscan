@@ -7,7 +7,7 @@ import { SecClient } from './lib/secClient.js';
 import { openStore, requireVersion, store } from './lib/store.js';
 import { createPrefetcher } from './lib/prefetch.js';
 import { createCrawler } from './lib/crawler.js';
-import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, pickFiling, refreshTickers, searchCompanies } from './lib/edgar.js';
+import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, listingOf, pickFiling, purgeDelisted, refreshTickers, searchCompanies } from './lib/edgar.js';
 import { scrapeFiling, SCRAPE_VERSION } from './lib/scrape.js';
 import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
@@ -34,8 +34,15 @@ const prefetcher = createPrefetcher(client);
 const crawler = createCrawler(client, { prefetcher, enabled: !/^(0|false|no|off)$/i.test(process.env.STOCKSCAN_CRAWL || '1') });
 
 // Ticker table: refresh in the background at startup and daily; the saved
-// copy serves searches meanwhile.
-const refresh = () => refreshTickers(client).then((rows) => console.log(`ticker table refreshed: ${rows.length} companies`)).catch((e) => console.warn(`ticker refresh failed: ${e.message}`));
+// copy serves searches meanwhile. Each refresh also drops the filings of
+// companies that have since left the table (delisted).
+const refresh = () =>
+  refreshTickers(client)
+    .then((rows) => {
+      console.log(`ticker table refreshed: ${rows.length} companies`);
+      purgeDelisted(rows);
+    })
+    .catch((e) => console.warn(`ticker refresh failed: ${e.message}`));
 setTimeout(refresh, 1000);
 setInterval(refresh, 24 * 3600 * 1000).unref();
 
@@ -564,7 +571,7 @@ app.post(
     const body = req.body || {};
     const seen = new Set();
     const wanted = (Array.isArray(body.constituents) ? body.constituents : [])
-      .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
+      .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), cik: Number(c?.cik) || null, weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
       .filter((c) => c.ticker && !seen.has(c.ticker) && seen.add(c.ticker));
     if (!wanted.length) throw Object.assign(new Error('constituents is empty'), { status: 400 });
     const range = RANGES[body.range] ? body.range : '5y';
@@ -591,7 +598,17 @@ app.post(
     const members = out.filter((m) => !m.bench);
     const bench = out.find((m) => m.bench) || null;
     const series = basketSeries(members, { range, rebalance });
-    const failed = members.filter((m) => m.error).map((m) => ({ ticker: m.ticker, error: m.error }));
+    // EDGAR's ticker table is the other delisting signal: a name whose prices
+    // still come in but that left the table (taken private, deregistered,
+    // renamed) is flagged too, with the new ticker when the company lives on
+    for (const c of series.constituents) {
+      const l = listingOf(c.symbol, wanted.find((w) => w.ticker === c.symbol)?.cik);
+      if (!l) continue;
+      c.listed = l.listed;
+      if (l.renamed) c.renamed = l.renamed;
+      if (!l.listed) c.delisted = true;
+    }
+    const failed = members.filter((m) => m.error).map((m) => ({ ticker: m.ticker, error: m.error, ...(listingOf(m.ticker, m.cik) || {}) }));
     for (const f of failed) series.notes.push(`${f.ticker} 沒有價格資料，已排除（${f.error}）`);
     const sources = [...new Set(members.filter((m) => !m.error).map((m) => m.source))];
     res.json({

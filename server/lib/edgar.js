@@ -34,6 +34,29 @@ export async function refreshTickers(client) {
   return rows;
 }
 
+// Delisted filers (no ticker on EDGAR any more) are nothing the user can buy:
+// throw their saved filings and scores away. Only after a fresh, plausible
+// ticker table - a truncated download must not empty the store.
+const MIN_TICKERS = 5000;
+export function purgeDelisted(rows) {
+  if (!Array.isArray(rows) || rows.length < MIN_TICKERS) return null;
+  const r = store.purgeExcept(rows.map((t) => t.cik));
+  if (r.companies) console.log(`store: 移除 ${r.companies} 家已下市公司的 ${r.filings} 份財報（EDGAR 代號表已無此公司）`);
+  return r;
+}
+
+// Listing status of a ticker from the saved table (no network): listed, or
+// delisted, or renamed when the same company now trades under another ticker.
+export function listingOf(ticker, cik = null) {
+  const rows = tickersMemo || store.getKV('tickers')?.value;
+  if (!rows) return null; // not known yet
+  if (!tickersMemo) tickersMemo = rows;
+  const wanted = String(ticker).toUpperCase().replace(/\./g, '-');
+  if (rows.some((r) => r.ticker === wanted)) return { listed: true };
+  const same = cik ? rows.find((r) => r.cik === Number(cik)) : null;
+  return same ? { listed: false, renamed: same.ticker } : { listed: false };
+}
+
 export async function tickerTable(client) {
   if (tickersMemo) return tickersMemo;
   const saved = store.getKV('tickers');

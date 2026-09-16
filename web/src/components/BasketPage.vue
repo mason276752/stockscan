@@ -5,7 +5,7 @@ import CompanySearch from './CompanySearch.vue';
 import KlineChart from './KlineChart.vue';
 import TvEmbedChart from './TvEmbedChart.vue';
 import Icon from './Icon.vue';
-import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
+import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, renameConstituent, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
 import { watchlist } from '../watchlist';
 
 const emit = defineEmits(['open']);
@@ -63,16 +63,33 @@ function showAll() {
   if (current.value) hidden.value = { ...hidden.value, [current.value.id]: new Set() };
 }
 const hiddenCount = computed(() => (current.value ? current.value.constituents.filter((c) => isHidden(c)).length : 0));
-// names whose price data stopped (delisted, taken private) or that no source knows
+// names whose price data stopped (delisted, taken private), that EDGAR's
+// ticker table no longer lists, or that no source knows. A basket copied from
+// a list is pruned of these when it is created, so whatever is here went
+// after that - it gets its own table so the user sees it.
 const delisted = computed(() => {
   if (!result.value || !current.value) return [];
   const gone = new Set([...result.value.constituents.filter((c) => c.delisted).map((c) => c.symbol), ...(result.value.failed || []).map((f) => f.ticker)]);
   return current.value.constituents.filter((c) => gone.has(c.ticker)).map((c) => c.ticker);
 });
+const delistedSet = computed(() => new Set(delisted.value));
+// why a name counts as delisted: what the server saw for it
+function delistedWhy(c) {
+  const p = perf.value[c.ticker];
+  const f = result.value?.failed?.find((x) => x.ticker === c.ticker);
+  const l = p || f;
+  if (l?.renamed) return { text: `已更名為 ${l.renamed}（EDGAR 同一公司改用新代號）`, renamed: l.renamed };
+  if (l && l.listed === false) return { text: p?.last ? `EDGAR 代號表已無此代號，${p.last} 後無報價` : 'EDGAR 代號表已無此代號', renamed: null };
+  if (p?.delisted) return { text: `${p.last} 後無報價（最近兩週沒有成交資料）`, renamed: null };
+  return { text: `查無報價資料${f?.error ? `（${f.error}）` : ''}`, renamed: null };
+}
 function removeDelisted() {
   if (!current.value || !delisted.value.length) return;
   const n = removeConstituents(current.value.id, delisted.value);
   pruned.value = `已移除 ${n} 檔`;
+}
+function followRename(c, to) {
+  if (renameConstituent(current.value.id, c.ticker, to)) run(true);
 }
 
 // ---- source resync ----
@@ -120,8 +137,9 @@ const manualCount = computed(() => (current.value ? current.value.constituents.f
 // the constituent tables: one, or split by where each row comes from when the basket has a source
 const groups = computed(() => {
   if (!current.value) return [];
-  const rowsOf = (pred) => rows.value.filter(pred);
-  if (!current.value.source) return [{ key: 'all', title: '', rows: rows.value }];
+  const live = rows.value.filter((c) => !delistedSet.value.has(c.ticker));
+  const rowsOf = (pred) => live.filter(pred);
+  if (!current.value.source) return [{ key: 'all', title: '', rows: live }];
   return [
     { key: 'source', title: `來源成分（${sourceLabel(current.value.source)}）`, rows: rowsOf((c) => c.origin === 'source' && !c.gone), hint: '重新同步時：權重跟著來源；手動改過權重的（標「手動」）保留' },
     { key: 'manual', title: '手動新增', rows: rowsOf((c) => c.origin === 'manual'), hint: '重新同步不會動這些' },
@@ -194,7 +212,7 @@ async function run(force = false) {
     lastKey = '';
     return;
   }
-  const body = { constituents: included.map((c) => ({ ticker: c.ticker, weight: Number(c.weight) })), range: range.value, rebalance: b.rebalance, benchmark: benchmark.value || null };
+  const body = { constituents: included.map((c) => ({ ticker: c.ticker, cik: c.cik, weight: Number(c.weight) })), range: range.value, rebalance: b.rebalance, benchmark: benchmark.value || null };
   const key = JSON.stringify(body);
   if (!force && key === lastKey) return;
   lastKey = key;
@@ -545,7 +563,7 @@ const sourceText = computed(() => {
               <tr>
                 <td colspan="3" class="muted small">
                   {{ current.constituents.filter(inIndex).length }} 檔納入指數<template v-if="hiddenCount">，暫時隱藏 {{ hiddenCount }} 檔 <button class="mini ghost" @click="showAll">全部顯示</button></template>
-                  <template v-if="delisted.length"> · <span class="warn">{{ delisted.length }} 檔已下市 / 查無報價</span> <button class="mini" title="移除目前買不到的成分股，其餘權重按比例補回 100%" @click="removeDelisted">移除已下市</button></template>
+                  <template v-if="delisted.length"> · <span class="warn">{{ delisted.length }} 檔已下市 / 查無報價（見下表）</span></template>
                 </td>
                 <td class="num weight">
                   <b class="mono" :class="{ off: totalOff }">{{ f1.format(totalWeight) }}%</b>
@@ -555,6 +573,37 @@ const sourceText = computed(() => {
                 <td :colspan="current.source ? 7 : 6" class="muted small">{{ totalOff ? '合計不是 100%，指數依比例換算（右邊小字是實際權重）' : hiddenCount ? '隱藏的權重由其餘成分股按比例分攤（右邊小字是實際權重）' : '' }}</td>
               </tr>
             </tfoot>
+          </table>
+        </div>
+        <div v-if="delisted.length" class="panel wrap excluded delisted">
+          <div class="ghead">
+            <b class="warn">已下市 / 查無報價（建立後才發生的）</b> <span class="muted small">{{ delisted.length }} 檔 · 目前買不到；指數只算到它最後有報價的那天，之後的部位按比例分給其餘成分股</span>
+            <button class="mini" title="移除這些成分股，其餘權重按比例補回 100%" @click="removeDelisted">全部移除</button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>代號</th>
+                <th>公司</th>
+                <th class="num">權重 %</th>
+                <th class="num">最後收盤</th>
+                <th>狀態</th>
+                <th class="del"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in rows.filter((x) => delistedSet.has(x.ticker))" :key="c.ticker" class="row" @click="emit('open', c)">
+                <td class="mono"><a :href="`?company=${c.ticker}`" @click.prevent>{{ c.ticker }}</a></td>
+                <td class="name">{{ c.name }}</td>
+                <td class="num mono">{{ f1.format(c.weight) }}%</td>
+                <td class="num mono">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}<span v-if="perf[c.ticker]?.last" class="small muted"> ({{ perf[c.ticker].last }})</span></td>
+                <td class="small warn">
+                  {{ delistedWhy(c).text }}
+                  <button v-if="delistedWhy(c).renamed" class="mini" @click.stop="followRename(c, delistedWhy(c).renamed)">改用 {{ delistedWhy(c).renamed }}</button>
+                </td>
+                <td class="del" :title="`從 ETF 移除 ${c.ticker}（其餘權重按比例補回 100%）`" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
+              </tr>
+            </tbody>
           </table>
         </div>
         <div v-if="current.source && current.excluded?.length" class="panel wrap excluded">

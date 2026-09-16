@@ -4,6 +4,9 @@
 // filer's English label in the UI.
 
 import { CUSTOM, DESCRIPTIONS, MORE } from './zh-more.js';
+import { BATCH3, BATCH3B, BATCH3C, BATCH3D, BATCH3E, EXT_LOCAL as EXT_A, EXT_LOCAL2, EXT_LOCAL3 } from './zh-batch3.js';
+
+const EXT_LOCAL = { ...EXT_A, ...EXT_LOCAL2, ...EXT_LOCAL3 };
 
 const T = {
   // ---------- 報表標題 / 段落 ----------
@@ -603,7 +606,7 @@ const T = {
   'ifrs-full:IncreaseDecreaseInCashAndCashEquivalents': ['本期現金及約當現金增加（減少）'],
 };
 
-const ALL = { ...T, ...MORE, ...CUSTOM };
+const ALL = { ...T, ...MORE, ...CUSTOM, ...BATCH3, ...BATCH3B, ...BATCH3C, ...BATCH3D, ...BATCH3E };
 
 function lookup(concept) {
   const hit = ALL[concept];
@@ -616,9 +619,37 @@ function lookup(concept) {
       const std = ALL[`${p}:${local}`];
       if (std) return { labelZh: std[0], descriptionZh: std[1] || DESCRIPTIONS[`${p}:${local}`] || null };
     }
+    // extension names many filers share (accrued offering costs, non-cash lease expense …)
+    const ext = EXT_LOCAL[local];
+    if (ext) return { labelZh: ext[0], descriptionZh: ext[1] || null };
+    // a spelling variant of a known name: NoncashLeaseExpenses / NonCashLeaseExpense,
+    // LeaseLiabilitiesNonCurrent / LeaseLiabilityNoncurrent, IfrsRevenue, CashPaidForInterest1
+    const loose = LOOSE[looseKey(local)];
+    if (loose) return { labelZh: loose[0], descriptionZh: loose[1] || null };
   }
   return { labelZh: null, descriptionZh: null };
 }
+
+// case-, plural-, hyphen- and suffix-digit-insensitive form of a local name
+function looseKey(local) {
+  const words = local
+    .replace(/^Ifrs(?=[A-Z])/, '')
+    .replace(/\d+$/, '')
+    .replace(/[^A-Za-z]/g, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(' ')
+    .map((w) => (w.length > 3 && /ies$/.test(w) ? w.replace(/ies$/, 'y') : w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w));
+  // "noncash" vs "non cash", "rightofuse" vs "right of use", "prefunded" vs "pre funded"
+  return words.join('').replace(/^(.*)abstract$/, '$1');
+}
+const LOOSE = {};
+for (const [concept, v] of Object.entries(ALL)) {
+  if (!/^(us-gaap|ifrs-full):/.test(concept)) continue;
+  const k = looseKey(concept.slice(concept.indexOf(':') + 1));
+  LOOSE[k] ??= [v[0], v[1] || DESCRIPTIONS[concept] || null];
+}
+for (const [local, v] of Object.entries(EXT_LOCAL)) LOOSE[looseKey(local)] ??= v;
 
 export function zhFor(concept) {
   return lookup(concept);

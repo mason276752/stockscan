@@ -115,7 +115,10 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     state.phase = 'sweep';
     state.round++;
     const u = await getUniverse(client, { priority: 'low' });
-    const targets = u.companies.filter((c) => c.ticker); // already sorted by public float, largest first
+    // the universe is rebuilt weekly; the ticker table daily - a company that
+    // was delisted in between is skipped (nothing to buy, nothing to fetch)
+    const listed = new Set((await tickerTable(client)).map((t) => t.cik));
+    const targets = u.companies.filter((c) => c.ticker && listed.has(c.cik)); // already sorted by public float, largest first
     const checked = store.getKV(CHECKED_KEY)?.value || {};
     state.total = targets.length;
     state.position = 0;

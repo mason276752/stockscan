@@ -137,6 +137,29 @@ export const store = {
   unscoredAccessions(version) {
     return need().prepare('SELECT f.accession FROM filings f LEFT JOIN scores s ON s.accession = f.accession AND s.version = ? WHERE s.accession IS NULL').all(version).map((r) => r.accession);
   },
+  // drop every saved filing / score of companies outside `ciks` (delisted
+  // filers: nothing to buy, so nothing to keep) -> { companies, filings, scores }
+  purgeExcept(ciks) {
+    const d = need();
+    const keep = new Set(ciks);
+    const gone = d.prepare('SELECT DISTINCT cik FROM filings UNION SELECT DISTINCT cik FROM scores').all().map((r) => r.cik).filter((c) => !keep.has(c));
+    let filings = 0;
+    let scores = 0;
+    const delF = d.prepare('DELETE FROM filings WHERE cik = ?');
+    const delS = d.prepare('DELETE FROM scores WHERE cik = ?');
+    d.exec('BEGIN');
+    try {
+      for (const cik of gone) {
+        filings += delF.run(cik).changes;
+        scores += delS.run(cik).changes;
+      }
+      d.exec('COMMIT');
+    } catch (err) {
+      d.exec('ROLLBACK');
+      throw err;
+    }
+    return { companies: gone.length, filings, scores };
+  },
   size() {
     const f = need().prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM filings').get();
     const k = need().prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM kv').get();
