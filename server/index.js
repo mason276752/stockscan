@@ -538,6 +538,18 @@ app.get(
 
 // ---- custom ETF (basket) charts: daily bars from IBKR TWS, else Yahoo ----
 
+// GET /api/quotes/tv-symbol/:ticker -> { symbol: 'NASDAQ:AAPL' } for TradingView's
+// widget (a bare ticker can resolve to another country's listing)
+app.get(
+  '/api/quotes/tv-symbol/:ticker',
+  wrap(async (req, res) => {
+    const t = String(req.params.ticker).toUpperCase().replace(/\./g, '-');
+    const snap = await marketSnapshot();
+    const rec = snap?.byTicker?.[t];
+    res.json({ ticker: t, symbol: rec?.tv || t.replace(/-/g, '.'), exchange: rec?.exchange || null, known: !!rec });
+  }),
+);
+
 // GET /api/quotes/status -> is TWS / IB Gateway reachable (else bars come from Yahoo)
 // The licensed TradingView Advanced Charts library, when present in
 // web/assets/tradingview/ (charting_library/ + datafeeds/), is served at

@@ -115,6 +115,7 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 | `GET /api/bars/AAPL` | 十年日 K（開高低收量，除權調整）；來源 TradingView → IBKR TWS → Yahoo |
 | `POST /api/basket` `{constituents:[{ticker,weight}], range, rebalance, benchmark}` | 自製 ETF 指數（起點 = 100）的日 K、統計、各成分股報酬與貢獻、大盤 ETF 疊圖 |
 | `GET /api/quotes/status` / `POST /api/quotes/ib/connect` | TWS 連線狀態 / 立刻重試連線 |
+| `GET /api/quotes/tv-symbol/:ticker` | 財報頁「K 線圖」用的 TradingView 商品代號（`NASDAQ:AAPL`，取自市場快照，避免代號被解析成別國的股票） |
 
 `:id` 可以是股票代號或 CIK。`year` / `period` 找不到時回 404，並附上該公司可用的 `available` 清單。
 
@@ -134,6 +135,11 @@ C1、C2、C3 取各季 10-Q 的年初至今欄（沒有就用上一季累計 + �
 - 資產負債表為各季期末餘額（不需推算）；股東權益變動表不提供季度拆分。
 - 回傳格式與單一申報相同，多了 `derived: true` 與 `sources`（四份來源申報），
   `columns[].label` 為 Q1/Q2/Q3/Q4/FY，`columns[].derived` 標示是否由相減得出。
+
+### K 線圖
+
+財報頁「股價估值」右邊的「K 線圖」分頁：以 TradingView 官方嵌入圖單獨呈現這檔股票（TradingView 自己的價格、成交量與技術指標；圖上可換週期、加指標、改代號），
+區間 1 月 ～ 10 年 / 全部，K 棒紅漲綠跌或綠漲紅跌（與自製 ETF 共用設定），並附「在 TradingView 開啟」連結。商品代號用市場快照裡的交易所代號（`NYSE:BRK.B`），沒有的才交給 TradingView 自行判斷。
 
 ### 股價估值
 

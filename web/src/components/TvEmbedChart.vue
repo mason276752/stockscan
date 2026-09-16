@@ -12,6 +12,8 @@ const props = defineProps({
   range: { type: String, default: '36M' }, // 12M | 36M | 60M | 120M | ALL
   colors: { type: String, default: 'tw' },
   height: { type: Number, default: 460 },
+  volume: { type: Boolean, default: false }, // show the volume pane (single stocks; meaningless for a spread)
+  symbolChange: { type: Boolean, default: false }, // let the user type another symbol in the widget
 });
 
 const EMBED = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
@@ -34,8 +36,8 @@ function mount() {
     theme: 'light',
     style: '1',
     locale: 'zh_TW',
-    allow_symbol_change: false,
-    hide_volume: true,
+    allow_symbol_change: props.symbolChange,
+    hide_volume: !props.volume,
     withdateranges: true,
     save_image: true,
     range: props.range,
@@ -73,7 +75,7 @@ onBeforeUnmount(() => {
   clearTimeout(timer);
   if (el.value) el.value.innerHTML = '';
 });
-watch(() => [props.expression, props.compare, props.range, props.colors], remount);
+watch(() => [props.expression, props.compare, props.range, props.colors, props.volume, props.symbolChange], remount);
 </script>
 
 <template>

@@ -6,6 +6,7 @@ import FilingPicker from './components/FilingPicker.vue';
 import StatementTable from './components/StatementTable.vue';
 import IndicatorsTable from './components/IndicatorsTable.vue';
 import ValuationPanel from './components/ValuationPanel.vue';
+import TvEmbedChart from './components/TvEmbedChart.vue';
 import BrowsePage from './components/BrowsePage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
 import ScreenerPage from './components/ScreenerPage.vue';
@@ -146,6 +147,36 @@ watch([tab, valuationParams], ([t, p], [, prev]) => {
 });
 const isValuation = computed(() => tab.value === 'valuation');
 
+// K-line tab: TradingView's own chart of this one stock (its data, its
+// indicators); the exchange-qualified symbol comes from the market snapshot
+// so a bare ticker cannot resolve to another country's listing
+const isChart = computed(() => tab.value === 'chart');
+const tvSymbol = ref(null);
+const chartRange = ref(localStorage.getItem('stockscan.krange') || '12M');
+const chartColors = ref(localStorage.getItem('stockscan.kcolors') || 'tw');
+watch(chartRange, (v) => localStorage.setItem('stockscan.krange', v));
+watch(chartColors, (v) => localStorage.setItem('stockscan.kcolors', v));
+watch(
+  [tab, company],
+  async ([t, c]) => {
+    if (t !== 'chart' || !c) return;
+    const ticker = c.tickers?.[0];
+    if (!ticker) {
+      tvSymbol.value = { ticker: null, symbol: null };
+      return;
+    }
+    if (tvSymbol.value?.ticker === ticker) return;
+    tvSymbol.value = null;
+    try {
+      const r = await api.tvSymbol(ticker);
+      if (company.value === c) tvSymbol.value = r;
+    } catch {
+      if (company.value === c) tvSymbol.value = { ticker, symbol: ticker.replace(/-/g, '.'), known: false };
+    }
+  },
+  { immediate: true },
+);
+
 watch([tab, indicatorsParams], ([t, p], [, prev]) => {
   if (t !== 'indicators' || !p) return;
   if (indicators.value && JSON.stringify(p) === JSON.stringify(prev) && !indicatorsError.value) return;
@@ -231,7 +262,7 @@ async function loadFiling(f) {
     data.value = await api.filing(f.cik, f.accession, view.value);
     const valid = tab.value.startsWith('role:')
       ? data.value.allStatements.some((s) => `role:${s.role}` === tab.value)
-      : tab.value === 'indicators' || tab.value === 'valuation' || !!data.value.statements[tab.value];
+      : tab.value === 'indicators' || tab.value === 'valuation' || tab.value === 'chart' || !!data.value.statements[tab.value];
     if (!valid) tab.value = 'balance_sheet';
   } catch (e) {
     error.value = e.message;
@@ -248,7 +279,7 @@ async function loadQuarters(year) {
   filing.value = { accession: `q4-${year}`, form: 'Q4 推算', fiscalYear: year, fiscalPeriod: 'Q4', quartersYear: year };
   try {
     data.value = await api.quarters(String(company.value.cik), year);
-    if (!data.value.statements[tab.value] && !tab.value.startsWith('role:') && tab.value !== 'indicators' && tab.value !== 'valuation') tab.value = 'income_statement';
+    if (!data.value.statements[tab.value] && !tab.value.startsWith('role:') && tab.value !== 'indicators' && tab.value !== 'valuation' && tab.value !== 'chart') tab.value = 'income_statement';
     if (tab.value.startsWith('role:') && !data.value.allStatements.some((s) => `role:${s.role}` === tab.value)) tab.value = 'income_statement';
   } catch (e) {
     error.value = e.message;
@@ -438,6 +469,7 @@ onMounted(() => {
               </button>
               <button :class="{ active: tab === 'indicators' }" @click="tab = 'indicators'">財務指標</button>
               <button :class="{ active: tab === 'valuation' }" @click="tab = 'valuation'">股價估值</button>
+              <button :class="{ active: tab === 'chart' }" title="TradingView 的 K 線圖（TradingView 自己的資料與指標）" @click="tab = 'chart'">K 線圖</button>
               <select v-if="otherStatements.length" :value="tab.startsWith('role:') ? tab : ''" @change="tab = $event.target.value">
                 <option value="" disabled>其他報表…</option>
                 <option v-for="s in otherStatements" :key="s.role" :value="`role:${s.role}`">{{ s.title }}</option>
@@ -492,6 +524,29 @@ onMounted(() => {
                 </select>
               </label>
               <a v-if="valuationParams" :href="api.valuationUrl(String(company.cik), valuationParams)" target="_blank" rel="noopener" class="small">JSON</a>
+            </div>
+            <div v-else-if="isChart" class="options">
+              <label>
+                區間
+                <select v-model="chartRange">
+                  <option value="1M">1 月</option>
+                  <option value="3M">3 月</option>
+                  <option value="6M">6 月</option>
+                  <option value="12M">1 年</option>
+                  <option value="36M">3 年</option>
+                  <option value="61M">5 年</option>
+                  <option value="120M">10 年</option>
+                  <option value="ALL">全部</option>
+                </select>
+              </label>
+              <label>
+                K 棒
+                <select v-model="chartColors">
+                  <option value="tw">紅漲綠跌</option>
+                  <option value="us">綠漲紅跌</option>
+                </select>
+              </label>
+              <a v-if="tvSymbol?.symbol" :href="`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol.symbol)}`" target="_blank" rel="noopener" class="small">在 TradingView 開啟</a>
             </div>
             <div v-else class="options">
               <label v-if="!data.derived">
@@ -548,6 +603,17 @@ onMounted(() => {
                 <a :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <IndicatorsTable :data="indicators" :annualize-amounts="indAnnualizeAmounts" />
+            </template>
+          </template>
+          <template v-else-if="isChart">
+            <p v-if="!company.tickers?.length" class="muted">這家公司在 EDGAR 沒有股票代號，沒有可畫的 K 線。</p>
+            <p v-else-if="!tvSymbol" class="muted">查詢 TradingView 商品代號…</p>
+            <template v-else>
+              <p class="muted small note">
+                {{ tvSymbol.symbol }}<template v-if="tvSymbol.exchange"> · {{ tvSymbol.exchange }}</template> · TradingView 官方嵌入圖，價格、成交量與技術指標都是 TradingView 的資料；圖上可直接換週期、加指標
+                <span v-if="tvSymbol.known === false">（市場快照沒有這個代號，改用代號讓 TradingView 自行判斷交易所）</span>
+              </p>
+              <TvEmbedChart :expression="tvSymbol.symbol" :range="chartRange" :colors="chartColors" :height="620" volume symbol-change />
             </template>
           </template>
           <template v-else-if="isValuation">

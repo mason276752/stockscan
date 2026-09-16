@@ -39,6 +39,7 @@ export const api = {
   etfLive: (ticker) => get(`/api/browse/etf/${encodeURIComponent(ticker)}/live`),
   // custom ETF charts
   quotesStatus: () => get('/api/quotes/status'),
+  tvSymbol: (ticker) => get(`/api/quotes/tv-symbol/${encodeURIComponent(ticker)}`),
   ibConnect: () => post('/api/quotes/ib/connect', {}),
   bars: (symbol) => get(`/api/bars/${encodeURIComponent(symbol)}`),
   basket: (body) => post('/api/basket', body),
