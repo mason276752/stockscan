@@ -11,6 +11,9 @@
 //   data/store/documentation.json
 //       SEC's definition of every standard concept seen (us-gaap: … ), one
 //       copy instead of one per filing (a fifth of a filing's bytes)
+//   data/store/universe.json
+//       every SEC filer with industry (SIC), filer status and public float,
+//       from SEC's quarterly datasets (rebuilt weekly): the browse pages
 //   data/store/companies/<CIK padded>.json
 //       the company's EDGAR filing list (submissions, trimmed to 10-K/10-Q…):
 //       what the filing picker shows and what the crawler compares the store
@@ -157,6 +160,7 @@ export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(DA
   scanScores();
   migrateLegacy(process.env.STOCKSCAN_DB || path.join(DATA, 'stockscan.sqlite'));
   migrateSubmissions();
+  migrateUniverse();
   compactCache();
   process.on('exit', flushDocs);
   setTimeout(recompress, 20_000).unref();
@@ -220,6 +224,20 @@ function migrateSubmissions() {
   }
   kvShrunk = true;
   console.log(`store: ${keys.length} 家公司的申報清單從快取搬到 ${root}/companies/`);
+}
+// the SIC / filer universe likewise (rebuilt weekly from SEC's datasets; a
+// clone should not have to wait minutes for it)
+function migrateUniverse() {
+  const row = cache.prepare("SELECT json, updated_at FROM kv WHERE key = 'universe'").get();
+  if (!row) return;
+  const file = path.join(root, 'universe.json');
+  if (!fs.existsSync(file)) {
+    writeAtomic(file, JSON.stringify(kvUnpack(row.json)));
+    const t = new Date(row.updated_at);
+    fs.utimesSync(file, t, t);
+  }
+  cache.prepare("DELETE FROM kv WHERE key = 'universe'").run();
+  kvShrunk = true;
 }
 
 // Housekeeping for the kv cache at startup: rows still stored as plain text

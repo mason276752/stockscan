@@ -36,7 +36,6 @@ const { SCORE_VERSION, latestScores } = await import('../lib/score.js');
 const { screenRows, scoreBadge } = await import('../lib/screen.js');
 const { fiscalLabel, DEFAULT_FORMS } = await import('../lib/filings.js');
 const { lookupFiler, sicInfo } = await import('../lib/universe.js');
-const { marketStatus } = await import('../lib/market.js');
 const { POPULAR_ETFS } = await import('../lib/etf.js');
 
 function copyTree(from, to) {
@@ -58,9 +57,40 @@ const write = (name, obj) => {
   console.log(`build-static: ${name} ${(fs.statSync(file).size / 1048576).toFixed(1)} MB`);
 };
 
-const tickers = store.getKV('tickers')?.value || [];
-const universe = store.getKV('universe')?.value || { updatedAt: null, datasets: [], companies: [] };
-const market = store.getKV('market:snapshot')?.value || null;
+// the ticker table, the SIC / filer universe and the market snapshot: from
+// the caches when fresh, else fetched (SEC needs SEC_USER_AGENT; a CI runner
+// starts with no cache at all)
+let client = null;
+try {
+  const { SecClient } = await import('../lib/secClient.js');
+  client = new SecClient();
+} catch (err) {
+  console.warn(`build-static: ${err.message} - using cached data only`);
+}
+const { tickerTable } = await import('../lib/edgar.js');
+const { getUniverse } = await import('../lib/universe.js');
+const { marketSnapshot } = await import('../lib/market.js');
+let tickers = store.getKV('tickers')?.value || [];
+let universe = store.getDoc('universe.json')?.value || { updatedAt: null, datasets: [], companies: [] };
+let market = store.getKV('market:snapshot')?.value || null;
+if (client) {
+  try {
+    tickers = await tickerTable(client);
+    console.log(`build-static: ticker table ${tickers.length}`);
+    universe = await getUniverse(client);
+    console.log(`build-static: universe ${universe.companies.length} filers`);
+  } catch (err) {
+    console.warn(`build-static: SEC data: ${err.message}`);
+  }
+}
+try {
+  market = (await marketSnapshot({ wait: true })) || market;
+  console.log(`build-static: market snapshot ${market?.count ?? 0} tickers`);
+} catch (err) {
+  console.warn(`build-static: market snapshot: ${err.message}`);
+}
+if (!tickers.length) console.warn('build-static: WARNING no ticker table - search will not work (set SEC_USER_AGENT)');
+if (!universe.companies.length) console.warn('build-static: WARNING no universe - browse / screener will be empty (set SEC_USER_AGENT)');
 const byCik = new Map(universe.companies.map((c) => [c.cik, c]));
 const tickersByCik = new Map();
 for (const t of tickers) (tickersByCik.get(t.cik) || tickersByCik.set(t.cik, []).get(t.cik)).push(t.ticker);
@@ -122,9 +152,8 @@ write('tvsymbols.json', Object.fromEntries(Object.entries(market?.byTicker || {}
 // ETF list and the popular ETFs' holdings (from the caches; fetched when SEC_USER_AGENT allows)
 let etfs = { updatedAt: null, popular: POPULAR_ETFS, etfs: [], holdings: {} };
 try {
-  const { SecClient } = await import('../lib/secClient.js');
+  if (!client) throw new Error('no SEC client');
   const { etfList, etfHoldings } = await import('../lib/etf.js');
-  const client = new SecClient();
   const list = await etfList(client);
   etfs.updatedAt = list.updatedAt;
   etfs.etfs = list.etfs;

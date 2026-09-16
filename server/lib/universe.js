@@ -194,7 +194,7 @@ let building = null;
 // than a week) -> built from SEC on first use.
 export async function getUniverse(client, { priority = 'high' } = {}) {
   if (memo) return memo;
-  const saved = store.getKV('universe');
+  const saved = store.getDoc('universe.json');
   if (saved) {
     memo = saved.value;
     if (saved.ageMs > UNIVERSE_TTL) refreshUniverse(client, 'low').catch((e) => console.warn(`universe refresh failed: ${e.message}`));
@@ -207,7 +207,7 @@ export function refreshUniverse(client, priority = 'low') {
   if (building) return building;
   building = buildUniverse(client, priority)
     .then((u) => {
-      store.putKV('universe', u);
+      store.putDoc('universe.json', u);
       memo = u;
       console.log(`universe refreshed: ${u.companies.length} filers from ${u.datasets.join(', ')}`);
       return u;
@@ -221,7 +221,7 @@ export function refreshUniverse(client, priority = 'low') {
 // Classification of one filer from whatever copy is already at hand (no
 // network) - for decorating the company page.
 export function lookupFiler(cik) {
-  const u = memo || store.getKV('universe')?.value;
+  const u = memo || store.getDoc('universe.json')?.value;
   if (!u) return null;
   if (!memo) memo = u;
   const c = u.companies.find((x) => x.cik === cik);
@@ -230,6 +230,6 @@ export function lookupFiler(cik) {
 }
 
 export function universeStale() {
-  const saved = store.getKV('universe');
+  const saved = store.getDoc('universe.json');
   return !saved || saved.ageMs > UNIVERSE_TTL;
 }

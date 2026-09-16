@@ -58,9 +58,14 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 
 ```bash
 npm run build:static        # -> web/dist-static/（約 210 MB：網頁 + data/store + index/）
-# 放到任何靜態主機。GitHub Pages 例：
-npx gh-pages -d web/dist-static -t
+# 放到任何靜態主機；手動推 GitHub Pages 的話：npx gh-pages -d web/dist-static -t
 ```
+
+**GitHub Actions 自動部署**（[.github/workflows/pages.yml](.github/workflows/pages.yml)）：push 到 `main` 就 build 並發佈到 GitHub Pages。要先做兩件事：
+repo 的 Settings → Pages → Source 選 **GitHub Actions**；Settings → Secrets → 新增 `SEC_USER_AGENT`（`名字 email`）。
+Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報與申報清單直接用 repo 裡的 `data/store`。
+
+- 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json` 以 build 時間為版本，換一次 build 才重抓。
 
 - 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、
   `index/*.json`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。

@@ -10,7 +10,7 @@ services:
     environment:
       PORT: ${PORT:-3388}
       # SEC requires a User-Agent that identifies you (required)
-      SEC_USER_AGENT: ${SEC_USER_AGENT:?Mason mason276752@gmail.com}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-Mason mason276752@gmail.com}
       # serve under a path prefix, e.g. /stockscan (empty = the root)
       BASE_URL: ${BASE_URL:-/public/3388}
       # background crawl of every listed company's recent filings (0 = off)
