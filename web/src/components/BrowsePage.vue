@@ -338,7 +338,7 @@ onMounted(async () => {
                 {{ holdings.etf.entity }} · 持股日 {{ holdings.filing.reportDate }} · 申報 {{ holdings.filing.filingDate }} ·
                 淨資產 {{ money(holdings.filing.netAssets) }} 百萬美元 ·
                 <a :href="holdings.filing.viewerUrl" target="_blank" rel="noopener">N-PORT</a> ·
-                <a :href="api.etfHoldingsUrl(holdings.etf.ticker)" target="_blank" rel="noopener">JSON</a>
+                <a v-if="!api.isStatic" :href="api.etfHoldingsUrl(holdings.etf.ticker)" target="_blank" rel="noopener">JSON</a>
               </div>
             </div>
             <div class="options">

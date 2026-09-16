@@ -3,6 +3,5 @@ web/dist/
 *.log
 .env
 # data/store (財報與評分，小檔案) 進 git；快取與舊的 SQLite 不進
-data/*
-!data/store/
 data/store/**/*.tmp
+web/dist-static/

@@ -110,6 +110,7 @@ const stats = (xs) => {
 };
 
 export async function buildValuation(client, company, { year, period, n = 20, adr = 1 }) {
+  const load = (f) => scrapeFiling(client, f, company);
   const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
   const ticker = company.tickers?.[0] || null;
   const endQ = period === 'FY' ? 4 : Number(period.slice(1));
@@ -119,12 +120,12 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
   let points;
   if (quarterly) {
     const keys = quarterKeys(year, endQ, n + 3);
-    const byKey = await loadPoints(client, company, keys, true);
+    const byKey = await loadPoints(load, company, keys, true);
     points = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { year: k.year, period: `Q${k.q}`, flows: {}, balances: {}, missing: true });
   } else {
     const keys = [];
     for (let i = 0; i < n; i++) keys.unshift({ year: year - i, q: 4 });
-    const byKey = await loadPoints(client, company, keys, false);
+    const byKey = await loadPoints(load, company, keys, false);
     points = keys.map((k) => byKey[`${k.year}-FY`] || { year: k.year, period: 'FY', flows: {}, balances: {}, missing: true });
   }
 

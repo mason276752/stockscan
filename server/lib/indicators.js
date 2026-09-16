@@ -8,8 +8,7 @@
 //                 quarters earlier. With a Q4 end these are exactly the fiscal years.
 // Columns are ordered oldest -> newest.
 
-import { pickFiling } from './edgar.js';
-import { scrapeFiling } from './scrape.js';
+import { pickFiling } from './filings.js';
 import { yearQuarterPoints } from './quarters.js';
 
 // Concept fallbacks (US-GAAP first, then IFRS). Lists are tried in order.
@@ -168,7 +167,7 @@ export function quarterKeys(year, q, count) {
 }
 
 // Load the quarter points needed and index them by "year-Qn" (or "year-FY").
-export async function loadPoints(client, company, keys, quarterly) {
+export async function loadPoints(load, company, keys, quarterly) {
   const years = [...new Set(keys.map((k) => k.year))];
   const filingsByYear = {};
   for (const y of years) {
@@ -184,7 +183,7 @@ export async function loadPoints(client, company, keys, quarterly) {
   await Promise.all(
     years.flatMap((y) =>
       Object.entries(filingsByYear[y]).map(async ([p, f]) => {
-        (docsByYear[y] ||= {})[p] = await scrapeFiling(client, f, company);
+        (docsByYear[y] ||= {})[p] = await load(f);
       }),
     ),
   );
@@ -376,7 +375,7 @@ function adequacyOver(points, i, span, minPeriods) {
   return periods >= minPeriods ? { ocf, out, periods } : null;
 }
 
-export async function buildIndicators(client, company, { year, period, n = 20, basis = 'x4', mode = 'quarter' }) {
+export async function buildIndicators(load, company, { year, period, n = 20, basis = 'x4', mode = 'quarter' }) {
   const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
   const endQ = period === 'FY' ? 4 : Number(period.slice(1));
   const yearMode = mode === 'year' && quarterly;
@@ -386,7 +385,7 @@ export async function buildIndicators(client, company, { year, period, n = 20, b
   if (!quarterly) {
     const keys = [];
     for (let i = 0; i < n + 1; i++) keys.unshift({ year: year - i, q: 4 });
-    const byKey = await loadPoints(client, company, keys, false);
+    const byKey = await loadPoints(load, company, keys, false);
     const points = keys.map((k) => byKey[`${k.year}-FY`] || { year: k.year, period: 'FY', flows: {}, balances: {}, missing: true });
     const columns = [];
     for (let i = 1; i < points.length; i++) {
@@ -407,7 +406,7 @@ export async function buildIndicators(client, company, { year, period, n = 20, b
   // quarter mode needs one extra quarter for opening balances.
   const count = yearMode || sameMode ? n * 4 + 4 : n + 1;
   const keys = quarterKeys(year, endQ, count);
-  const byKey = await loadPoints(client, company, keys, true);
+  const byKey = await loadPoints(load, company, keys, true);
   const points = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { year: k.year, period: `Q${k.q}`, flows: {}, balances: {}, missing: true });
   const flowAt = (i, key) => first(points[i]?.flows, C[key]);
   const balAt = (i, key) => first(points[i]?.balances, C[key]);

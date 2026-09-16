@@ -13,9 +13,9 @@ import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
 import { buildValuation } from './lib/valuation.js';
-import { AMOUNT_FIELDS, ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession } from './lib/score.js';
-import { MARKET_FIELDS, marketSnapshot, marketStatus } from './lib/market.js';
-import { ROWS as INDICATOR_ROWS } from './lib/indicators.js';
+import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession } from './lib/score.js';
+import { SCREEN_FIELDS, browseCompanies, filerCounts, scoreBadge, screenQuery, screenRows, sicCounts, wantsMarket } from './lib/screen.js';
+import { marketSnapshot, marketStatus } from './lib/market.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 import { liveHoldings } from './lib/liveHoldings.js';
@@ -147,7 +147,7 @@ app.get(
         } catch {
           /* unscorable filing: no badge */
         }
-        return { ...r, score: score ? { score: score.score, coverage: score.coverage, form: score.form, fiscalYear: score.fiscalYear, fiscalPeriod: score.fiscalPeriod, periodEnd: score.periodEnd, categories: score.categories.map((c) => c.score) } : null };
+        return { ...r, score: scoreBadge(score) };
       }),
     );
   }),
@@ -191,7 +191,7 @@ app.get(
     const year = Number(req.query.year);
     if (!year) return res.status(400).json({ error: 'year query parameter required' });
     const company = await getCompany(client, req.params.id);
-    res.json(await dedupe(`q4:${company.cik}:${year}`, () => buildQuarterly(client, company, year)));
+    res.json(await dedupe(`q4:${company.cik}:${year}`, () => buildQuarterly((f) => scrapeFiling(client, f, company), company, year)));
     prefetcher.schedule(company, pickFiling(company.filings, { year, period: 'FY' }));
   }),
 );
@@ -212,7 +212,7 @@ app.get(
     const basis = req.query.basis === 'ttm' ? 'ttm' : 'x4';
     const company = await getCompany(client, req.params.id);
     res.json(
-      await dedupe(`ind:${company.cik}:${year}:${period}:${n}:${basis}:${mode}`, () => buildIndicators(client, company, { year, period, n, basis, mode })),
+      await dedupe(`ind:${company.cik}:${year}:${period}:${n}:${basis}:${mode}`, () => buildIndicators((f) => scrapeFiling(client, f, company), company, { year, period, n, basis, mode })),
     );
   }),
 );
@@ -267,43 +267,12 @@ app.get(
 
 // ---------- browse: industry (SIC), filer status, ETF constituents ----------
 
-const companyRow = (c) => ({
-  cik: c.cik,
-  name: c.name,
-  ticker: c.ticker,
-  tickers: c.tickers,
-  sic: c.sic,
-  sicZh: sicInfo(c.sic)?.zh || null,
-  sicTitle: sicInfo(c.sic)?.title || null,
-  afs: c.afs,
-  wksi: c.wksi,
-  float: c.float,
-  floatDate: c.floatDate,
-  floatAdjusted: c.floatAdjusted,
-  form: c.form,
-  period: c.period,
-  filed: c.filed,
-  state: c.state,
-  country: c.country,
-});
-
 // GET /api/browse/sic -> SIC divisions and 4-digit codes with company counts
 app.get(
   '/api/browse/sic',
   wrap(async (_req, res) => {
     const u = await getUniverse(client);
-    const counts = new Map();
-    for (const c of u.companies) {
-      const k = c.sic || '0000';
-      const n = counts.get(k) || { total: 0, listed: 0 };
-      n.total++;
-      if (c.ticker) n.listed++;
-      counts.set(k, n);
-    }
-    const codes = SIC.codes.map((s) => ({ ...s, ...(counts.get(s.code) || { total: 0, listed: 0 }) }));
-    // codes that appear in filings but not on SEC's list
-    for (const [code, n] of counts) if (!SIC.codes.some((s) => s.code === code)) codes.push({ code, title: null, zh: code === '0000' ? '未指定' : null, division: 'J', office: null, ...n });
-    res.json({ updatedAt: u.updatedAt, datasets: u.datasets, divisions: SIC.divisions, codes });
+    res.json({ updatedAt: u.updatedAt, datasets: u.datasets, ...sicCounts(u.companies) });
   }),
 );
 
@@ -312,20 +281,7 @@ app.get(
   '/api/browse/filer',
   wrap(async (_req, res) => {
     const u = await getUniverse(client);
-    const counts = {};
-    for (const c of u.companies) {
-      const k = c.afs || 'UNKNOWN';
-      counts[k] ??= { total: 0, listed: 0, wksi: 0 };
-      counts[k].total++;
-      if (c.ticker) counts[k].listed++;
-      if (c.wksi) counts[k].wksi++;
-    }
-    const categories = [...Object.keys(FILER_STATUS), 'UNKNOWN'].map((k) => ({
-      key: k,
-      ...(FILER_STATUS[k] || { label: 'Not stated', zh: '未標示', note: '申報書未標示身分' }),
-      ...(counts[k] || { total: 0, listed: 0, wksi: 0 }),
-    }));
-    res.json({ updatedAt: u.updatedAt, datasets: u.datasets, categories });
+    res.json({ updatedAt: u.updatedAt, datasets: u.datasets, categories: filerCounts(u.companies) });
   }),
 );
 
@@ -334,22 +290,7 @@ app.get(
   '/api/browse/companies',
   wrap(async (req, res) => {
     const u = await getUniverse(client);
-    const sic = req.query.sic ? String(req.query.sic).padStart(4, '0') : null;
-    const afs = req.query.afs ? String(req.query.afs).toUpperCase() : null;
-    const listedOnly = req.query.listed !== '0';
-    const q = String(req.query.q || '').trim().toUpperCase();
-    let rows = u.companies;
-    if (sic) rows = rows.filter((c) => (c.sic || '0000') === sic);
-    if (afs) rows = rows.filter((c) => (c.afs || 'UNKNOWN') === afs);
-    if (listedOnly) rows = rows.filter((c) => c.ticker);
-    if (q) rows = rows.filter((c) => c.name.toUpperCase().includes(q) || c.tickers.some((t) => t.startsWith(q)));
-    res.json({
-      updatedAt: u.updatedAt,
-      sic: sic ? sicInfo(sic) : null,
-      filer: afs ? { key: afs, ...(FILER_STATUS[afs] || { label: 'Not stated', zh: '未標示' }) } : null,
-      count: rows.length,
-      companies: rows.slice(0, Number(req.query.limit) || 2000).map(companyRow),
-    });
+    res.json({ updatedAt: u.updatedAt, ...browseCompanies(u.companies, req.query) });
   }),
 );
 
@@ -388,7 +329,7 @@ app.get('/api/score', (req, res) => {
   const out = {};
   for (const cik of ciks) {
     const s = latestScore(cik);
-    out[cik] = s ? { score: s.score, coverage: s.coverage, accession: s.accession, form: s.form, fiscalYear: s.fiscalYear, fiscalPeriod: s.fiscalPeriod, periodEnd: s.periodEnd, filingDate: s.filingDate, categories: s.categories.map((c) => c.score) } : null;
+    out[cik] = scoreBadge(s);
   }
   res.json({ version: SCORE_VERSION, items: SCORE_ITEMS.map(({ key, name, category, benchmark, weight }) => ({ key, name, category, benchmark, weight })), scores: out });
 });
@@ -412,16 +353,6 @@ app.get(
 
 // ---------- screener ----------
 
-// Filterable fields: every indicator row plus the score.
-// Screener fields: the score, every indicator row, statement amounts (from
-// the latest filing), and the market snapshot (price, market cap, multiples).
-const SCREEN_FIELDS = [
-  { key: 'score', name: '評分', unit: '分', group: '評分' },
-  ...INDICATOR_ROWS.filter((r) => !r.abstract).map((r) => ({ key: r.key, name: r.name, unit: r.unit, group: r.group, annualized: !!r.annualized })),
-  ...AMOUNT_FIELDS,
-  ...MARKET_FIELDS.map((f) => ({ ...f, market: true })),
-];
-const MARKET_KEYS = new Set(MARKET_FIELDS.map((f) => f.key));
 app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS, market: marketStatus() }));
 
 // GET /api/screen?sic=7372&division=D&afs=LAF&exdiv=H,I&exsic=6770,2834&score_min=60&grossMargin_min=40
@@ -436,99 +367,10 @@ app.get(
   wrap(async (req, res) => {
     const u = await getUniverse(client);
     const byCik = new Map(u.companies.map((c) => [c.cik, c]));
-    const q = req.query;
-    const sic = q.sic ? String(q.sic).padStart(4, '0') : null;
-    const sic2 = q.sic2 ? String(q.sic2).padStart(2, '0') : null;
-    const division = q.division ? SIC.divisions.find((d) => d.id === String(q.division).toUpperCase()) : null;
-    const exDiv = String(q.exdiv || '').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean).map((id) => SIC.divisions.find((d) => d.id === id)).filter(Boolean);
-    const exSic = String(q.exsic || '').split(',').map((x) => x.trim()).filter((x) => /^\d{2,4}$/.test(x));
-    const afs = q.afs ? String(q.afs).toUpperCase() : null;
-    const text = String(q.q || '').trim().toUpperCase();
-    const fieldOf = (key) => SCREEN_FIELDS.find((f) => f.key === key);
-    const ranges = [];
-    for (const [k, v] of Object.entries(q)) {
-      const m = /^(.+?)(?:_(chg|yoy))?_(min|max)$/.exec(k);
-      if (!m || v === '' || !Number.isFinite(Number(v))) continue;
-      const f = fieldOf(m[1]);
-      if (!f) continue;
-      if (m[2] && f.market) continue; // no history for market fields
-      ranges.push({ key: m[1], mode: m[2] || 'now', op: m[3], value: Number(v), pctChange: f.unit === '百萬' || f.unit === '百萬股' || f.key === 'score' });
-    }
-    const wantsMarket = ranges.some((r) => MARKET_KEYS.has(r.key)) || MARKET_KEYS.has(String(q.sort || ''));
-    const market = await marketSnapshot({ wait: wantsMarket });
-    const listedOnly = q.listed !== '0';
-    const rows = [];
-    for (const s of latestScores()) {
-      const c = byCik.get(s.cik);
-      if (!c) continue;
-      if (listedOnly && !c.ticker) continue;
-      const code = c.sic || '0000';
-      if (sic && code !== sic) continue;
-      if (sic2 && !code.startsWith(sic2)) continue;
-      if (division && !(code.slice(0, 2) >= division.from && code.slice(0, 2) <= division.to)) continue;
-      if (exDiv.some((d) => code.slice(0, 2) >= d.from && code.slice(0, 2) <= d.to)) continue;
-      if (exSic.some((x) => code.startsWith(x))) continue;
-      if (afs && (c.afs || 'UNKNOWN') !== afs) continue;
-      if (text && !(c.name.toUpperCase().includes(text) || c.tickers.some((t) => t.startsWith(text)))) continue;
-      const mk = c.ticker ? market?.byTicker?.[c.ticker] || null : null;
-      const at = (src, key) => (!src ? null : key === 'score' ? src.score : src.values?.[key] ?? null);
-      const val = (key, mode = 'now') => {
-        if (MARKET_KEYS.has(key)) return mode === 'now' ? mk?.[key] ?? null : null;
-        if (mode === 'now') return at(s, key);
-        const base = mode === 'chg' ? s.prev : s.yoy;
-        const a = at(s, key);
-        const b = at(base, key);
-        if (a == null || b == null) return null;
-        return fieldOf(key)?.unit === '百萬' || fieldOf(key)?.unit === '百萬股' || key === 'score' ? (b === 0 ? null : ((a - b) / Math.abs(b)) * 100) : a - b;
-      };
-      let ok = true;
-      for (const r of ranges) {
-        const v = val(r.key, r.mode);
-        if (v == null || (r.op === 'min' ? v < r.value : v > r.value)) {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok) continue;
-      rows.push({
-        cik: c.cik,
-        ticker: c.ticker,
-        tickers: c.tickers,
-        name: c.name,
-        sic: c.sic,
-        sicZh: sicInfo(c.sic)?.zh || null,
-        afs: c.afs,
-        float: c.float,
-        score: { score: s.score, coverage: s.coverage, accession: s.accession, form: s.form, fiscalYear: s.fiscalYear, fiscalPeriod: s.fiscalPeriod, periodEnd: s.periodEnd, filingDate: s.filingDate, categories: s.categories.map((x) => x.score) },
-        values: s.values || {},
-        prev: s.prev ? { fiscalYear: s.prev.fiscalYear, fiscalPeriod: s.prev.fiscalPeriod, periodEnd: s.prev.periodEnd, score: s.prev.score, values: s.prev.values } : null,
-        yoy: s.yoy ? { fiscalYear: s.yoy.fiscalYear, fiscalPeriod: s.yoy.fiscalPeriod, periodEnd: s.yoy.periodEnd, score: s.yoy.score, values: s.yoy.values } : null,
-        history: s.history,
-        market: mk ? { price: mk.price, currency: mk.currency, change: mk.change, marketCap: mk.marketCap, pe: mk.pe, pb: mk.pb, ps: mk.ps, pfcf: mk.pfcf, evEbitda: mk.evEbitda, divYield: mk.divYield, peg: mk.peg, perfYtd: mk.perfYtd, perfY: mk.perfY, volume: mk.volume, avgVolume: mk.avgVolume, beta: mk.beta, exchange: mk.exchange, tv: mk.tv } : null,
-      });
-    }
-    const sortKey = String(q.sort || 'score');
-    const sortMode = ['chg', 'yoy'].includes(String(q.sortmode || '')) ? String(q.sortmode) : 'now';
-    const dir = q.dir === 'asc' ? 1 : -1;
-    const chgOf = (r, key, mode) => {
-      const base = mode === 'chg' ? r.prev : r.yoy;
-      const a = key === 'score' ? r.score.score : r.values[key] ?? null;
-      const b = !base ? null : key === 'score' ? base.score : base.values?.[key] ?? null;
-      if (a == null || b == null) return null;
-      const f = fieldOf(key);
-      return f?.unit === '百萬' || f?.unit === '百萬股' || key === 'score' ? (b === 0 ? null : ((a - b) / Math.abs(b)) * 100) : a - b;
-    };
-    const sv = (r) => (sortMode !== 'now' ? chgOf(r, sortKey, sortMode) : MARKET_KEYS.has(sortKey) ? r.market?.[sortKey] ?? null : sortKey === 'score' ? r.score.score : sortKey === 'float' ? r.float : sortKey === 'name' ? r.name : sortKey === 'ticker' ? r.ticker : r.values[sortKey] ?? null);
-    rows.sort((a, b) => {
-      const x = sv(a);
-      const y = sv(b);
-      if (x == null && y == null) return 0;
-      if (x == null) return 1;
-      if (y == null) return -1;
-      return (x < y ? -1 : x > y ? 1 : 0) * dir;
-    });
-    const limit = Math.min(2000, Math.max(1, Number(q.limit) || 300));
-    res.json({ total: rows.length, scored: latestScores().length, count: Math.min(rows.length, limit), market: marketStatus(), rows: rows.slice(0, limit) });
+    const market = await marketSnapshot({ wait: wantsMarket(req.query) });
+    const scores = latestScores();
+    const rows = screenRows(scores, byCik, market?.byTicker || null);
+    res.json({ ...screenQuery(rows, req.query), scored: scores.length, market: marketStatus() });
   }),
 );
 

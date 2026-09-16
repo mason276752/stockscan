@@ -40,8 +40,33 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 `./data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `./data/cache.sqlite`）、`STOCKSCAN_BARS`（日線目錄，預設 `./data/bars`）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 repo 的 `data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `data/cache.sqlite`）、`STOCKSCAN_BARS`（日線目錄，預設 `data/bars`；這些預設都相對於 repo，不是執行時的工作目錄）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
 自製 ETF 的日線：`TV_ENABLED=0`（不用 TradingView websocket）、`IB_HOST`（預設 127.0.0.1）、`IB_PORT`（預設 7496；TWS 模擬帳戶 7497、IB Gateway 4001 / 4002）、`IB_CLIENT_ID`（預設 100 + PORT 的後三位，兩個 server 才不會互踢）、`IB_ENABLED=0`（不連 TWS，改用 Yahoo）。
+
+### 純前端版（沒有伺服器也能跑）
+
+同一份程式碼可以編成兩種部署：
+
+| | 前後端版（`npm start` / Docker） | 純前端版（`npm run build:static`） |
+|---|---|---|
+| 財報頁：四大報表、其他報表、只看本期、Q4 推算、財務指標、評分 | ✅ | ✅ 在瀏覽器裡算（同一套 `server/lib` 模組） |
+| 尋找股票、分類瀏覽（產業 / 申報身分 / ETF 成分股）、搜尋 | ✅ 即時 | ✅ build 當時的快照 |
+| 觀察名單、自製 ETF（TradingView widget 模式）、K 線圖分頁 | ✅ | ✅（widget 在瀏覽器裡跑） |
+| 抓 SEC 新申報、爬蟲、「更新」 | ✅ | ✗ 資料 = build 時的 `data/store` |
+| 股價估值、自製 ETF 自己算的指數與成分股報酬 | ✅ | ✗ 瀏覽器打不到 Yahoo / TradingView ws / TWS（CORS） |
+| ETF 每日持股（SSGA / Nasdaq） | ✅ | ✗ 用 build 時的 N-PORT 季報成分 |
+
+```bash
+npm run build:static        # -> web/dist-static/（約 210 MB：網頁 + data/store + index/）
+# 放到任何靜態主機。GitHub Pages 例：
+npx gh-pages -d web/dist-static -t
+```
+
+- 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、
+  `index/*.json`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。
+- 瀏覽器用 WASM zstd（`@bokuweb/zstd-wasm`）配同一份字典解開 `.json.zst`，再跑 `current.js` / `quarters.js` / `indicators.js` / `scoreModel.js` / `screen.js` 這些純計算模組——它們和伺服器用的是同一份檔案。
+- 用相對路徑，放在子路徑（`https://user.github.io/stockscan/`）也不用改設定。
+- 頁首會標「純前端版 · N 份財報，資料至 <build 日期>」；不支援的功能會直接說明。
 
 ### 資料存放（可進 git）
 
@@ -401,6 +426,9 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 |---|---|
 | `server/index.js` | Express 路由、靜態檔案 |
 | `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、高/低優先權（預抓讓路） |
+| `server/lib/filings.js`、`statementTypes.js`、`storeFormat.js`、`scoreModel.js`、`screen.js`、`marketFields.js`、`sic.js` | 純計算 / 純資料模組（無 Node I/O），伺服器與純前端版共用：申報清單工具、報表分類、存檔格式還原、評分模型、尋找股票與分類瀏覽的篩選排序、市場欄位、SIC 表 |
+| `server/tools/build-static.mjs` | 產生純前端版（`npm run build:static`） |
+| `web/src/api.js`、`api.http.js`、`api.static.js`、`staticData.js` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（讀靜態檔 + 瀏覽器內計算、WASM zstd） |
 | `server/lib/barStore.js` | 日線快取：一檔一個 brotli 檔、記憶體 LRU、增量接續（`mergeDays` 核對重疊段）、一個月未用清除；舊 kv 裡的日線第一次啟動會搬過來 |
 | `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |
 | `server/lib/prefetch.js` | 閒置時背景預抓相鄰申報 |

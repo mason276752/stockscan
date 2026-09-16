@@ -8,8 +8,7 @@
 // 10-K, and Qn = Cn − Cn−1. Balance sheets are point-in-time, so their
 // quarterly columns are simply the period-end balances of each filing.
 
-import { pickFiling } from './edgar.js';
-import { scrapeFiling } from './scrape.js';
+import { pickFiling } from './filings.js';
 
 const QUARTERS = ['Q1', 'Q2', 'Q3'];
 const TYPES = ['balance_sheet', 'income_statement', 'comprehensive_income', 'cash_flow'];
@@ -209,7 +208,9 @@ function buildStatementQuarters(type, docs, filings) {
   };
 }
 
-export async function buildQuarterly(client, company, year) {
+// `load(filing)` resolves to the parsed filing (the server scrapes / reads
+// its store; the browser build fetches the saved file)
+export async function buildQuarterly(load, company, year) {
   const filings = {};
   const missing = [];
   for (const p of [...QUARTERS, 'FY']) {
@@ -222,7 +223,7 @@ export async function buildQuarterly(client, company, year) {
   const docs = {};
   await Promise.all(
     Object.entries(filings).map(async ([p, f]) => {
-      docs[p] = await scrapeFiling(client, f, company);
+      docs[p] = await load(f);
     }),
   );
 

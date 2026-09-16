@@ -24,7 +24,12 @@ async function pollStatus() {
     status.value = null;
   }
 }
+const isStatic = api.isStatic;
 const crawlText = computed(() => {
+  if (status.value?.static) {
+    const m = status.value.meta;
+    return `純前端版 · ${Number(m.filings || 0).toLocaleString()} 份財報，資料至 ${m.builtAt ? new Date(m.builtAt).toLocaleDateString() : '—'}（沒有伺服器：不會抓新申報，也沒有股價）`;
+  }
   const c = status.value?.crawler;
   if (!c?.enabled) return '';
   const saved = status.value.store.filings.toLocaleString();
@@ -438,7 +443,7 @@ onMounted(() => {
         </div>
         <h3>
           選擇年度 / 季度
-          <button class="refresh" :disabled="refreshing" title="重新向 SEC 讀取申報清單，今天剛發布的 10-Q / 10-K 會出現在這裡" @click="refreshFilings">
+          <button v-if="!isStatic" class="refresh" :disabled="refreshing" title="重新向 SEC 讀取申報清單，今天剛發布的 10-Q / 10-K 會出現在這裡" @click="refreshFilings">
             {{ refreshing ? '更新中…' : '↻ 更新' }}
           </button>
         </h3>
@@ -467,7 +472,7 @@ onMounted(() => {
             </div>
             <div class="links">
               <a v-if="!data.derived" :href="data.filing.viewerUrl" target="_blank" rel="noopener">SEC 原始 Inline XBRL</a>
-              <a :href="jsonUrl" target="_blank" rel="noopener">JSON</a>
+              <a v-if="!isStatic" :href="jsonUrl" target="_blank" rel="noopener">JSON</a>
               <span class="muted small">{{ data.stats.facts }} facts<template v-if="data.stats.contexts"> · {{ data.stats.contexts }} contexts</template></span>
             </div>
           </div>
@@ -542,7 +547,7 @@ onMounted(() => {
                   <option :value="40">40</option>
                 </select>
               </label>
-              <a v-if="valuationParams" :href="api.valuationUrl(String(company.cik), valuationParams)" target="_blank" rel="noopener" class="small">JSON</a>
+              <a v-if="valuationParams && !isStatic" :href="api.valuationUrl(String(company.cik), valuationParams)" target="_blank" rel="noopener" class="small">JSON</a>
             </div>
             <div v-else-if="isChart" class="options">
               <label>
@@ -604,22 +609,22 @@ onMounted(() => {
               <p v-if="indicators.quarterly && indicators.mode === 'year'" class="muted small note">
                 以所選申報（{{ indicatorsEnd }}）為最後一期，每一欄 = 到該季為止連續四季的合計（例如 {{ indicators.columns.at(-1)?.sublabel || indicators.columns.at(-1)?.label }}），往前共 {{ indicators.columns.length }} 年，左舊右新。
                 餘額取該季季末，平均餘額用季末與四季前季末平均。Q4 流量 = 10-K 全年 − 前三季。
-                <a :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
+                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <p v-else-if="indicators.quarterly && indicators.mode === 'same'" class="muted small note">
                 只看所選季度（{{ indicatorsParams.period }}）：{{ indicators.columns[0]?.label }} ～ {{ indicators.columns.at(-1)?.label }} 共 {{ indicators.columns.length }} 年同一季的單季數字，左舊右新，避開季節性直接比年增。
                 流量類指標分子換算為年（{{ indBasis === 'ttm' ? '近四季合計' : '單季 ×4' }}），分母用該季末與上季末平均。Q4 流量 = 10-K 全年 − 前三季。
-                <a :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
+                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <p v-else-if="indicators.quarterly" class="muted small note">
                 以所選申報（{{ indicatorsEnd }}）為最後一期，往前共 {{ indicators.columns.length }} 季，左舊右新。
                 週轉率、ROA、ROE、現金流量比率等使用流量的指標，分子皆換算為年（{{ indBasis === 'ttm' ? '近四季合計' : '單季 ×4' }}），分母用本季末與上季末平均。
                 Q4 流量 = 10-K 全年 − 前三季。
-                <a :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
+                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <p v-else class="muted small note">
                 年報公司：每一欄為一個會計年度，往前共 {{ indicators.columns.length }} 年，左舊右新。
-                <a :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
+                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <IndicatorsTable :data="indicators" :annualize-amounts="indAnnualizeAmounts" />
             </template>

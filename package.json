@@ -9,7 +9,8 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "build:web": "npm --prefix web run build",
-    "postinstall": "npm --prefix web install"
+    "postinstall": "npm --prefix web install",
+    "build:static": "node server/tools/build-static.mjs"
   },
   "engines": {
     "node": ">=20"

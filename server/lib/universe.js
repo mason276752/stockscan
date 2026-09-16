@@ -7,17 +7,14 @@
 // requests), the last four quarters cover every active filer. Public float
 // (which is what decides the filer status) comes from the XBRL frames API.
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { store } from './store.js';
 import { readZipEntry } from './remoteZip.js';
 import { tickerTable } from './edgar.js';
+import { FILER_STATUS, SIC, sicInfo } from './sic.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const SIC = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'sic.json'), 'utf8'));
-const SIC_BY_CODE = new Map(SIC.codes.map((c) => [c.code, c]));
+export { FILER_STATUS, SIC, sicInfo };
+
 
 const DATASETS = 'https://www.sec.gov/files/dera/data/financial-statement-data-sets/';
 const FRAMES_BASE = 'https://data.sec.gov/api/xbrl/frames/';
@@ -25,20 +22,7 @@ const UNIVERSE_TTL = 7 * 24 * 3600 * 1000;
 const QUARTERS = 4; // datasets to merge
 const FLOAT_FRAMES = 10; // quarter-end instants to scan (2.5 years: the latest public float and the one before)
 
-export const FILER_STATUS = {
-  LAF: { label: 'Large accelerated filer', zh: '大型加速申報公司', note: '公眾流通市值 ≥ 7 億美元' },
-  ACC: { label: 'Accelerated filer', zh: '加速申報公司', note: '公眾流通市值 7,500 萬 ～ 7 億美元' },
-  NON: { label: 'Non-accelerated filer', zh: '非加速申報公司', note: '公眾流通市值 < 7,500 萬美元，或年營收 < 1 億美元的小型申報公司' },
-};
-
 const ANNUAL_FORMS = /^(10-K|10-Q|20-F|40-F|10-KT|10-QT)(\/A)?$/;
-
-export function sicInfo(code) {
-  if (!code) return null;
-  const c = String(code).padStart(4, '0');
-  const hit = SIC_BY_CODE.get(c);
-  return hit || { code: c, title: null, zh: null, division: null, office: null };
-}
 
 // Candidate dataset names, newest first: 2026q3, 2026q2, ...
 function datasetNames(now = new Date(), count = QUARTERS + 3) {

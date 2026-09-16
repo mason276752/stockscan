@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@bokuweb/zstd-wasm": "^0.0.27",
     "lightweight-charts": "^5.2.1",
     "vue": "^3.5.0"
   },

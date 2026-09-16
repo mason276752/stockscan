@@ -18,24 +18,27 @@
 // names at startup (no index file to drift). Writes are atomic (temp + rename).
 // The old single-file SQLite store (data/stockscan.sqlite) is migrated on
 // first start when the directory is still empty.
-// Locations: STOCKSCAN_STORE (default ./data/store), STOCKSCAN_CACHE
-// (default ./data/cache.sqlite), STOCKSCAN_DB (the legacy SQLite to migrate).
+// Locations: STOCKSCAN_STORE (default <repo>/data/store), STOCKSCAN_CACHE
+// (default <repo>/data/cache.sqlite), STOCKSCAN_DB (the legacy SQLite to
+// migrate) - relative to the repo, not the working directory.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { pickPrimary } from './statements.js';
+import { slim, fatten } from './storeFormat.js';
 
-const STD = /^(us-gaap|ifrs-full|dei|srt):/;
 // Files are zstd with a dictionary trained on this kind of JSON (server/data/
 // zdict, node server/tools/train-zdict.mjs): a filing is a third smaller than
 // with brotli, a score a third of the size, and decoding is faster. Files
 // written before that (.json.br, brotli) still read; they are rewritten as
 // .zst in the background after startup. A dictionary is frozen once used.
 const EXT = '.json.zst';
-const ZDICT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'zdict');
+// paths default to the repo's data/ whatever the working directory is
+const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const DATA = path.join(REPO, 'data');
+const ZDICT_DIR = path.join(REPO, 'server', 'data', 'zdict');
 const DICTS = { filings: fs.readFileSync(path.join(ZDICT_DIR, 'filings-v1.zdict')), scores: fs.readFileSync(path.join(ZDICT_DIR, 'scores-v1.zdict')) };
 const ZSTD = (kind) => ({ dictionary: DICTS[kind], params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } });
 const pack = (kind, value) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(value)), ZSTD(kind));
@@ -130,33 +133,7 @@ function scheduleDocs() {
   if (!docsTimer) docsTimer = setTimeout(flushDocs, 5000).unref();
 }
 
-// what goes into a filing file: no `statements` (rebuilt from allStatements),
-// standard concepts' documentation moved to the shared dictionary
-function slim(result) {
-  const { statements, ...rest } = result;
-  rest.allStatements = (rest.allStatements || []).map((st) => ({
-    ...st,
-    lineItems: (st.lineItems || []).map((li) => {
-      if (!li.documentation || !STD.test(li.concept)) return li;
-      if (docs[li.concept] !== li.documentation) {
-        docs[li.concept] = li.documentation;
-        scheduleDocs();
-      }
-      const { documentation, ...x } = li;
-      return x;
-    }),
-  }));
-  return rest;
-}
-function fatten(result) {
-  for (const st of result.allStatements || []) {
-    for (const li of st.lineItems || []) if (!li.documentation && STD.test(li.concept) && docs[li.concept]) li.documentation = docs[li.concept];
-  }
-  if (!result.statements) result.statements = pickPrimary(result.allStatements || []);
-  return result;
-}
-
-export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(process.cwd(), 'data', 'store'), cacheFile = process.env.STOCKSCAN_CACHE || path.join(process.cwd(), 'data', 'cache.sqlite')) {
+export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(DATA, 'store'), cacheFile = process.env.STOCKSCAN_CACHE || path.join(DATA, 'cache.sqlite')) {
   root = storeDir;
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
@@ -173,7 +150,7 @@ export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(pr
   loadDocs();
   scanFilings();
   scanScores();
-  migrateLegacy(process.env.STOCKSCAN_DB || path.join(process.cwd(), 'data', 'stockscan.sqlite'));
+  migrateLegacy(process.env.STOCKSCAN_DB || path.join(DATA, 'stockscan.sqlite'));
   compactCache();
   process.on('exit', flushDocs);
   setTimeout(recompress, 20_000).unref();
@@ -316,11 +293,22 @@ export const store = {
     const f = filings.get(accession);
     if (!f) return null;
     try {
-      return fatten(unpack('filings', fs.readFileSync(f.file), f.file).data);
+      return fatten(unpack('filings', fs.readFileSync(f.file), f.file).data, docs);
     } catch (err) {
       console.warn(`store: ${path.basename(f.file)} unreadable (${err.message}), dropped`);
       unlinkQuiet(f.file);
       filings.delete(accession);
+      return null;
+    }
+  },
+  // just the `filing` header of a saved filing (no statements rebuilt): for indexes
+  filingHeader(accession) {
+    need();
+    const f = filings.get(accession);
+    if (!f) return null;
+    try {
+      return unpack('filings', fs.readFileSync(f.file), f.file).data?.filing || null;
+    } catch {
       return null;
     }
   },
@@ -333,7 +321,7 @@ export const store = {
     const reportDate = result.filing?.periodEnd ?? null;
     const form = result.filing?.form ?? null;
     const file = path.join(dir('filings', cik), filingName(accession, reportDate, form, version));
-    const buf = pack('filings', { accession, cik, form, reportDate, version, fetchedAt, data: slim(result) });
+    const buf = pack('filings', { accession, cik, form, reportDate, version, fetchedAt, data: slim(result, docs, scheduleDocs) });
     writeAtomic(file, buf);
     const prev = filings.get(accession);
     if (prev && prev.file !== file) unlinkQuiet(prev.file);
@@ -345,6 +333,16 @@ export const store = {
     let n = 0;
     for (const f of filings.values()) if (f.cik === Number(cik)) n++;
     return n;
+  },
+  // every saved filing / score (light: from the file names), with the file's
+  // path relative to the store - for the static-site build
+  allFilings() {
+    need();
+    return [...filings.values()].map((f) => ({ accession: f.accession, cik: f.cik, form: f.form, reportDate: f.reportDate, version: f.version, file: path.relative(root, f.file) }));
+  },
+  allScores() {
+    need();
+    return [...scores.values()].map((s) => ({ accession: s.accession, cik: s.cik, reportDate: s.reportDate, version: s.version, file: path.relative(root, s.file) }));
   },
   // accession -> report_date of every saved filing of a company (cheap: no file reads)
   filingIndex(cik) {

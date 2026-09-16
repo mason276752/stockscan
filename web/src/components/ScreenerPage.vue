@@ -417,7 +417,7 @@ onMounted(async () => {
               <button v-if="editing" class="small primary" :disabled="!basketable.length" @click="updateBasket">更新這個 ETF</button>
               <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ Number(basketN) > 0 ? `前 ${Math.min(Number(basketN), basketable.length)} 家` : `全部 ${basketable.length} 家` }}{{ editing ? '建立新 ETF' : '組成自製 ETF' }}</button>
             </span>
-            <a :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
+            <a v-if="!api.isStatic" :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
           </div>
         </div>
         <p v-if="error" class="error">{{ error }}</p>
