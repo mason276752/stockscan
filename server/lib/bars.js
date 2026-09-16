@@ -38,13 +38,59 @@ async function yahooDailyBars(ticker) {
   return { days, currency: r.meta?.currency || null };
 }
 
-// Which sources to try, in order, right now.
+// Which sources to try, in order, right now. Probing an absent TWS costs a
+// 1.5 s wait, so the answer is kept for a minute - not once per symbol.
+let ibProbe = { at: 0, ok: false };
 async function sources() {
   const out = [];
   if (tvStatus().enabled) out.push('tv');
-  if (ibStatus().enabled && (ibConnected() || (await ibConnect(1500)))) out.push('ib');
+  if (ibStatus().enabled) {
+    if (!ibConnected() && Date.now() - ibProbe.at > 60_000) ibProbe = { at: Date.now(), ok: await ibConnect(1500) };
+    if (ibConnected() || ibProbe.ok) out.push('ib');
+  }
   out.push('yahoo');
   return out;
+}
+const enabledSources = () => [...(tvStatus().enabled ? ['tv'] : []), ...(ibStatus().enabled ? ['ib'] : []), 'yahoo'];
+
+// Daily bars only change while the US session runs (today's bar is forming);
+// after the close nothing moves until the next open. A saved series is fresh
+// for BARS_TTL, or - when it was fetched after the last close - until the
+// next session opens. (Weekends handled; holidays just refetch once.)
+function barsFresh(saved) {
+  if (saved.ageMs < BARS_TTL) return true;
+  const fetchedAt = Date.parse(saved.value?.fetchedAt || 0);
+  if (!fetchedAt) return false;
+  const now = Date.now();
+  // fetched after the last settled close, and no session has opened since then
+  return fetchedAt >= lastClose(now) + 15 * 60_000 && now < nextOpen(fetchedAt);
+}
+// US session bounds in UTC: 9:30-16:00 New York (offset from the zone name so DST is right)
+const NY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short' });
+function nyParts(t) {
+  const p = Object.fromEntries(NY.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  const local = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute));
+  return { offset: local - Math.floor(t / 60_000) * 60_000, weekday: p.weekday, dayStart: local - (local % 86_400_000) };
+}
+// the most recent 16:00 New York on a weekday at or before t (as a UTC timestamp)
+export function lastClose(t) {
+  for (let back = 0; back < 7; back++) {
+    const { offset, weekday, dayStart } = nyParts(t - back * 86_400_000);
+    if (weekday === 'Sat' || weekday === 'Sun') continue;
+    const close = dayStart + 16 * 3_600_000 - offset;
+    if (close <= t) return close;
+  }
+  return t;
+}
+// the next 9:30 New York on a weekday after t
+export function nextOpen(t) {
+  for (let ahead = 0; ahead < 7; ahead++) {
+    const { offset, weekday, dayStart } = nyParts(t + ahead * 86_400_000);
+    if (weekday === 'Sat' || weekday === 'Sun') continue;
+    const open = dayStart + 9.5 * 3_600_000 - offset;
+    if (open > t) return open;
+  }
+  return t;
 }
 const SOURCE_NAME = { tv: 'TradingView', ib: 'IBKR', yahoo: 'Yahoo Finance' };
 const CACHE_KEY = { tv: 'bars:tv2', ib: 'bars:ib', yahoo: 'bars:yahoo' }; // tv2: entries before the US-listing check are stale
@@ -64,11 +110,14 @@ async function fetchFrom(source, symbol) {
 // differ a little between them.
 export async function dailyBars(ticker) {
   const symbol = String(ticker).toUpperCase();
+  // a fresh copy from any enabled source answers without touching the network (or TWS)
+  for (const src of enabledSources()) {
+    const saved = store.getKV(`${CACHE_KEY[src]}:${symbol}`);
+    if (saved && barsFresh(saved)) return saved.value;
+  }
   const order = await sources();
   let lastErr = null;
   for (const src of order) {
-    const saved = store.getKV(`${CACHE_KEY[src]}:${symbol}`);
-    if (saved && saved.ageMs < BARS_TTL) return saved.value;
     try {
       const value = await fetchFrom(src, symbol);
       if (!value.days.length) throw Object.assign(new Error(`${SOURCE_NAME[src]}: no daily bars for ${symbol}`), { status: 404 });

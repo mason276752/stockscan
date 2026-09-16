@@ -334,6 +334,25 @@ watch([company, filing, tab, indMode, view, page, browseParams, screenParams], (
   lastScreen = screenNow;
 });
 
+// a basket copied from the screener: reopen the screener with its filters,
+// tagged with the basket so "update this ETF" is offered there
+function editScreen(basket) {
+  const src = basket?.source;
+  if (!src || src.type !== 'screen') return;
+  // baskets saved before the URL form was kept only have API params: the screener rebuilds those itself
+  screenParams.value = { ...(src.url || {}), basket: basket.id };
+  page.value = 'screen';
+}
+
+// the nav button: the screener as it was, minus any basket being edited
+function openScreen() {
+  if (screenParams.value.basket) {
+    const { basket, ...rest } = screenParams.value;
+    screenParams.value = rest;
+  }
+  page.value = 'screen';
+}
+
 function applyUrl() {
   const p = new URLSearchParams(location.search);
   if (p.get('tab')) tab.value = p.get('tab');
@@ -381,7 +400,7 @@ onMounted(() => {
       <nav class="nav">
         <button :class="{ active: page === 'report' }" @click="page = 'report'">財報</button>
         <button :class="{ active: page === 'browse' }" @click="page = 'browse'">分類瀏覽</button>
-        <button :class="{ active: page === 'screen' }" @click="page = 'screen'">尋找股票</button>
+        <button :class="{ active: page === 'screen' }" @click="openScreen">尋找股票</button>
         <button :class="{ active: page === 'watch' }" @click="page = 'watch'">觀察名單<span v-if="watchlist.items.length" class="count">{{ watchlist.items.length }}</span></button>
         <button :class="{ active: page === 'basket' }" @click="page = 'basket'">自製 ETF<span v-if="baskets.items.length" class="count">{{ baskets.items.length }}</span></button>
       </nav>
@@ -392,7 +411,7 @@ onMounted(() => {
     <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" @basket="page = 'basket'" />
     <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" />
     <ScreenerPage v-else-if="page === 'screen'" :params="screenParams" @open="openCompany" @basket="page = 'basket'" @navigate="screenParams = $event" />
-    <BasketPage v-else-if="page === 'basket'" @open="openCompany" />
+    <BasketPage v-else-if="page === 'basket'" @open="openCompany" @screen="editScreen" />
 
     <template v-else>
     <p v-if="error" class="error">{{ error }}</p>

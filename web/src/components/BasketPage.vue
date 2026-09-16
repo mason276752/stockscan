@@ -9,7 +9,7 @@ import Icon from './Icon.vue';
 import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, renameConstituent, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
 import { watchlist } from '../watchlist';
 
-const emit = defineEmits(['open']);
+const emit = defineEmits(['open', 'screen']);
 
 const RANGES = [
   ['1y', '1 年'],
@@ -508,6 +508,7 @@ const sourceText = computed(() => {
           </div>
           <div class="options">
             <span v-if="syncMsg" class="small" :class="{ warn: syncMsg.startsWith('同步失敗') }">{{ syncMsg }}</span>
+            <button v-if="current.source.type === 'screen'" class="small" title="回到尋找股票，帶著這個 ETF 的篩選條件：改完可以更新這個 ETF（手動調整保留），或另外建一個新的" @click="emit('screen', current)">✎ 編輯篩選條件</button>
             <button class="small" :disabled="syncing" title="重新抓來源的最新成分與權重：新增的加進來、移除的拿掉、權重更新；手動新增和手動改過權重的不受影響" @click="resync">{{ syncing ? '同步中…' : '↻ 重新同步' }}</button>
           </div>
         </div>

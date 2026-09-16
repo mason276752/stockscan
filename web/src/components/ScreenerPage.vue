@@ -4,7 +4,7 @@ import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import SicPicker from './SicPicker.vue';
 import { isWatched, toggleWatch } from '../watchlist';
-import { createBasket } from '../baskets';
+import { applySource, basketOf, createBasket, setSource } from '../baskets';
 
 // params: the screen as it appears in the URL (see App.vue); `navigate`
 // reports every change so the URL and the browser history follow along
@@ -41,6 +41,7 @@ const error = ref(null);
 const MODES = { now: '', chg: 'chg', yoy: 'yoy' };
 function toUrlParams() {
   const p = {};
+  if (editing.value) p.basket = editing.value.id;
   if (text.value.trim()) p.q = text.value.trim();
   if (division.value) p.division = division.value;
   if (sicCode.value) p.sic = sicCode.value;
@@ -90,19 +91,78 @@ watch(
   { deep: true },
 );
 
-// the results (as sorted; all of them, or the first N) as a new custom ETF
+// the results (as sorted; all of them, or the first N) as a new custom ETF -
+// or, when the page was opened from a basket's "edit filters" link
+// (?basket=<id>), as that basket's new source
 const basketN = ref('');
 const basketable = computed(() => (result.value?.rows || []).filter((r) => r.ticker));
-function makeBasket() {
-  const n = Number(basketN.value) > 0 ? Math.floor(Number(basketN.value)) : basketable.value.length;
-  const rows = basketable.value.slice(0, n);
-  if (!rows.length) return;
+const editing = computed(() => (props.params?.basket ? basketOf(props.params.basket) : null) || null);
+watch(
+  editing,
+  (b) => {
+    if (b?.source?.n) basketN.value = String(b.source.n);
+    if (b && !b.source?.url && meta.value) applyUrlParams({ ...legacyParams(b.source?.params || {}), basket: b.id });
+  },
+  { immediate: true },
+);
+// baskets saved before the URL form was kept only have the API params
+// (amounts already scaled to dollars): turn them back into filters
+function legacyParams(p) {
+  const out = {};
+  for (const k of ['q', 'division', 'sic', 'afs', 'exdiv', 'exsic']) if (p[k]) out[k] = p[k];
+  if (p.listed === '0') out.listed = '0';
+  const cond = {};
+  for (const [k, v] of Object.entries(p)) {
+    const m = /^(.+?)(?:_(chg|yoy))?_(min|max)$/.exec(k);
+    if (!m) continue;
+    const c = (cond[`${m[1]}:${m[2] || ''}`] ??= { key: m[1], mode: m[2] || 'now', min: '', max: '' });
+    c[m[3]] = String(Number(v) / scale(c));
+  }
+  if (Object.keys(cond).length) out.cond = Object.values(cond).map((c) => [c.key, MODES[c.mode] || '', c.min, c.max].join(':')).join(';');
+  if (p.sort && (p.sort !== 'score' || p.dir !== 'desc' || p.sortmode)) {
+    out.sort = p.sort;
+    out.dir = p.dir || 'desc';
+    if (p.sortmode) out.sortmode = p.sortmode;
+  }
+  return out;
+}
+function stopEditing() {
+  const { basket, ...rest } = toUrlParams();
+  emit('navigate', rest);
+}
+function basketLabel() {
   const parts = [];
   if (sicCode.value) parts.push(sicCode.value);
   else if (division.value) parts.push(meta.value?.divisions?.find((d) => d.id === division.value)?.zh || division.value);
   const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${(fieldOf(c.key)?.name || c.key).replace(/（.*?）/g, '')}${c.mode === 'chg' ? '較上期' : c.mode === 'yoy' ? '較去年' : ''}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
-  const label = [...parts, ...cond].join(' ') || '尋找股票';
-  createBasket(label, rows, { prune: true, source: { type: 'screen', params: { ...params.value }, n: n < basketable.value.length ? n : null, label }, sync: { at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）', added: [], removed: [], changed: 0 } });
+  return [...parts, ...cond].join(' ') || '尋找股票';
+}
+function basketSource(n) {
+  const { basket, ...url } = toUrlParams(); // the filters as the URL carries them: what "edit" reopens
+  return { type: 'screen', params: { ...params.value }, url, n: n < basketable.value.length ? n : null, label: basketLabel() };
+}
+const now = () => ({ at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）' });
+function makeBasket() {
+  const n = Number(basketN.value) > 0 ? Math.floor(Number(basketN.value)) : basketable.value.length;
+  const rows = basketable.value.slice(0, n);
+  if (!rows.length) return;
+  const src = basketSource(n);
+  createBasket(src.label, rows, { prune: true, source: src, sync: { ...now(), added: [], removed: [], changed: 0 } });
+  emit('basket');
+}
+// the edited filters become the basket's source; the list is resynced the
+// usual way (manual rows and typed weights survive, excluded names stay out)
+function updateBasket() {
+  const b = editing.value;
+  if (!b) return;
+  const n = Number(basketN.value) > 0 ? Math.floor(Number(basketN.value)) : basketable.value.length;
+  const rows = basketable.value.slice(0, n);
+  if (!rows.length) return;
+  const src = basketSource(n);
+  const renamed = b.name === b.source?.label; // a name the user never changed follows the filters
+  setSource(b.id, src, renamed ? src.label : null);
+  applySource(b, rows.map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), now());
+  b.prune = true;
   emit('basket');
 }
 const fieldOf = (key) => meta.value?.fields.find((f) => f.key === key) || null;
@@ -265,6 +325,8 @@ onMounted(async () => {
   } catch (e) {
     error.value = e.message;
   }
+  const b = editing.value;
+  if (b && !b.source?.url) applyUrlParams({ ...legacyParams(b.source?.params || {}), basket: b.id });
   run();
 });
 </script>
@@ -349,9 +411,11 @@ onMounted(async () => {
           </div>
           <div class="options">
             <span v-if="loading" class="muted small">搜尋中…</span>
-            <span class="copy" title="把目前排序的結果組成自製 ETF（等權重），畫成 K 線；留空 = 全部">
+            <span class="copy" :title="editing ? `這裡改完條件後：更新「${editing.name}」的來源並重新同步（手動加的、手動改權重的、已排除的都保留），或另外建一個新的` : '把目前排序的結果組成自製 ETF（等權重），畫成 K 線；留空 = 全部'">
+              <span v-if="editing" class="editing">編輯「{{ editing.name }}」的條件 <button class="mini ghost" title="不更新，回到一般搜尋" @click="stopEditing">✕</button></span>
               前 <input v-model="basketN" type="number" min="1" class="n" :placeholder="String(basketable.length)" /> 家
-              <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ Number(basketN) > 0 ? `前 ${Math.min(Number(basketN), basketable.length)} 家` : `全部 ${basketable.length} 家` }}組成自製 ETF</button>
+              <button v-if="editing" class="small primary" :disabled="!basketable.length" @click="updateBasket">更新這個 ETF</button>
+              <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ Number(basketN) > 0 ? `前 ${Math.min(Number(basketN), basketable.length)} 家` : `全部 ${basketable.length} 家` }}{{ editing ? '建立新 ETF' : '組成自製 ETF' }}</button>
             </span>
             <a :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
           </div>
@@ -576,6 +640,15 @@ td.star .on {
   align-items: center;
   gap: 4px;
   font-size: 12px;
+}
+.copy .editing {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.copy button.primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
 }
 .copy input.n {
   width: 56px;

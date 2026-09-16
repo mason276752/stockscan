@@ -237,6 +237,16 @@ export function removeConstituent(id, ticker) {
 
 // remove several at once; the rest are rescaled to 100 in proportion. Source
 // rows go on the excluded list so a resync does not bring them back.
+// the basket's source changed (screener filters edited): remember the new
+// filters and name; the caller applies the new list with applySource
+export function setSource(id, source, name = null) {
+  const b = basketOf(id);
+  if (!b) return null;
+  b.source = source;
+  if (name) b.name = name;
+  return b;
+}
+
 // the company trades under a new ticker (EDGAR moved the CIK): follow it
 export function renameConstituent(id, from, to) {
   const b = basketOf(id);
