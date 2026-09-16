@@ -28,7 +28,7 @@ RUN mkdir -p /app/data && chown -R node:node /app/data
 USER node
 VOLUME ["/app/data"]
 # PORT / BASE_URL / SEC_USER_AGENT / STOCKSCAN_CRAWL / TV_ENABLED / IB_* : see README
-ENV PORT=3000 STOCKSCAN_DB=/app/data/stockscan.sqlite
+ENV PORT=3000 STOCKSCAN_STORE=/app/data/store STOCKSCAN_CACHE=/app/data/cache.sqlite STOCKSCAN_DB=/app/data/stockscan.sqlite
 EXPOSE 3000
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s \
   CMD wget -qO- "http://127.0.0.1:${PORT}${BASE_URL:-}/api/status" > /dev/null || exit 1
