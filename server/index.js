@@ -578,64 +578,130 @@ app.get(
   }),
 );
 
-// POST /api/basket { constituents: [{ ticker, weight }], range, rebalance, benchmark }
+// The custom-ETF index: fetch every constituent's daily bars (a few at a
+// time: IB paces historical requests, Yahoo rate-limits), build the index.
+// `emit` sees each constituent as its bars land and interim results every
+// second or so, so the page can draw the chart while the rest is fetched.
+function basketRequest(body) {
+  const seen = new Set();
+  const wanted = (Array.isArray(body.constituents) ? body.constituents : [])
+    .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), cik: Number(c?.cik) || null, weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
+    .filter((c) => c.ticker && !seen.has(c.ticker) && seen.add(c.ticker));
+  if (!wanted.length) throw Object.assign(new Error('constituents is empty'), { status: 400 });
+  return {
+    wanted,
+    range: RANGES[body.range] ? body.range : '5y',
+    rebalance: body.rebalance === 'daily' ? 'daily' : 'none',
+    benchmark: body.benchmark ? String(body.benchmark).trim().toUpperCase() : null,
+  };
+}
+
+function basketResult({ wanted, range, rebalance }, out, { partial = false, done = 0, total = 0 } = {}) {
+  const members = out.filter((m) => m && !m.bench);
+  const bench = out.find((m) => m && m.bench) || null;
+  const series = basketSeries(members, { range, rebalance });
+  // EDGAR's ticker table is the other delisting signal: a name whose prices
+  // still come in but that left the table (taken private, deregistered,
+  // renamed) is flagged too, with the new ticker when the company lives on
+  for (const c of series.constituents) {
+    const l = listingOf(c.symbol, wanted.find((w) => w.ticker === c.symbol)?.cik);
+    if (!l) continue;
+    c.listed = l.listed;
+    if (l.renamed) c.renamed = l.renamed;
+    if (!l.listed) c.delisted = true;
+  }
+  const failed = members.filter((m) => m.error).map((m) => ({ ticker: m.ticker, error: m.error, ...(listingOf(m.ticker, m.cik) || {}) }));
+  for (const f of failed) series.notes.push(`${f.ticker} 沒有價格資料，已排除（${f.error}）`);
+  const sources = [...new Set(members.filter((m) => !m.error).map((m) => m.source))];
+  return {
+    range,
+    rebalance,
+    partial,
+    done,
+    total,
+    source: sources.join(' + ') || null,
+    ib: ibStatus().connected,
+    tv: tvStatus().connected,
+    ...series,
+    failed,
+    benchmark: bench && !bench.error && series.start ? { symbol: bench.symbol, source: bench.source, startClose: bench.days.find((d) => d.date >= series.start)?.close ?? null, points: rebased(bench, series.start, series.end) } : null,
+  };
+}
+
+// interim: also emit an index of the members landed so far every `interim`
+// ms (0 = off - the weights renormalise among whoever has arrived, so the
+// interim chart jumps around; the page only asks for progress).
+async function runBasket(req, { emit = null, interim = 0, signal = null } = {}) {
+  const { wanted, benchmark } = req;
+  const jobs = [...wanted.map((c) => ({ ...c, bench: false })), ...(benchmark ? [{ ticker: benchmark, weight: 0, bench: true }] : [])];
+  const out = new Array(jobs.length);
+  const total = jobs.length;
+  let next = 0;
+  let done = 0;
+  let lastInterim = Date.now();
+  let dirty = false;
+  emit?.({ type: 'start', total, range: req.range, rebalance: req.rebalance });
+  const worker = async () => {
+    while (next < jobs.length && !signal?.aborted) {
+      const i = next++;
+      const j = jobs[i];
+      try {
+        const h = await dedupe(`bars:${j.ticker}`, () => dailyBars(j.ticker));
+        out[i] = { ...j, symbol: j.ticker, source: h.source, currency: h.currency, days: h.days };
+      } catch (err) {
+        out[i] = { ...j, symbol: j.ticker, error: err.message, days: [] };
+      }
+      done++;
+      if (!emit) continue;
+      const m = out[i];
+      emit({ type: 'member', symbol: m.symbol, bench: m.bench, source: m.source || null, first: m.days[0]?.date || null, last: m.days.at(-1)?.date || null, days: m.days.length, error: m.error || null, done, total });
+      dirty = true;
+      // an interim index of what has landed so far, at most every `interim` ms
+      if (interim > 0 && done < total && Date.now() - lastInterim >= interim && out.some((x) => x && !x.bench && !x.error)) {
+        lastInterim = Date.now();
+        dirty = false;
+        emit({ type: 'series', ...basketResult(req, out, { partial: true, done, total }) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, jobs.length) }, worker));
+  if (signal?.aborted) return null;
+  const result = basketResult(req, out, { partial: false, done, total });
+  emit?.({ type: 'series', ...result });
+  return result;
+}
+
+// POST /api/basket { constituents: [{ ticker, cik, weight }], range, rebalance, benchmark }
 //  -> index bars (base 100), stats, per-constituent returns, benchmark overlay
 app.post(
   '/api/basket',
   wrap(async (req, res) => {
-    const body = req.body || {};
-    const seen = new Set();
-    const wanted = (Array.isArray(body.constituents) ? body.constituents : [])
-      .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), cik: Number(c?.cik) || null, weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
-      .filter((c) => c.ticker && !seen.has(c.ticker) && seen.add(c.ticker));
-    if (!wanted.length) throw Object.assign(new Error('constituents is empty'), { status: 400 });
-    const range = RANGES[body.range] ? body.range : '5y';
-    const rebalance = body.rebalance === 'daily' ? 'daily' : 'none';
-    const benchmark = body.benchmark ? String(body.benchmark).trim().toUpperCase() : null;
+    res.json(await runBasket(basketRequest(req.body || {})));
+  }),
+);
 
-    // a few at a time: IB paces historical requests, Yahoo rate-limits
-    const jobs = [...wanted.map((c) => ({ ...c, bench: false })), ...(benchmark ? [{ ticker: benchmark, weight: 0, bench: true }] : [])];
-    const out = new Array(jobs.length);
-    let next = 0;
-    const worker = async () => {
-      while (next < jobs.length) {
-        const i = next++;
-        const j = jobs[i];
-        try {
-          const h = await dedupe(`bars:${j.ticker}`, () => dailyBars(j.ticker));
-          out[i] = { ...j, symbol: j.ticker, source: h.source, currency: h.currency, days: h.days };
-        } catch (err) {
-          out[i] = { ...j, symbol: j.ticker, error: err.message, days: [] };
-        }
-      }
+// POST /api/basket/stream - the same, streamed as NDJSON (one JSON object per
+// line): { type: 'start' } → { type: 'member' } per constituent as its bars
+// arrive → (with { interim: true } in the body: { type: 'series', partial: true }
+// every second or so) → the final { type: 'series', partial: false }.
+// Closing the connection stops the work.
+app.post(
+  '/api/basket/stream',
+  wrap(async (req, res) => {
+    const request = basketRequest(req.body || {});
+    res.status(200).set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    const ac = new AbortController();
+    res.on('close', () => ac.abort());
+    const emit = (ev) => {
+      if (!res.writableEnded && !ac.signal.aborted) res.write(`${JSON.stringify(ev)}\n`);
     };
-    await Promise.all(Array.from({ length: Math.min(8, jobs.length) }, worker));
-    const members = out.filter((m) => !m.bench);
-    const bench = out.find((m) => m.bench) || null;
-    const series = basketSeries(members, { range, rebalance });
-    // EDGAR's ticker table is the other delisting signal: a name whose prices
-    // still come in but that left the table (taken private, deregistered,
-    // renamed) is flagged too, with the new ticker when the company lives on
-    for (const c of series.constituents) {
-      const l = listingOf(c.symbol, wanted.find((w) => w.ticker === c.symbol)?.cik);
-      if (!l) continue;
-      c.listed = l.listed;
-      if (l.renamed) c.renamed = l.renamed;
-      if (!l.listed) c.delisted = true;
+    try {
+      await runBasket(request, { emit, signal: ac.signal, interim: req.body?.interim ? 1200 : 0 });
+    } catch (err) {
+      emit({ type: 'error', error: err.message });
     }
-    const failed = members.filter((m) => m.error).map((m) => ({ ticker: m.ticker, error: m.error, ...(listingOf(m.ticker, m.cik) || {}) }));
-    for (const f of failed) series.notes.push(`${f.ticker} 沒有價格資料，已排除（${f.error}）`);
-    const sources = [...new Set(members.filter((m) => !m.error).map((m) => m.source))];
-    res.json({
-      range,
-      rebalance,
-      source: sources.join(' + ') || null,
-      ib: ibStatus().connected,
-      tv: tvStatus().connected,
-      ...series,
-      failed,
-      benchmark: bench && !bench.error && series.start ? { symbol: bench.symbol, source: bench.source, startClose: bench.days.find((d) => d.date >= series.start)?.close ?? null, points: rebased(bench, series.start, series.end) } : null,
-    });
+    res.end();
   }),
 );
 

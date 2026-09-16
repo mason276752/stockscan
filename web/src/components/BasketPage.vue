@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import { url } from '../base';
 import CompanySearch from './CompanySearch.vue';
@@ -41,6 +41,8 @@ const quotes = ref(null); // /api/quotes/status
 const advanced = ref(false); // TradingView Advanced Charts loaded
 const result = ref(null);
 const loading = ref(false);
+const progress = ref(null); // { done, total, current, members[] } while the bars stream in
+let aborter = null;
 const error = ref(null);
 const newName = ref('');
 const addMsg = ref('');
@@ -220,9 +222,34 @@ async function run(force = false) {
   const id = ++seq;
   loading.value = true;
   error.value = null;
+  progress.value = null;
+  aborter?.abort(); // a superseded request stops the server's work too
+  aborter = new AbortController();
   try {
-    const r = await api.basket(body);
+    let r = null;
+    // bars stream in one constituent at a time: progress shows as they land, the
+    // chart (the previous one stays up meanwhile) is replaced once by the final index
+    await api.basketStream(
+      body,
+      (ev) => {
+        if (id !== seq) return;
+        if (ev.type === 'start') progress.value = { done: 0, total: ev.total, current: null, members: [] };
+        else if (ev.type === 'member') {
+          const p = progress.value || { done: 0, total: ev.total, current: null, members: [] };
+          p.done = ev.done;
+          p.total = ev.total;
+          p.current = ev.symbol;
+          p.members.unshift(ev);
+          p.members.length = Math.min(p.members.length, 6);
+          progress.value = { ...p };
+        } else if (ev.type === 'series') {
+          if (!ev.partial) r = ev;
+        } else if (ev.type === 'error') throw new Error(ev.error);
+      },
+      aborter.signal,
+    );
     if (id !== seq) return;
+    if (!r) throw new Error('連線中斷，沒有收到完整結果');
     result.value = r;
     // a basket copied from an ETF / list: names that no longer trade go now that the prices show which they are
     if (b.prune) {
@@ -237,13 +264,17 @@ async function run(force = false) {
     // TWS may have come up (or gone) since the page loaded
     if (quotes.value && (r.ib !== quotes.value.ib?.connected || r.tv !== quotes.value.tv?.connected)) api.quotesStatus().then((q) => (quotes.value = q)).catch(() => {});
   } catch (e) {
-    if (id !== seq) return;
+    if (id !== seq || e.name === 'AbortError') return;
     error.value = e.message;
     result.value = null;
   } finally {
-    if (id === seq) loading.value = false;
+    if (id === seq) {
+      loading.value = false;
+      progress.value = null;
+    }
   }
 }
+onBeforeUnmount(() => aborter?.abort());
 onMounted(async () => {
   await loadQuotes();
   run();
@@ -440,7 +471,7 @@ const sourceText = computed(() => {
             </template>
             <span class="muted small">{{ current.constituents.length }} 檔</span>
             <span v-if="result?.start" class="muted small">{{ result.start }} ～ {{ result.end }}，起點 = 100</span>
-            <span v-if="loading" class="muted small">計算中…</span>
+            <span v-if="loading" class="muted small">{{ progress ? `抓日線 ${progress.done} / ${progress.total}…` : '計算中…' }}</span>
           </div>
           <div class="options">
             <span class="seg">
@@ -482,6 +513,20 @@ const sourceText = computed(() => {
         </div>
         <p v-if="!current.constituents.length" class="empty muted">這個 ETF 還沒有成分股：在下面搜尋加入，或從尋找股票 / 觀察名單組成。</p>
 
+        <div v-if="loading && !useTv" class="panel progressbox" :class="{ overlay: result?.bars?.length }">
+          <div class="pbar" :class="{ indeterminate: !progress }">
+            <div class="fill" :style="{ width: progress ? `${Math.round((progress.done / Math.max(progress.total, 1)) * 100)}%` : '30%' }"></div>
+          </div>
+          <div class="ptext small">
+            <template v-if="progress">
+              <b>{{ progress.done }} / {{ progress.total }}</b> 檔日線已到<template v-if="progress.done < progress.total">，其餘抓取中（TradingView，備用 TWS、Yahoo；第一次較慢，之後 30 分鐘內有快取）</template><template v-else>，計算指數中</template>…
+              <span class="chips">
+                <span v-for="m in progress.members" :key="m.symbol" class="chip mono" :class="{ bad: m.error, bench: m.bench }" :title="m.error ? m.error : `${m.source} · ${m.first} ～ ${m.last}（${m.days} 天）`">{{ m.symbol }}</span>
+              </span>
+            </template>
+            <template v-else>連線中…</template>
+          </div>
+        </div>
         <div v-if="useTv || result?.bars?.length" class="panel chart">
           <TvEmbedChart v-if="useTv" :expression="tvExpression" :compare="tvCompare" :range="TV_RANGE[range] || 'ALL'" :colors="colors" />
           <KlineChart v-else :bars="result.bars" :overlay="result.benchmark?.points || []" :overlay-label="result.benchmark?.symbol || ''" :label="current.name" :colors="colors" :advanced="advanced" />
@@ -894,6 +939,66 @@ input.w.manual {
 .chart {
   margin-bottom: 12px;
   padding: 12px;
+}
+/* progress while the constituents' daily bars stream in */
+.progressbox {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+.progressbox.overlay {
+  padding: 6px 12px;
+}
+.pbar {
+  height: 6px;
+  border-radius: 3px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+.pbar .fill {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 3px;
+  transition: width 0.25s ease;
+}
+.pbar.indeterminate .fill {
+  animation: slide 1.2s ease-in-out infinite;
+}
+@keyframes slide {
+  0% {
+    margin-left: -30%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+.ptext {
+  margin-top: 6px;
+  color: #4b5563;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.chip {
+  padding: 0 6px;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  line-height: 18px;
+}
+.chip.bench {
+  background: #f3f4f6;
+  color: #374151;
+}
+.chip.bad {
+  background: #fef2f2;
+  color: #b91c1c;
 }
 .stats {
   display: flex;

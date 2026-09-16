@@ -45,4 +45,30 @@ export const api = {
   ibConnect: () => post('/api/quotes/ib/connect', {}),
   bars: (symbol) => get(`/api/bars/${encodeURIComponent(symbol)}`),
   basket: (body) => post('/api/basket', body),
+  basketStream: (body, onEvent, signal) => stream('/api/basket/stream', body, onEvent, signal),
 };
+
+// POST returning NDJSON: one JSON object per line, handed to onEvent as each
+// line arrives (the basket index streams progress and interim results)
+async function stream(path, body, onEvent, signal) {
+  const res = await fetch(url(path), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `${res.status} ${res.statusText}`);
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) onEvent(JSON.parse(line));
+    }
+  }
+  if (buf.trim()) onEvent(JSON.parse(buf));
+}

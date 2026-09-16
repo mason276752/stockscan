@@ -134,6 +134,7 @@ docker compose up -d --build # http://localhost:3000（或 BASE_URL 下）
 | `GET /api/bars/AAPL` | 十年日 K（開高低收量，除權調整）；來源 TradingView → IBKR TWS → Yahoo |
 | `POST /api/basket` `{constituents:[{ticker,weight}], range, rebalance, benchmark}` | 自製 ETF 指數（起點 = 100）的日 K、統計、各成分股報酬與貢獻、大盤 ETF 疊圖 |
 | `GET /api/quotes/status` / `POST /api/quotes/ib/connect` | TWS 連線狀態 / 立刻重試連線 |
+| `POST /api/basket/stream` | 同 `/api/basket`，但以 NDJSON 逐行串流：`start` → 每檔成分股日線一到就一筆 `member`（進度）→ 最後完整的 `series`；body 加 `interim: true` 才會多送約每秒一筆只含已到成分股的暫定 `series`（權重會隨到齊的檔數重算，圖會跳，網頁不用）。關掉連線伺服器就停 |
 | `GET /api/quotes/tv-symbol/:ticker` | 財報頁「K 線圖」用的 TradingView 商品代號（`NASDAQ:AAPL`，取自市場快照，避免代號被解析成別國的股票） |
 
 `:id` 可以是股票代號或 CIK。`year` / `period` 找不到時回 404，並附上該公司可用的 `available` 清單。
