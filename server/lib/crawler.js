@@ -141,7 +141,9 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         state.phase = 'sweep';
       }
       try {
-        const company = await getCompany(low, String(c.cik));
+        // a list up to a week old is fine here (the daily-index watch adds today's filings):
+        // a company whose newest DEPTH filings are all saved costs no request at all
+        const company = await getCompany(low, String(c.cik), { maxAge: CHECK_TTL });
         // the newest DEPTH originals (amendments rarely carry full statements)
         const wanted = company.filings.filter((f) => !/\/A$/i.test(f.form || '')).slice(0, DEPTH);
         let had = 0;

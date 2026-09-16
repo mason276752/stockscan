@@ -76,7 +76,7 @@ const allowed = new Set(DEFAULT_FORMS.map((f) => f.toUpperCase()));
 const companies = {};
 let headers = 0;
 for (const [cik, list] of filingsByCik) {
-  const sub = store.getKV(`submissions:${String(cik).padStart(10, '0')}`)?.value || null;
+  const sub = store.getDoc(`companies/${String(cik).padStart(10, '0')}.json`)?.value || null;
   if (sub) headers++;
   const u = byCik.get(cik);
   const fye = sub?.fiscalYearEnd || null;

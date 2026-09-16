@@ -11,7 +11,7 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
   解析結果存在本機 `data/store/`（一份財報一個 brotli 壓縮的 JSON 小檔，可以直接 commit 進 git，見「資料存放」），重啟不用重抓。
 - 一份申報的 Inline XBRL 可能拆成多個檔（10-K 的財報放在 `xxx_d2.htm`），依 FilingSummary.xml 的 InputFiles 全部解析後合併；
   同一個命名空間宣告兩個前綴（`xmlns:i` 與 `xmlns:xbrli`）或 linkbase 同時有預設命名空間與前綴的申報也能解析。存檔裡報表沒有任何欄位的會在讀取時重新解析。
-- 公司代號表也存在本機快取（`data/cache.sqlite`），啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
+- 公司代號表存在本機快取（`data/cache.sqlite`），申報清單存在 `data/store/companies/`；啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
 - 閒置時背景預抓：看某一份申報時，會在沒有使用者請求 3 秒後，悄悄下載前後一期、去年/明年同一季、以及同年度其他申報
   （讓 Q4 推算即時）。預抓請求一律讓路給使用者操作。`GET /api/status` 可看存檔數與預抓佇列。
 - 啟動後背景爬蟲：把每家有股票代號的公司（約 6,300 家，公眾流通市值大的先）最近 5 期 10-K / 10-Q / 20-F 存到本機
@@ -74,6 +74,7 @@ npx gh-pages -d web/dist-static -t
 data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.zst  一份財報一檔（zstd JSON，約 10 KB）
 data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.zst           一份財報一個評分（約 0.5 KB）
 data/store/documentation.json                                             標準科目的 SEC 定義，全站一份（不再每份財報重複存）
+data/store/companies/<CIK 10 碼>.json                                      每家公司的 EDGAR 申報清單（裁剪過的 submissions）：財報頁左側清單、爬蟲比對用
 data/bars/<來源>/<SYMBOL>.json.br                                         自製 ETF 的日線快取，一檔一檔（.gitignore）
 data/cache.sqlite                                                         快取：代號表、申報清單、市場快照…（.gitignore）
 ```
@@ -84,6 +85,7 @@ data/cache.sqlite                                                         快取
   再用 **zstd + 字典**壓（`server/data/zdict/`，字典以 1,500 份財報 / 評分訓練，`node server/tools/train-zdict.mjs` 可重新訓練，但用過的字典不能改）：
   財報比 brotli 再小 36%、評分小 70%，解壓 0.2 ms；壓一份要 ~0.08 秒，只在爬蟲存檔時付。舊的 `.json.br` 照樣能讀，啟動 20 秒後在背景逐檔轉成 `.zst`。
 - **從舊版搬移**：第一次啟動時若 `data/store/` 是空的而 `data/stockscan.sqlite` 存在，會自動搬（約 1 分鐘，log 有進度），搬完舊檔可刪。
+- **clone 下來就是完整的**：財報、評分、申報清單都在 `data/store/`，所以新環境開任何一家公司不用等下載，爬蟲掃描時「最近 5 期都已存」的公司**一個請求都不會發**（申報清單一週內的就直接用；當天的新申報由每日索引監看補上）。`data/cache.sqlite` 只剩真正的快取（代號表、市場快照、產業宇宙、ETF 清單），刪掉也只是重抓這些。
 
 ### 路徑前綴（BASE_URL）
 

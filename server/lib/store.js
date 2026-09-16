@@ -11,8 +11,13 @@
 //   data/store/documentation.json
 //       SEC's definition of every standard concept seen (us-gaap: … ), one
 //       copy instead of one per filing (a fifth of a filing's bytes)
+//   data/store/companies/<CIK padded>.json
+//       the company's EDGAR filing list (submissions, trimmed to 10-K/10-Q…):
+//       what the filing picker shows and what the crawler compares the store
+//       against - in git, so a fresh clone opens every company and resumes
+//       the crawl without a single request to SEC
 //   data/cache.sqlite   (not for git)
-//       kv cache: ticker table, submissions, daily bars, market snapshot …
+//       kv cache: ticker table, market snapshot, universe, ETF lists …
 //
 // Everything the store knows about which files exist is read from the file
 // names at startup (no index file to drift). Writes are atomic (temp + rename).
@@ -151,6 +156,7 @@ export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(DA
   scanFilings();
   scanScores();
   migrateLegacy(process.env.STOCKSCAN_DB || path.join(DATA, 'stockscan.sqlite'));
+  migrateSubmissions();
   compactCache();
   process.on('exit', flushDocs);
   setTimeout(recompress, 20_000).unref();
@@ -194,6 +200,28 @@ function recompress() {
   step();
 }
 
+// filing lists saved in the kv cache by earlier versions: move them into the
+// store (they are data a clone should have, not a cache)
+let kvShrunk = false;
+function migrateSubmissions() {
+  const keys = cache.prepare("SELECT key FROM kv WHERE substr(key, 1, 12) = 'submissions:'").all().map((r) => r.key);
+  if (!keys.length) return;
+  const get = cache.prepare('SELECT json, updated_at FROM kv WHERE key = ?');
+  for (const key of keys) {
+    const row = get.get(key);
+    if (!row) continue;
+    const file = path.join(root, 'companies', `${key.slice('submissions:'.length)}.json`);
+    if (!fs.existsSync(file)) {
+      writeAtomic(file, JSON.stringify(kvUnpack(row.json)));
+      const t = new Date(row.updated_at);
+      fs.utimesSync(file, t, t); // keep the fetch time (the TTL reads mtime)
+    }
+    cache.prepare('DELETE FROM kv WHERE key = ?').run(key);
+  }
+  kvShrunk = true;
+  console.log(`store: ${keys.length} 家公司的申報清單從快取搬到 ${root}/companies/`);
+}
+
 // Housekeeping for the kv cache at startup: rows still stored as plain text
 // (first migration pass) get packed and the file is shrunk.
 function compactCache() {
@@ -211,7 +239,7 @@ function compactCache() {
       cache.exec('COMMIT');
     }
   }
-  if (stale || text.length) {
+  if (stale || text.length || kvShrunk) {
     cache.exec('VACUUM');
     console.log(`store: 快取整理：壓縮 ${text.length} 筆純文字列`);
   }
@@ -350,6 +378,30 @@ export const store = {
     const out = [];
     for (const f of filings.values()) if (f.cik === Number(cik)) out.push({ accession: f.accession, form: f.form, report_date: f.reportDate });
     return out;
+  },
+
+  // small plain-JSON documents in the store (companies/<cik>.json …): git-
+  // friendly, with the write time so callers can apply their own TTL
+  getDoc(name) {
+    need();
+    try {
+      const st = fs.statSync(path.join(root, name));
+      return { value: JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')), ageMs: Date.now() - st.mtimeMs };
+    } catch {
+      return null;
+    }
+  },
+  putDoc(name, value) {
+    need();
+    writeAtomic(path.join(root, name), JSON.stringify(value));
+  },
+  listDocs(dir) {
+    need();
+    try {
+      return fs.readdirSync(path.join(root, dir)).filter((n) => n.endsWith('.json')).map((n) => `${dir}/${n}`);
+    } catch {
+      return [];
+    }
   },
 
   // kv entries come back with their age so callers can apply their own TTL
