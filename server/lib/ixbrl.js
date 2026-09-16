@@ -21,12 +21,35 @@ export function prefixMap($) {
   const attrs = $.root().children().first().attr() || {};
   const byUri = {};
   for (const [k, v] of Object.entries(attrs)) {
-    if (k.startsWith('xmlns:')) byUri[v] = k.slice(6);
-    else if (k === 'xmlns') byUri[v] = ''; // default namespace: unprefixed tags
+    if (k.startsWith('xmlns:')) (byUri[v] ||= []).push(k.slice(6));
+    else if (k === 'xmlns') (byUri[v] ||= []).push(''); // default namespace: unprefixed tags
   }
-  const map = {};
-  for (const [canon, uri] of Object.entries(NS)) map[canon] = byUri[uri] ?? canon;
+  const map = { all: {} };
+  for (const [canon, uri] of Object.entries(NS)) {
+    const prefixes = byUri[uri] || [canon];
+    // prefer a real prefix over the default namespace when both are declared
+    map[canon] = prefixes.find((x) => x) ?? prefixes[0];
+    map.all[canon] = prefixes;
+  }
   return map;
+}
+
+// A document that declares two prefixes for one namespace (xmlns:i and
+// xmlns:xbrli both for the instance namespace, contexts written as
+// <i:context>) is rewritten so every element uses the first prefix, which is
+// the one the selectors are built from.
+export function unifyPrefixes(text) {
+  const head = /<html[^>]*>/i.exec(text)?.[0] || text.slice(0, 4000);
+  const byUri = {};
+  for (const m of head.matchAll(/xmlns:([A-Za-z0-9_.-]+)="([^"]+)"/g)) (byUri[m[2]] ||= []).push(m[1]);
+  let out = text;
+  for (const uri of Object.values(NS)) {
+    const prefixes = byUri[uri];
+    if (!prefixes || prefixes.length < 2) continue;
+    const [keep, ...aliases] = prefixes;
+    for (const a of aliases) out = out.replace(new RegExp(`<(\\/?)${a}:`, 'g'), `<$1${keep}:`);
+  }
+  return out;
 }
 
 export const tag = (prefix, local) => (prefix ? `${prefix}\\:${local}` : local);
@@ -143,7 +166,7 @@ function measureName(m) {
 }
 
 export function parseInlineXbrl(text) {
-  const $ = loadXml(text);
+  const $ = loadXml(unifyPrefixes(text));
   const p = prefixMap($);
   const t = (canon, local) => tag(p[canon], local);
 
@@ -218,6 +241,30 @@ export function parseInlineXbrl(text) {
   for (const f of deiFacts) if (!(f.name.slice(4) in dei)) dei[f.name.slice(4)] = f.value;
 
   return { contexts, units, facts, schemaRef, dei };
+}
+
+// An Inline XBRL document set: a 10-K whose financial statements sit in a
+// second file (clx-20260630.htm + clx-20260630_d2.htm) shares one set of
+// contexts and units across the files. Merge the parsed documents; the
+// first one is the primary (its dei and schemaRef win).
+export function mergeInlineDocs(docs) {
+  const [first, ...rest] = docs;
+  if (!rest.length) return first;
+  const out = { contexts: { ...first.contexts }, units: { ...first.units }, facts: [...first.facts], schemaRef: first.schemaRef, dei: { ...first.dei } };
+  const seen = new Set(first.facts.filter((f) => f.numeric).map((f) => `${f.name}|${f.contextRef}`));
+  for (const d of rest) {
+    Object.assign(out.contexts, d.contexts);
+    Object.assign(out.units, d.units);
+    for (const f of d.facts) {
+      const key = `${f.name}|${f.contextRef}`;
+      if (f.numeric && seen.has(key)) continue;
+      seen.add(key);
+      out.facts.push(f);
+    }
+    out.schemaRef ||= d.schemaRef;
+    for (const [k, v] of Object.entries(d.dei)) if (!(k in out.dei)) out.dei[k] = v;
+  }
+  return out;
 }
 
 function dimCount(contexts, f) {

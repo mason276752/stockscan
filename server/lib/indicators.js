@@ -14,17 +14,20 @@ import { yearQuarterPoints } from './quarters.js';
 
 // Concept fallbacks (US-GAAP first, then IFRS). Lists are tried in order.
 export const C = {
-  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers', 'ifrs-full:RevenueFromSaleOfGoods', 'ifrs-full:RevenueFromRenderingOfServices', 'ifrs-full:RevenueAndOperatingIncome'],
+  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers', 'ifrs-full:RevenueFromSaleOfGoods', 'ifrs-full:RevenueFromRenderingOfServices', 'ifrs-full:RevenueAndOperatingIncome', 'ifrs-full:InsuranceRevenue', 'ifrs-full:RevenueFromRenderingOfTelecommunicationServices', 'ifrs-full:RevenueFromRenderingOfTransportServices', 'ifrs-full:RevenueFromRenderingOfCargoAndMailTransportServices', 'us-gaap:RegulatedOperatingRevenue', 'us-gaap:RegulatedOperatingRevenueGas', 'us-gaap:RegulatedOperatingRevenueElectric', 'us-gaap:OilAndGasRevenue', 'us-gaap:OperatingLeaseLeaseIncome', 'us-gaap:FeeIncome'],
   // banks: net revenue = net interest income + non-interest income
-  netInterestIncome: ['us-gaap:InterestIncomeExpenseNet', 'us-gaap:InterestIncomeExpenseAfterProvisionForLoanLoss'],
-  interestIncome: ['us-gaap:InterestAndDividendIncomeOperating', 'us-gaap:InterestIncomeOperating'],
-  noninterestIncome: ['us-gaap:NoninterestIncome'],
+  netInterestIncome: ['us-gaap:InterestIncomeExpenseNet', 'us-gaap:InterestIncomeExpenseAfterProvisionForLoanLoss', 'ifrs-full:InterestRevenueExpense'],
+  interestIncome: ['us-gaap:InterestAndDividendIncomeOperating', 'us-gaap:InterestIncomeOperating', 'ifrs-full:RevenueFromInterest'],
+  noninterestIncome: ['us-gaap:NoninterestIncome', 'ifrs-full:FeeAndCommissionIncome'],
+  // BDCs / investment companies: total investment income is the revenue, net investment income the operating result
+  bdcRevenue: ['us-gaap:GrossInvestmentIncomeOperating'],
+  bdcNetInvestmentIncome: ['us-gaap:NetInvestmentIncome'],
   costsAndExpenses: ['us-gaap:CostsAndExpenses', 'us-gaap:OperatingCostsAndExpenses', 'us-gaap:BenefitsLossesAndExpenses'],
   // total operating expenses below gross profit (or all costs when there is no cost of revenue)
   opexTotal: ['us-gaap:OperatingExpenses', 'ifrs-full:OperatingExpense'],
   nonoperating: ['us-gaap:NonoperatingIncomeExpense'],
   // the usual lines between operating and pre-tax income, for filers without an operating income line
-  interestExpenseNonop: ['us-gaap:InterestExpenseNonoperating', 'us-gaap:InterestExpense', 'us-gaap:InterestExpenseDebt', 'us-gaap:InterestAndDebtExpense', 'us-gaap:InterestIncomeExpenseNonoperatingNet', 'ifrs-full:FinanceCosts'],
+  interestExpenseNonop: ['us-gaap:InterestExpenseNonoperating', 'us-gaap:InterestExpense', 'us-gaap:InterestExpenseDebt', 'us-gaap:InterestAndDebtExpense', 'us-gaap:InterestIncomeExpenseNonoperatingNet', 'us-gaap:InvestmentAndDebtInterestIncomeExpenseNet', 'ifrs-full:FinanceCosts'],
   interestIncomeNonop: ['us-gaap:InvestmentIncomeInterest', 'us-gaap:InvestmentIncomeInterestAndDividend', 'us-gaap:InterestIncomeOther', 'us-gaap:InvestmentIncomeNonoperating', 'ifrs-full:FinanceIncome'],
   otherNonop: ['us-gaap:OtherNonoperatingIncomeExpense', 'us-gaap:OtherNonoperatingIncome', 'us-gaap:OtherIncome'],
   cogs: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales', 'us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
@@ -33,6 +36,7 @@ export const C = {
   cogsPartial: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization', 'synthetic:CostOfRevenueFromHeading'],
   cogsPartialReal: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
   cogsSynthetic: ['synthetic:CostOfRevenueFromHeading'],
+  noCogs: ['synthetic:NoCostOfRevenue'], // the statement has expenses but none is a cost of revenue
   cogsAmort: ['us-gaap:CostOfGoodsAndServicesSoldAmortization'],
   cogsDA: ['us-gaap:CostOfGoodsAndServicesSoldDepreciationAndAmortization', 'us-gaap:CostOfGoodsAndServicesSoldDepreciation'],
   grossProfit: ['us-gaap:GrossProfit', 'ifrs-full:GrossProfit'],
@@ -43,26 +47,29 @@ export const C = {
     'us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic',
     'ifrs-full:ProfitLossBeforeTax',
   ],
-  netIncome: ['us-gaap:NetIncomeLoss', 'us-gaap:NetIncomeLossAvailableToCommonStockholdersBasic', 'us-gaap:ProfitLoss', 'ifrs-full:ProfitLossAttributableToOwnersOfParent', 'ifrs-full:ProfitLoss'],
-  eps: ['us-gaap:EarningsPerShareDiluted', 'us-gaap:EarningsPerShareBasicAndDiluted', 'us-gaap:EarningsPerShareBasic', 'us-gaap:IncomeLossFromContinuingOperationsPerDilutedShare', 'us-gaap:IncomeLossFromContinuingOperationsPerBasicShare', 'ifrs-full:DilutedEarningsLossPerShare', 'ifrs-full:BasicEarningsLossPerShare'],
-  ocf: ['us-gaap:NetCashProvidedByUsedInOperatingActivities', 'us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'ifrs-full:CashFlowsFromUsedInOperatingActivities'],
+  netIncome: ['us-gaap:NetIncomeLoss', 'us-gaap:NetIncomeLossAvailableToCommonStockholdersBasic', 'us-gaap:ProfitLoss', 'ifrs-full:ProfitLossAttributableToOwnersOfParent', 'ifrs-full:ProfitLoss', 'ifrs-full:ProfitLossFromContinuingOperations', 'us-gaap:NetIncreaseDecreaseInNetAssetsResultingFromOperations'],
+  eps: ['us-gaap:EarningsPerShareDiluted', 'us-gaap:EarningsPerShareBasicAndDiluted', 'us-gaap:EarningsPerShareBasic', 'us-gaap:IncomeLossFromContinuingOperationsPerDilutedShare', 'us-gaap:IncomeLossFromContinuingOperationsPerBasicShare', 'ifrs-full:DilutedEarningsLossPerShare', 'ifrs-full:BasicEarningsLossPerShare', 'ifrs-full:DilutedEarningsLossPerShareFromContinuingOperations', 'ifrs-full:BasicEarningsLossPerShareFromContinuingOperations'],
+  ocf: ['us-gaap:NetCashProvidedByUsedInOperatingActivities', 'us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations', 'ifrs-full:CashFlowsFromUsedInOperatingActivities', 'ifrs-full:CashFlowsFromUsedInOperatingActivitiesContinuingOperations'],
   icf: ['us-gaap:NetCashProvidedByUsedInInvestingActivities', 'us-gaap:NetCashProvidedByUsedInInvestingActivitiesContinuingOperations', 'ifrs-full:CashFlowsFromUsedInInvestingActivities'],
   fcf: ['us-gaap:NetCashProvidedByUsedInFinancingActivities', 'us-gaap:NetCashProvidedByUsedInFinancingActivitiesContinuingOperations', 'ifrs-full:CashFlowsFromUsedInFinancingActivities'],
-  capex: ['us-gaap:PaymentsToAcquirePropertyPlantAndEquipment', 'us-gaap:PaymentsToAcquireProductiveAssets', 'us-gaap:PaymentsToAcquireOtherPropertyPlantAndEquipment', 'us-gaap:PaymentsForCapitalImprovements', 'us-gaap:PaymentsToAcquireOilAndGasPropertyAndEquipment', 'us-gaap:PaymentsToAcquireOilAndGasProperty', 'us-gaap:PaymentsToAcquireMachineryAndEquipment', 'us-gaap:PaymentsForFlightEquipment', 'us-gaap:PaymentsToAcquireOilAndGasEquipment', 'us-gaap:PaymentsToAcquireRealEstate', 'us-gaap:PaymentsToDevelopRealEstateAssets', 'us-gaap:PaymentsToAcquireCommercialRealEstate', 'us-gaap:PaymentsForConstructionInProcess', 'ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities'],
+  capex: ['us-gaap:PaymentsToAcquirePropertyPlantAndEquipment', 'us-gaap:PaymentsToAcquireProductiveAssets', 'us-gaap:PaymentsToAcquireOtherPropertyPlantAndEquipment', 'us-gaap:PaymentsForCapitalImprovements', 'us-gaap:PaymentsToAcquireOilAndGasPropertyAndEquipment', 'us-gaap:PaymentsToAcquireOilAndGasProperty', 'us-gaap:PaymentsToAcquireMachineryAndEquipment', 'us-gaap:PaymentsForFlightEquipment', 'us-gaap:PaymentsToAcquireOilAndGasEquipment', 'us-gaap:PaymentsToAcquireRealEstate', 'us-gaap:PaymentsToDevelopRealEstateAssets', 'us-gaap:PaymentsToAcquireCommercialRealEstate', 'us-gaap:PaymentsForConstructionInProcess', 'us-gaap:PaymentsToAcquireOtherProductiveAssets', 'ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities', 'ifrs-full:PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwillInvestmentPropertyAndOtherNoncurrentAssets'],
+  // bought intangibles (software, licences) are capital spending too
+  capexIntangibles: ['us-gaap:PaymentsToAcquireIntangibleAssets', 'us-gaap:PaymentsToDevelopSoftware', 'ifrs-full:PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities'],
   dividends: ['us-gaap:PaymentsOfDividends', 'us-gaap:PaymentsOfDividendsCommonStock', 'us-gaap:PaymentsOfOrdinaryDividends', 'us-gaap:PaymentsOfDividendsCommonStock', 'ifrs-full:DividendsPaidClassifiedAsFinancingActivities', 'ifrs-full:DividendsPaid'],
   // balances
-  cash: ['us-gaap:CashAndCashEquivalentsAtCarryingValue', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations', 'us-gaap:CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations', 'us-gaap:CashAndDueFromBanks', 'us-gaap:CashCashEquivalentsAndFederalFundsSold', 'us-gaap:CashCashEquivalentsAndShortTermInvestments', 'us-gaap:Cash', 'us-gaap:CashEquivalentsAtCarryingValue', 'ifrs-full:CashAndCashEquivalents'],
-  ar: ['us-gaap:AccountsReceivableNetCurrent', 'us-gaap:ReceivablesNetCurrent', 'us-gaap:AccountsNotesAndLoansReceivableNetCurrent', 'us-gaap:AccountsAndOtherReceivablesNetCurrent', 'us-gaap:AccountsReceivableNet', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLossCurrent', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLoss', 'us-gaap:PremiumsReceivableAtCarryingValue', 'us-gaap:AccountsReceivableGrossCurrent', 'ifrs-full:CurrentTradeReceivables', 'ifrs-full:TradeAndOtherCurrentReceivables', 'ifrs-full:TradeReceivables'],
+  cash: ['us-gaap:CashAndCashEquivalentsAtCarryingValue', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents', 'us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations', 'us-gaap:CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations', 'us-gaap:CashAndDueFromBanks', 'us-gaap:CashCashEquivalentsAndFederalFundsSold', 'us-gaap:CashCashEquivalentsAndShortTermInvestments', 'us-gaap:Cash', 'us-gaap:CashEquivalentsAtCarryingValue', 'ifrs-full:CashAndCashEquivalents', 'ifrs-full:Cash', 'ifrs-full:CashAndBankBalancesAtCentralBanks', 'us-gaap:CashAndCashEquivalentsFairValueDisclosure'],
+  ar: ['us-gaap:AccountsReceivableNetCurrent', 'us-gaap:ReceivablesNetCurrent', 'us-gaap:AccountsNotesAndLoansReceivableNetCurrent', 'us-gaap:AccountsAndOtherReceivablesNetCurrent', 'us-gaap:AccountsReceivableNet', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLossCurrent', 'us-gaap:ContractWithCustomerReceivableAfterAllowanceForCreditLoss', 'us-gaap:PremiumsReceivableAtCarryingValue', 'us-gaap:AccountsReceivableGrossCurrent', 'us-gaap:AccountsAndNotesReceivableNet', 'ifrs-full:CurrentTradeReceivables', 'ifrs-full:TradeAndOtherCurrentReceivables', 'ifrs-full:TradeReceivables'],
   inventory: ['us-gaap:InventoryNet', 'us-gaap:InventoryGross', 'us-gaap:InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings', 'us-gaap:EnergyRelatedInventory', 'us-gaap:RetailRelatedInventoryMerchandise', 'us-gaap:AirlineRelatedInventoryNet', 'us-gaap:InventoryRealEstate', 'us-gaap:InventoryOperativeBuilders', 'us-gaap:FIFOInventoryAmount', 'us-gaap:InventoryFinishedGoodsNetOfReserves', 'us-gaap:InventoryRawMaterialsAndSupplies', 'us-gaap:EnergyRelatedInventoryNaturalGasInStorage', 'ifrs-full:Inventories'],
   prepaid: ['us-gaap:PrepaidExpenseCurrent'],
-  currentAssets: ['us-gaap:AssetsCurrent', 'ifrs-full:CurrentAssets'],
+  currentAssets: ['us-gaap:AssetsCurrent', 'ifrs-full:CurrentAssets', 'ifrs-full:CurrentAssetsOtherThanAssetsOrDisposalGroupsClassifiedAsHeldForSaleOrAsHeldForDistributionToOwners'],
+  nonCurrentAssets: ['us-gaap:AssetsNoncurrent', 'ifrs-full:NoncurrentAssets'],
   totalAssets: ['us-gaap:Assets', 'ifrs-full:Assets'],
-  ppe: ['us-gaap:PropertyPlantAndEquipmentNet', 'us-gaap:PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization', 'us-gaap:PropertyPlantAndEquipmentExcludingLessorAssetUnderOperatingLeaseAfterAccumulatedDepreciation', 'us-gaap:PublicUtilitiesPropertyPlantAndEquipmentNet', 'us-gaap:RealEstateInvestmentPropertyNet', 'us-gaap:RealEstateInvestments', 'us-gaap:PropertySubjectToOrAvailableForOperatingLeaseNet', 'us-gaap:OilAndGasPropertySuccessfulEffortMethodNet', 'us-gaap:OilAndGasPropertyFullCostMethodNet', 'ifrs-full:PropertyPlantAndEquipment', 'ifrs-full:InvestmentProperty'],
+  ppe: ['us-gaap:PropertyPlantAndEquipmentNet', 'us-gaap:PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization', 'us-gaap:PropertyPlantAndEquipmentExcludingLessorAssetUnderOperatingLeaseAfterAccumulatedDepreciation', 'us-gaap:PublicUtilitiesPropertyPlantAndEquipmentNet', 'us-gaap:RealEstateInvestmentPropertyNet', 'us-gaap:RealEstateInvestments', 'us-gaap:PropertySubjectToOrAvailableForOperatingLeaseNet', 'us-gaap:OilAndGasPropertySuccessfulEffortMethodNet', 'us-gaap:OilAndGasPropertyFullCostMethodNet', 'us-gaap:PropertyPlantAndEquipmentOtherNet', 'ifrs-full:PropertyPlantAndEquipment', 'ifrs-full:PropertyPlantAndEquipmentIncludingRightofuseAssets', 'ifrs-full:InvestmentProperty'],
   ppeGross: ['us-gaap:PropertyPlantAndEquipmentGross', 'us-gaap:PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetBeforeAccumulatedDepreciationAndAmortization', 'us-gaap:RealEstateInvestmentPropertyAtCost', 'us-gaap:PublicUtilitiesPropertyPlantAndEquipmentPlantInService', 'ifrs-full:PropertyPlantAndEquipmentGrossCarryingAmount'],
   ltInvestments: ['us-gaap:LongTermInvestments', 'us-gaap:OtherLongTermInvestments', 'us-gaap:MarketableSecuritiesNoncurrent', 'us-gaap:EquityMethodInvestments', 'ifrs-full:NoncurrentFinancialAssets', 'ifrs-full:InvestmentAccountedForUsingEquityMethod'],
   otherAssets: ['us-gaap:OtherAssetsNoncurrent', 'ifrs-full:OtherNoncurrentAssets'],
-  ap: ['us-gaap:AccountsPayableCurrent', 'us-gaap:AccountsPayableTradeCurrent', 'us-gaap:AccountsPayableAndAccruedLiabilitiesCurrent', 'us-gaap:AccountsPayableAndOtherAccruedLiabilitiesCurrent', 'us-gaap:AccountsPayableCurrentAndNoncurrent', 'us-gaap:AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent', 'us-gaap:AccountsPayableAndOtherAccruedLiabilities', 'ifrs-full:TradeAndOtherCurrentPayablesToTradeSuppliers', 'ifrs-full:TradeAndOtherCurrentPayables', 'ifrs-full:TradeAndOtherPayables'],
-  currentLiabilities: ['us-gaap:LiabilitiesCurrent', 'ifrs-full:CurrentLiabilities'],
+  ap: ['us-gaap:AccountsPayableCurrent', 'us-gaap:AccountsPayableTradeCurrent', 'us-gaap:AccountsPayableAndAccruedLiabilitiesCurrent', 'us-gaap:AccountsPayableAndOtherAccruedLiabilitiesCurrent', 'us-gaap:AccountsPayableCurrentAndNoncurrent', 'us-gaap:AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent', 'us-gaap:AccountsPayableAndOtherAccruedLiabilities', 'us-gaap:OtherAccountsPayableAndAccruedLiabilities', 'ifrs-full:TradeAndOtherCurrentPayablesToTradeSuppliers', 'ifrs-full:TradeAndOtherPayablesToTradeSuppliers', 'ifrs-full:TradeAndOtherCurrentPayables', 'ifrs-full:TradeAndOtherPayables'],
+  currentLiabilities: ['us-gaap:LiabilitiesCurrent', 'ifrs-full:CurrentLiabilities', 'ifrs-full:CurrentLiabilitiesOtherThanLiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale'],
   totalLiabilities: ['us-gaap:Liabilities', 'ifrs-full:Liabilities'],
   nonCurrentLiabilities: ['us-gaap:LiabilitiesNoncurrent', 'ifrs-full:NoncurrentLiabilities'],
   equityParent: ['us-gaap:StockholdersEquity', 'us-gaap:PartnersCapital', 'us-gaap:MembersEquity', 'ifrs-full:EquityAttributableToOwnersOfParent'],
@@ -80,7 +87,9 @@ export const first = (map, keys) => {
 const sum = (...xs) => (xs.every((x) => x == null) ? null : xs.reduce((a, x) => a + (x ?? 0), 0));
 const div = (a, b) => (a == null || b == null || b === 0 ? null : a / b);
 const pct = (a, b) => (div(a, b) == null ? null : (a / b) * 100);
-const avg = (a, b) => (a == null ? null : b == null ? a : (a + b) / 2);
+// average of the period-end and comparative balances; one side missing (a
+// line that dropped off the statement) falls back to the other
+const avg = (a, b) => (a == null ? b : b == null ? a : (a + b) / 2);
 
 // Row catalogue: group, name, unit, kind (ratio | flow amount | balance) and the formula shown in the tooltip.
 // benchmark: the rule of thumb a value is judged against (the indicators page
@@ -190,8 +199,9 @@ export async function loadPoints(client, company, keys, quarterly) {
 //   adequacy()  { ocf, out, periods } sums for the cash-flow-adequacy ratio
 export function ratios(g) {
   const v = {};
-  const totalAssets = g.bal('totalAssets');
   const currentAssets = g.bal('currentAssets');
+  // total assets: the line, else current + non-current, else the other side of the balance sheet
+  const totalAssets = g.bal('totalAssets') ?? (currentAssets != null && g.bal('nonCurrentAssets') != null ? currentAssets + g.bal('nonCurrentAssets') : null) ?? g.bal('liabilitiesAndEquity');
   const currentLiabilities = g.bal('currentLiabilities');
   const lse = g.bal('liabilitiesAndEquity') ?? totalAssets;
   // equity and total liabilities: the concept, or the other one subtracted from total liabilities & equity
@@ -227,7 +237,8 @@ export function ratios(g) {
     const direct = f('revenue');
     if (direct != null) return direct;
     const nii = f('netInterestIncome') ?? f('interestIncome');
-    return nii == null ? null : nii + (f('noninterestIncome') ?? 0);
+    if (nii != null) return nii + (f('noninterestIncome') ?? 0);
+    return f('bdcRevenue'); // investment companies: total investment income
   };
   // operating income: the concept; else revenue − total costs and expenses;
   // else gross profit (or revenue) − total operating expenses; else pre-tax
@@ -235,6 +246,7 @@ export function ratios(g) {
   const opIncomeOf = (f) => {
     const direct = f('operatingIncome');
     if (direct != null) return direct;
+    if (f('revenue') == null && f('bdcRevenue') != null && f('bdcNetInvestmentIncome') != null) return f('bdcNetInvestmentIncome');
     const rev = revenueOf(f);
     if (rev != null && f('costsAndExpenses') != null) return rev - f('costsAndExpenses');
     if (rev != null && f('opexTotal') != null) {
@@ -252,14 +264,18 @@ export function ratios(g) {
 
   const revenueA = revenueOf(g.flowA);
   v.arTurnover = div(revenueA, avgBal('ar'));
-  v.dso = div(365, v.arTurnover);
+  // a classified balance sheet with no receivables line at all (cash sales: restaurants, retailers): nothing to collect
+  const noAr = g.bal('ar') == null && g.balPrev('ar') == null && currentAssets != null && revenueA != null;
+  v.dso = noAr ? 0 : div(365, v.arTurnover);
   v.invTurnover = div(cogsA, avgBal('inventory'));
   // no inventory line at all (services, software, pure cash businesses): zero days in stock
   const noInventory = inventory == null && g.balPrev('inventory') == null && currentAssets != null;
   v.dio = noInventory ? 0 : div(365, v.invTurnover);
   v.cycle = v.dso != null && v.dio != null ? v.dso + v.dio : null;
   v.apTurnover = div(cogsA, avgBal('ap'));
-  v.dpo = div(365, v.apTurnover);
+  // no payables line on a classified balance sheet: suppliers are paid as they deliver
+  const noAp = g.bal('ap') == null && g.balPrev('ap') == null && currentLiabilities != null && cogsA != null;
+  v.dpo = noAp ? 0 : div(365, v.apTurnover);
   v.cashGap = v.cycle != null && v.dpo != null ? v.cycle - v.dpo : null;
   v.ppeTurnover = div(revenueA, avgBal('ppe'));
   v.assetTurnover = div(revenueA, avgBal('totalAssets'));
@@ -280,6 +296,10 @@ export function ratios(g) {
   // it picked up the wrong lines - better no figure than a wrong one
   const synthetic = g.flow('cogsTotal') == null && g.flow('cogsPartialReal') == null && g.flow('cogsSynthetic') != null;
   if (synthetic && v.grossMargin != null && (v.grossMargin < -50 || (v.opMargin != null && v.grossMargin < v.opMargin - 1))) v.grossMargin = null;
+  // no cost of revenue anywhere on the statement (licensing biotech, SPAC, franchisor: only R&D,
+  // administration, depreciation): the whole revenue is gross profit. Only with a real revenue
+  // line - banks and investment companies get their revenue by construction and no such figure.
+  if (v.grossMargin == null && cogs == null && g.flow('noCogs') && g.flow('revenue') > 0) v.grossMargin = 100;
   v.opexRatio = v.grossMargin != null && v.opMargin != null ? v.grossMargin - v.opMargin : null;
   v.safetyMargin = pct(v.opMargin, v.grossMargin);
   v.netMargin = pct(g.flow('netIncome'), revenue);
@@ -314,8 +334,8 @@ function adequacyOver(points, i, span, minPeriods) {
   const bal = (k, key) => first(points[k]?.balances, C[key]);
   for (let k = i; k > Math.max(0, i - span); k--) {
     const o = flow(k, 'ocf');
-    const capex = flow(k, 'capex');
-    if (o == null || capex == null) break;
+    const capex = (flow(k, 'capex') ?? 0) + (flow(k, 'capexIntangibles') ?? 0); // no line: nothing spent
+    if (o == null) break;
     const invInc = bal(k, 'inventory') != null && bal(k - 1, 'inventory') != null ? Math.max(0, bal(k, 'inventory') - bal(k - 1, 'inventory')) : 0;
     ocf += o;
     out += capex + invInc + (flow(k, 'dividends') ?? 0);

@@ -291,7 +291,31 @@ const EXT_ALIASES = {
   GrossMargin: 'us-gaap:GrossProfit',
   OperatingIncomeLoss: 'us-gaap:OperatingIncomeLoss',
   IncomeLossFromOperations: 'us-gaap:OperatingIncomeLoss',
+  OperatingIncome: 'us-gaap:OperatingIncomeLoss',
   NetIncomeLoss: 'us-gaap:NetIncomeLoss',
+  NetIncome: 'us-gaap:NetIncomeLoss',
+  NetLoss: 'us-gaap:NetIncomeLoss',
+  TotalAssets: 'us-gaap:Assets',
+  Assets: 'us-gaap:Assets',
+  TotalLiabilities: 'us-gaap:Liabilities',
+  Liabilities: 'us-gaap:Liabilities',
+  TotalCurrentAssets: 'us-gaap:AssetsCurrent',
+  AssetsCurrent: 'us-gaap:AssetsCurrent',
+  TotalCurrentLiabilities: 'us-gaap:LiabilitiesCurrent',
+  LiabilitiesCurrent: 'us-gaap:LiabilitiesCurrent',
+  StockholdersEquity: 'us-gaap:StockholdersEquity',
+  TotalStockholdersEquity: 'us-gaap:StockholdersEquity',
+  TotalShareholdersEquity: 'us-gaap:StockholdersEquity',
+  TotalCommonShareholdersEquity: 'us-gaap:StockholdersEquity',
+  TotalEquity: 'us-gaap:StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
+  TotalLiabilitiesAndStockholdersEquity: 'us-gaap:LiabilitiesAndStockholdersEquity',
+  LiabilitiesAndStockholdersEquity: 'us-gaap:LiabilitiesAndStockholdersEquity',
+  NetCashProvidedByUsedInOperatingActivities: 'us-gaap:NetCashProvidedByUsedInOperatingActivities',
+  CashAndCashEquivalents: 'us-gaap:CashAndCashEquivalentsAtCarryingValue',
+  InterestExpense: 'us-gaap:InterestExpense',
+  InterestExpenseNet: 'us-gaap:InterestExpense',
+  InterestAndDebtExpense: 'us-gaap:InterestAndDebtExpense',
+  InvestmentAndDebtInterestIncomeExpenseNet: 'us-gaap:InvestmentAndDebtInterestIncomeExpenseNet',
 };
 const canon = (concept) => {
   if (SYNONYMS[concept]) return SYNONYMS[concept][0];
@@ -300,15 +324,36 @@ const canon = (concept) => {
   return concept;
 };
 
+// Columns for the same period as colId that carry exactly one dimension: a
+// line reported only per member (Intuit tags cost of revenue by product /
+// service with no total, an oil producer its operating expenses by oil / gas)
+// is rolled up by summing the members of one axis.
+function rollupColumns(stmt, colId) {
+  const col = stmt.columns.find((c) => c.id === colId);
+  return col ? stmt.columns.filter((c) => c.id !== colId && Object.keys(c.dimensions).length === 1 && c.period.instant === col.period.instant && c.period.start === col.period.start && c.period.end === col.period.end) : [];
+}
+function rolledUp(li, samePeriod) {
+  const byAxis = {};
+  for (const c of samePeriod) {
+    const v = li.values[c.id];
+    if (!v || typeof v.value !== 'number') continue;
+    const [axis, member] = Object.entries(c.dimensions)[0];
+    if (/Total|Aggregate/i.test(member)) continue;
+    (byAxis[axis] ||= []).push(v.value);
+  }
+  const axes = Object.values(byAxis);
+  return axes.length === 1 && axes[0].length ? axes[0].reduce((a, b) => a + b, 0) : undefined;
+}
+// the line's value in the column, else the roll-up of its members
+export function lineValue(li, colId, samePeriod) {
+  const v = li.values[colId]?.value;
+  if (typeof v === 'number') return v;
+  return samePeriod?.length ? rolledUp(li, samePeriod) : undefined;
+}
+
 export function factsAt(stmt, colId, into) {
   if (!stmt || !colId) return into;
-  const col = stmt.columns.find((c) => c.id === colId);
-  // columns for the same period that carry exactly one dimension: a line
-  // reported only per member (e.g. Intuit tags cost of revenue by product /
-  // service with no total) is rolled up by summing the members of one axis
-  const samePeriod = col
-    ? stmt.columns.filter((c) => c.id !== colId && Object.keys(c.dimensions).length === 1 && c.period.instant === col.period.instant && c.period.start === col.period.start && c.period.end === col.period.end)
-    : [];
+  const samePeriod = rollupColumns(stmt, colId);
   // a value that came in through a synonym / extension alias yields to the
   // real concept when that turns up later (a REIT lists the small
   // RevenueFromContractWithCustomer line before the Revenues total)
@@ -326,17 +371,9 @@ export function factsAt(stmt, colId, into) {
       continue;
     }
     if (!samePeriod.length) continue;
-    const byAxis = {};
-    for (const c of samePeriod) {
-      const v = li.values[c.id];
-      if (!v || typeof v.value !== 'number') continue;
-      const [axis, member] = Object.entries(c.dimensions)[0];
-      if (/Total|Aggregate/i.test(member)) continue;
-      (byAxis[axis] ||= []).push(v.value);
-    }
-    const axes = Object.values(byAxis);
-    if (axes.length === 1 && axes[0].length) {
-      into[key] = axes[0].reduce((a, b) => a + b, 0);
+    const r = rolledUp(li, samePeriod);
+    if (r !== undefined) {
+      into[key] = r;
       if (exact) aliased.delete(key);
       else aliased.add(key);
     }
@@ -349,7 +386,7 @@ export function factsAt(stmt, colId, into) {
 // "Operating expenses" heading. Sum those lines, leaving out overhead-type
 // items (G&A, selling, R&D, depreciation, impairments, restructuring), so a
 // gross margin can still be estimated. Returns null when a real total exists.
-const COGS_HEADING = /(CostOfRevenue|CostOfGoodsAndServicesSold|CostsAndExpenses)Abstract$/;
+const COGS_HEADING = /^(us-gaap:)?(CostOfRevenue|CostOfGoodsAndServicesSold|CostsAndExpenses)Abstract$/;
 // a plain "Operating expenses" heading mixes direct costs with overhead: only
 // lines that are recognisably the cost of delivering the revenue count -
 // voyage / vessel costs (shipping), production costs, commissions (agencies),
@@ -361,7 +398,9 @@ const NOT_COGS = /GeneralAndAdministrative|Pension|PostretirementBenefit|Defined
 export function costOfRevenueFromHeading(stmt, colId) {
   if (!stmt || !colId) return null;
   const items = stmt.lineItems;
-  const hasTotal = items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:OperatingExpense$/.test(li.concept) && typeof li.values[colId]?.value === 'number');
+  const samePeriod = rollupColumns(stmt, colId);
+  const val = (li) => lineValue(li, colId, samePeriod);
+  const hasTotal = items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:OperatingExpense$/.test(li.concept) && typeof val(li) === 'number');
   if (hasTotal) return null;
   let h = items.findIndex((li) => li.abstract && COGS_HEADING.test(li.concept));
   // under a cost-of-revenue heading everything but overhead is direct cost;
@@ -372,23 +411,67 @@ export function costOfRevenueFromHeading(stmt, colId) {
     whitelist = true;
   }
   if (h < 0) return null;
-  let sum = 0;
-  let n = 0;
-  let running = 0; // every line so far, to spot a subtotal line (its value equals what came before it)
+  let end = h + 1;
+  while (end < items.length && items[end].depth > items[h].depth) end++;
+  const values = items.map((li, i) => (i > h && i < end && !li.abstract ? val(li) : undefined));
+  const numeric = (i) => typeof values[i] === 'number';
+  // pass 1: the recognisable direct-cost lines; pass 2 (only when pass 1
+  // found none): an itemised "Operating expenses" line - an oil producer's
+  // lease operating costs, listed first and followed by DD&A, G&A and a
+  // "Costs and expenses" total - counts as the direct cost
+  for (const pass of [1, 2]) {
+    let sum = 0;
+    let n = 0;
+    let running = 0; // every line so far, to spot a subtotal line (its value equals what came before it)
+    for (let i = h + 1; i < end; i++) {
+      if (!numeric(i)) continue;
+      const li = items[i];
+      const v = values[i];
+      let followers = 0;
+      for (let j = i + 1; j < end; j++) if (numeric(j)) followers++;
+      // a named total is one only when nothing follows it under the heading
+      const namedTotal = COGS_TOTALS.test(li.concept) && followers === 0;
+      const isTotal = namedTotal || (running > 0 && Math.abs(v - running) <= Math.abs(running) * 0.005);
+      if (isTotal) continue;
+      running += v;
+      if (NOT_COGS.test(li.concept)) continue;
+      const opexItem = /^(us-gaap:)?OperatingExpenses$/.test(li.concept);
+      if (whitelist && pass === 1 && (opexItem || !DIRECT_COST.test(li.concept.split(':').pop()))) continue;
+      if (whitelist && pass === 2 && !opexItem) continue;
+      if (!whitelist && opexItem) continue;
+      sum += v;
+      n++;
+    }
+    if (n) return sum;
+    if (!whitelist) break;
+  }
+  return null;
+}
+
+// True when the income statement has an expenses section but not one line in
+// it is a cost of delivering the revenue: research, administration,
+// depreciation, impairments only (a licensing biotech, a SPAC, a franchisor).
+// Such a filer has no cost of revenue at all - as opposed to one whose cost
+// lines merely could not be told apart, which stays unknown.
+export function noCostOfRevenue(stmt, colId) {
+  if (!stmt || !colId) return false;
+  const items = stmt.lineItems;
+  const samePeriod = rollupColumns(stmt, colId);
+  const val = (li) => lineValue(li, colId, samePeriod);
+  if (items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:OperatingExpense$/.test(li.concept) && typeof val(li) === 'number')) return false;
+  const h = items.findIndex((li) => li.abstract && (COGS_HEADING.test(li.concept) || EXPENSES_HEADING.test(li.concept)));
+  if (h < 0) return false;
+  let lines = 0;
   for (let i = h + 1; i < items.length && items[i].depth > items[h].depth; i++) {
     const li = items[i];
-    if (li.abstract) continue;
-    const v = li.values[colId]?.value;
-    if (typeof v !== 'number') continue;
-    const isTotal = COGS_TOTALS.test(li.concept) || (running > 0 && Math.abs(v - running) <= Math.abs(running) * 0.005);
-    if (isTotal) continue;
-    running += v;
-    if (NOT_COGS.test(li.concept)) continue;
-    if (whitelist && !DIRECT_COST.test(li.concept.split(':').pop())) continue;
-    sum += v;
-    n++;
+    if (li.abstract || typeof val(li) !== 'number') continue;
+    if (COGS_TOTALS.test(li.concept)) continue;
+    lines++;
+    const local = li.concept.split(':').pop();
+    // anything that is not recognisably overhead could be a direct cost: then we do not know
+    if (!NOT_COGS.test(li.concept) && !/^(SellingGeneralAndAdministrativeExpense|GeneralAndAdministrativeExpense|ResearchAndDevelopmentExpense|ProfessionalFees|LegalFees|StockOrUnitOptionPlanExpense|AllocatedShareBasedCompensationExpense|OperatingLeaseExpense|OtherGeneralExpense|OtherExpenses|LaborAndRelatedExpense|SalariesAndWages|EmployeeBenefitsAndShareBasedCompensation|OfficersCompensation|ProvisionForDoubtfulAccounts|BusinessCombinationAcquisitionRelatedCosts|MarketingAndAdvertisingExpense|TravelAndEntertainmentExpense|OtherSellingGeneralAndAdministrativeExpense|Franchise.*Tax|FranchisorCosts|MarketingFundExpenses|OccupancyNet)$/.test(local)) return false;
   }
-  return n ? sum : null;
+  return lines > 0;
 }
 
 export function flowsAt(data, { end, monthsLen }) {
@@ -400,6 +483,7 @@ export function flowsAt(data, { end, monthsLen }) {
     if (type === 'income_statement') {
       const est = costOfRevenueFromHeading(stmt, col?.id);
       if (est != null) out['synthetic:CostOfRevenueFromHeading'] = est;
+      else if (noCostOfRevenue(stmt, col?.id)) out['synthetic:NoCostOfRevenue'] = 1;
     }
   }
   return out;

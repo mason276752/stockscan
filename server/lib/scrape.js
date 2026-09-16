@@ -1,6 +1,6 @@
 // Fetch one filing and turn it into the statements JSON.
 
-import { parseInlineXbrl } from './ixbrl.js';
+import { mergeInlineDocs, parseInlineXbrl } from './ixbrl.js';
 import { loadTaxonomy } from './taxonomy.js';
 import { buildStatements, reclassify } from './statements.js';
 import { store, requireVersion } from './store.js';
@@ -11,6 +11,8 @@ import { applyZh } from './zh.js';
 export const SCRAPE_VERSION = 2;
 
 const FILING_TTL = 24 * 3600 * 1000; // a filed document never changes
+
+export const emptyStatements = (saved) => (saved.allStatements || []).length > 0 && (saved.allStatements || []).every((st) => !st.columns?.length);
 
 // Parsed filings are cached by accession (small); the raw SEC responses are
 // not kept, so a company's multi-year history does not pin tens of MB.
@@ -67,22 +69,47 @@ export async function ensureStored(client, filing, company) {
 
 async function loadOrScrape(client, filing, company) {
   const saved = store.getFiling(filing.accession);
-  // a saved result with no statements came from a parser bug: parse it again
-  if (saved && saved.stats?.statementRoles > 0) return applyZh(reclassify(saved));
+  // a saved result with no statements, or statements without a single column
+  // (the financial statements were in a second Inline XBRL file), came from
+  // a parser gap: parse it again
+  if (saved && saved.stats?.statementRoles > 0 && !emptyStatements(saved)) return applyZh(reclassify(saved));
   const result = await scrapeUncached(client, filing, company);
   store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
   return result;
 }
 
+// The other Inline XBRL files of a multi-document filing: EDGAR's
+// FilingSummary.xml lists them as InputFiles; failing that, files named
+// <primary>_d2.htm, _d3.htm ... next to the primary document.
+async function siblingDocuments(client, filing, folderFiles) {
+  const primary = filing.primaryDocument;
+  const base = primary.replace(/\.htm[l]?$/i, '');
+  let names = [];
+  if (folderFiles.includes('FilingSummary.xml')) {
+    try {
+      const xml = await client.text(`${filing.folderUrl}/FilingSummary.xml`);
+      const block = /<InputFiles>([\s\S]*?)<\/InputFiles>/.exec(xml)?.[1] || '';
+      names = [...block.matchAll(/<File[^>]*>([^<]+\.htm[l]?)<\/File>/gi)].map((m) => m[1].trim());
+    } catch {
+      /* fall through to the name pattern */
+    }
+  }
+  if (!names.length) names = folderFiles.filter((f) => new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_d\\d+\\.htm[l]?$`, 'i').test(f));
+  return names.filter((f) => f !== primary && folderFiles.includes(f));
+}
+
 async function scrapeUncached(client, filing, company) {
-  const doc = parseInlineXbrl(await client.text(filing.documentUrl));
   const folder = await client.json(`${filing.folderUrl}/index.json`, { ttlMs: FILING_TTL });
   const folderFiles = folder.directory.item.map((i) => i.name);
+  const docs = [parseInlineXbrl(await client.text(filing.documentUrl))];
+  for (const name of await siblingDocuments(client, filing, folderFiles)) docs.push(parseInlineXbrl(await client.text(`${filing.folderUrl}/${name}`)));
+  const doc = mergeInlineDocs(docs);
   const tax = await loadTaxonomy({ text: (url) => client.text(url) }, filing.folderUrl, doc.schemaRef, folderFiles);
   const concepts = await loadConceptMeta(client, filing.folderUrl, folderFiles);
   const { statements, allStatements } = buildStatements(doc, tax, concepts);
   return {
     fetchedAt: new Date().toISOString(),
+    documents: docs.length,
     filing: {
       cik: filing.cik,
       companyName: company?.name || doc.dei.EntityRegistrantName || null,
