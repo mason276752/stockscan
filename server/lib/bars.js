@@ -6,7 +6,7 @@
 // valuation page keeps its own Yahoo price history in prices.js - it needs
 // the unadjusted quotes of the day.)
 
-import { barStore, mergeDays } from './barStore.js';
+import { barStore, mergeDays, settledAt } from './barStore.js';
 import { ibConnect, ibConnected, ibDailyBars, ibStatus } from './ib.js';
 import { tvDailyBars, tvStatus } from './tvws.js';
 import { yahooSymbol } from './prices.js';
@@ -110,13 +110,16 @@ async function fetchFrom(source, symbol, since = null) {
 }
 
 // bring a saved series up to date: fetch the tail (with overlap) and splice
-// it on; a history that no longer lines up (split since) is fetched whole
+// it on; a history that no longer lines up (split since) is fetched whole -
+// the store then keeps the old files and records the split (barStore.put)
 async function refresh(src, symbol, saved) {
   const last = saved?.days?.at(-1)?.date;
   if (last) {
     const since = new Date(Date.parse(last) - OVERLAP * 86_400_000).toISOString().slice(0, 10);
     const tail = await fetchFrom(src, symbol, since);
-    const days = mergeDays(saved.days, tail.days);
+    // the last saved bar was still forming if it was fetched during its session (a stop mid-day)
+    const unsettled = Date.parse(saved.fetchedAt || 0) < settledAt(last) ? last : null;
+    const days = mergeDays(saved.days, tail.days, unsettled);
     if (days) return { ...saved, ...tail, days, fetchedAt: new Date().toISOString(), incremental: tail.days.length };
   }
   const value = await fetchFrom(src, symbol);
