@@ -1,1 +1,2 @@
 data/store/**/*.br binary
+data/store/**/*.zst binary

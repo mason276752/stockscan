@@ -1,12 +1,12 @@
 // Local persistence, laid out so the data can live in git (many small
 // immutable files, no file near GitHub's 100 MB limit, no LFS):
 //
-//   data/store/filings/<cik>/<accession>__<period end>__<form>__v<parser>.json.br
-//       the parsed statements of one filing (brotli JSON). A filed document
+//   data/store/filings/<cik>/<accession>__<period end>__<form>__v<parser>.json.zst
+//       the parsed statements of one filing (zstd JSON, dictionary-compressed). A filed document
 //       never changes, so a file is written once and kept; a parser version
 //       bump deletes it and it is re-fetched. The four primary statements
 //       are not stored twice: `statements` is rebuilt from `allStatements`.
-//   data/store/scores/<cik>/<accession>__<period end>__v<score version>.json.br
+//   data/store/scores/<cik>/<accession>__<period end>__v<score version>.json.zst
 //       the score of one filing
 //   data/store/documentation.json
 //       SEC's definition of every standard concept seen (us-gaap: … ), one
@@ -25,13 +25,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import { pickPrimary } from './statements.js';
 
-const EXT = '.json.br';
 const STD = /^(us-gaap|ifrs-full|dei|srt):/;
-const BROTLI = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } };
-const pack = (value) => zlib.brotliCompressSync(Buffer.from(JSON.stringify(value)), BROTLI);
-const unpack = (buf) => JSON.parse(zlib.brotliDecompressSync(buf).toString('utf8'));
+// Files are zstd with a dictionary trained on this kind of JSON (server/data/
+// zdict, node server/tools/train-zdict.mjs): a filing is a third smaller than
+// with brotli, a score a third of the size, and decoding is faster. Files
+// written before that (.json.br, brotli) still read; they are rewritten as
+// .zst in the background after startup. A dictionary is frozen once used.
+const EXT = '.json.zst';
+const ZDICT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'zdict');
+const DICTS = { filings: fs.readFileSync(path.join(ZDICT_DIR, 'filings-v1.zdict')), scores: fs.readFileSync(path.join(ZDICT_DIR, 'scores-v1.zdict')) };
+const ZSTD = (kind) => ({ dictionary: DICTS[kind], params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } });
+const pack = (kind, value) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(value)), ZSTD(kind));
+const unpack = (kind, buf, file) => JSON.parse((file.endsWith('.br') ? zlib.brotliDecompressSync(buf) : zlib.zstdDecompressSync(buf, { dictionary: DICTS[kind] })).toString('utf8'));
 // the legacy SQLite rows: gzip'd JSON, or plain text from even older versions
 const unpackLegacy = (col) => JSON.parse(col instanceof Uint8Array ? zlib.gunzipSync(col).toString('utf8') : col);
 
@@ -48,8 +56,8 @@ const safe = (s) => String(s ?? '-').replace(/\//g, '~').replace(/[^A-Za-z0-9.~-
 const unsafe = (s) => (s === '-' ? null : s.replace(/~/g, '/'));
 const filingName = (accession, reportDate, form, version) => `${accession}__${safe(reportDate)}__${safe(form)}__v${version}${EXT}`;
 const scoreName = (accession, reportDate, version) => `${accession}__${safe(reportDate)}__v${version}${EXT}`;
-const FILING_RE = /^(.+?)__(.+?)__(.+?)__v(\d+)\.json\.br$/;
-const SCORE_RE = /^(.+?)__(.+?)__v(\d+)\.json\.br$/;
+const FILING_RE = /^(.+?)__(.+?)__(.+?)__v(\d+)\.json\.(?:br|zst)$/;
+const SCORE_RE = /^(.+?)__(.+?)__v(\d+)\.json\.(?:br|zst)$/;
 
 const dir = (kind, cik) => path.join(root, kind, String(cik));
 
@@ -89,7 +97,7 @@ function scan(kind, re, into, make) {
       const rec = make(m, cik, file);
       // two files for one accession (a crash between write and delete): keep the newest version
       const prev = into.get(rec.accession);
-      if (prev && prev.version > rec.version) {
+      if (prev && (prev.version > rec.version || (prev.version === rec.version && prev.file.endsWith('.zst')))) {
         unlinkQuiet(file);
         continue;
       }
@@ -168,7 +176,45 @@ export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(pr
   migrateLegacy(process.env.STOCKSCAN_DB || path.join(process.cwd(), 'data', 'stockscan.sqlite'));
   compactCache();
   process.on('exit', flushDocs);
+  setTimeout(recompress, 20_000).unref();
   return root;
+}
+
+// files still in the brotli format: rewrite them as zstd one at a time,
+// spaced out so the server stays responsive (~0.1 s each, ~15 min for 10k)
+function recompress() {
+  const todo = [
+    ...[...filings.values()].filter((f) => f.file.endsWith('.br')).map((f) => ['filings', f]),
+    ...[...scores.values()].filter((f) => f.file.endsWith('.br')).map((f) => ['scores', f]),
+  ];
+  if (!todo.length) return;
+  console.log(`store: ${todo.length} 個檔案從 brotli 轉成 zstd（背景進行）…`);
+  let i = 0;
+  let saved = 0;
+  const step = () => {
+    if (i >= todo.length) {
+      console.log(`store: 轉檔完成，省下 ${(saved / 1048576).toFixed(0)} MB`);
+      return;
+    }
+    const [kind, rec] = todo[i++];
+    const live = (kind === 'filings' ? filings : scores).get(rec.accession);
+    if (live === rec && fs.existsSync(rec.file)) {
+      try {
+        const value = JSON.parse(zlib.brotliDecompressSync(fs.readFileSync(rec.file)).toString('utf8'));
+        const buf = pack(kind, value);
+        const file = rec.file.replace(/\.json\.br$/, EXT);
+        writeAtomic(file, buf);
+        unlinkQuiet(rec.file);
+        saved += (rec.bytes || 0) - buf.length;
+        rec.file = file;
+        if (rec.bytes != null) rec.bytes = buf.length;
+      } catch (err) {
+        console.warn(`store: ${path.basename(rec.file)} 轉檔失敗：${err.message}`);
+      }
+    }
+    setTimeout(step, 30).unref();
+  };
+  step();
 }
 
 // Housekeeping for the kv cache at startup: rows still stored as plain text
@@ -258,7 +304,7 @@ const need = () => {
 // the kv cache is brotli'd too (fast setting: the market snapshot is rewritten every half hour)
 const KV_BROTLI = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } };
 const kvPack = (value) => zlib.brotliCompressSync(Buffer.from(JSON.stringify(value)), KV_BROTLI);
-const kvUnpack = (col) => (col instanceof Uint8Array ? unpack(col) : JSON.parse(col));
+const kvUnpack = (col) => JSON.parse(col instanceof Uint8Array ? zlib.brotliDecompressSync(col).toString('utf8') : col);
 
 export const store = {
   get file() {
@@ -270,7 +316,7 @@ export const store = {
     const f = filings.get(accession);
     if (!f) return null;
     try {
-      return fatten(unpack(fs.readFileSync(f.file)).data);
+      return fatten(unpack('filings', fs.readFileSync(f.file), f.file).data);
     } catch (err) {
       console.warn(`store: ${path.basename(f.file)} unreadable (${err.message}), dropped`);
       unlinkQuiet(f.file);
@@ -287,7 +333,7 @@ export const store = {
     const reportDate = result.filing?.periodEnd ?? null;
     const form = result.filing?.form ?? null;
     const file = path.join(dir('filings', cik), filingName(accession, reportDate, form, version));
-    const buf = pack({ accession, cik, form, reportDate, version, fetchedAt, data: slim(result) });
+    const buf = pack('filings', { accession, cik, form, reportDate, version, fetchedAt, data: slim(result) });
     writeAtomic(file, buf);
     const prev = filings.get(accession);
     if (prev && prev.file !== file) unlinkQuiet(prev.file);
@@ -340,7 +386,7 @@ export const store = {
   putScore(accession, cik, reportDate, version, score) {
     need();
     const file = path.join(dir('scores', cik), scoreName(accession, reportDate, version));
-    writeAtomic(file, pack({ accession, cik, reportDate, version, score }));
+    writeAtomic(file, pack('scores', { accession, cik, reportDate, version, score }));
     const prev = scores.get(accession);
     if (prev && prev.file !== file) unlinkQuiet(prev.file);
     scores.set(accession, { accession, cik: Number(cik), reportDate: reportDate ?? null, version, file });
@@ -373,7 +419,7 @@ export const store = {
     const s = scores.get(accession);
     if (!s) return null;
     try {
-      return unpack(fs.readFileSync(s.file)).score;
+      return unpack('scores', fs.readFileSync(s.file), s.file).score;
     } catch {
       unlinkQuiet(s.file);
       scores.delete(accession);

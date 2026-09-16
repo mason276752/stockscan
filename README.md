@@ -46,16 +46,18 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 ### 資料存放（可進 git）
 
 ```
-data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.br   一份財報一檔（brotli JSON，約 16 KB）
-data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.br            一份財報一個評分（約 4 KB）
+data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.zst  一份財報一檔（zstd JSON，約 10 KB）
+data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.zst           一份財報一個評分（約 0.5 KB）
 data/store/documentation.json                                             標準科目的 SEC 定義，全站一份（不再每份財報重複存）
 data/bars/<來源>/<SYMBOL>.json.br                                         自製 ETF 的日線快取，一檔一檔（.gitignore）
 data/cache.sqlite                                                         快取：代號表、申報清單、市場快照…（.gitignore）
 ```
 
 - 財報一旦申報就不會變，所以每個檔寫一次就不動；解析或評分版本升級時舊檔刪掉重建。檔名就是索引（啟動時掃目錄，約 0.6 秒），沒有另外的索引檔會不同步。
-- 這樣設計是為了 **直接 `git add data/store` commit & push 到 GitHub**：全是小檔（沒有任何檔接近 100 MB 上限）、不需要 Git LFS；目前約 9,900 份財報 ≈ 200 MB，每月成長約 30 MB。`.gitignore` 已設成只收 `data/store/`，快取與舊 SQLite 不進。
-- 儲存時把重複的四大報表引用（`statements` 只是 `allStatements` 的子集）拿掉、標準科目的 SEC 定義集中到 `documentation.json`，比原本 SQLite 的 gzip 版本小 60%。
+- 這樣設計是為了 **直接 `git add data/store` commit & push 到 GitHub**：全是小檔（沒有任何檔接近 100 MB 上限）、不需要 Git LFS；目前約 9,900 份財報 ≈ 110 MB，每月成長約 15 MB。`.gitignore` 已設成只收 `data/store/`，快取與舊 SQLite 不進。
+- 儲存時把重複的四大報表引用（`statements` 只是 `allStatements` 的子集）拿掉、標準科目的 SEC 定義集中到 `documentation.json`，
+  再用 **zstd + 字典**壓（`server/data/zdict/`，字典以 1,500 份財報 / 評分訓練，`node server/tools/train-zdict.mjs` 可重新訓練，但用過的字典不能改）：
+  財報比 brotli 再小 36%、評分小 70%，解壓 0.2 ms；壓一份要 ~0.08 秒，只在爬蟲存檔時付。舊的 `.json.br` 照樣能讀，啟動 20 秒後在背景逐檔轉成 `.zst`。
 - **從舊版搬移**：第一次啟動時若 `data/store/` 是空的而 `data/stockscan.sqlite` 存在，會自動搬（約 1 分鐘，log 有進度），搬完舊檔可刪。
 
 ### 路徑前綴（BASE_URL）
