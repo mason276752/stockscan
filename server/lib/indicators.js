@@ -33,11 +33,12 @@ export const C = {
   cogs: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales', 'us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
   // some filers show cost of revenue as a base line plus separate amortisation / depreciation lines (Intuit, Broadcom …)
   cogsTotal: ['us-gaap:CostOfRevenue', 'us-gaap:CostOfGoodsSold', 'ifrs-full:CostOfSales'],
-  cogsPartial: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization', 'synthetic:CostOfRevenueFromHeading'],
-  cogsPartialReal: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization'],
+  // the estimate first: when present it already includes the partial line plus the direct-cost lines beside it
+  cogsPartial: ['synthetic:CostOfRevenueFromHeading', 'us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfServicesExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostDirectMaterial'],
+  cogsPartialReal: ['us-gaap:CostOfGoodsAndServicesSold', 'us-gaap:CostOfServices', 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostOfServicesExcludingDepreciationDepletionAndAmortization', 'us-gaap:CostDirectMaterial'],
   cogsSynthetic: ['synthetic:CostOfRevenueFromHeading'],
   noCogs: ['synthetic:NoCostOfRevenue'], // the statement has expenses but none is a cost of revenue
-  cogsAmort: ['us-gaap:CostOfGoodsAndServicesSoldAmortization'],
+  cogsAmort: ['us-gaap:CostOfGoodsAndServicesSoldAmortization', 'us-gaap:CostOfGoodsSoldAmortization'],
   cogsDA: ['us-gaap:CostOfGoodsAndServicesSoldDepreciationAndAmortization', 'us-gaap:CostOfGoodsAndServicesSoldDepreciation'],
   grossProfit: ['us-gaap:GrossProfit', 'ifrs-full:GrossProfit'],
   operatingIncome: ['us-gaap:OperatingIncomeLoss', 'ifrs-full:ProfitLossFromOperatingActivities'],
@@ -124,7 +125,7 @@ export const ROWS = [
   { key: 'roa', group: '獲利能力', name: '資產報酬率 ROA', unit: '%', kind: 'ratio', annualized: true, formula: '稅後淨利（年化）÷ 平均總資產' },
   { key: 'roe', group: '獲利能力', name: '權益報酬率 ROE', unit: '%', kind: 'ratio', annualized: true, formula: '稅後淨利（年化）÷ 平均股東權益（母公司）', benchmark: { op: '>=', value: 20 } },
   { key: 'pretaxToCapital', group: '獲利能力', name: '稅前純益佔實收資本比率', unit: '%', kind: 'ratio', annualized: true, formula: '稅前淨利（年化）÷（普通股股本 + 資本公積）。美國公司面額極低，此比率意義有限' },
-  { key: 'grossMargin', group: '獲利能力', name: '營業毛利率 ①', unit: '%', kind: 'ratio', formula: '毛利 ÷ 營業收入（無毛利科目時用 營業收入 − 營業成本）', benchmark: { op: '>=', value: 25 } },
+  { key: 'grossMargin', group: '獲利能力', name: '營業毛利率 ①', unit: '%', kind: 'ratio', formula: '毛利 ÷ 營業收入（無毛利科目時用 營業收入 − 營業成本；沒有營業成本科目、從費用明細估算；損益表完全沒有直接成本、只有研發／管理費用的授權型公司視為 100%）', benchmark: { op: '>=', value: 25 } },
   { key: 'opMargin', group: '獲利能力', name: '營業利益率 ②', unit: '%', kind: 'ratio', formula: '營業利益 ÷ 營業收入', benchmark: { op: '>=', value: 15 } },
   { key: 'opexRatio', group: '獲利能力', name: '營業費用率 ①−②', unit: '%', kind: 'ratio', formula: '營業毛利率 − 營業利益率，即營業費用（銷售、管理、研發）÷ 營業收入；愈低代表費用控制愈好' },
   { key: 'safetyMargin', group: '獲利能力', name: '經營安全邊際率 ②/①', unit: '%', kind: 'ratio', formula: '營業利益率 ÷ 營業毛利率，愈大愈好' },
@@ -229,16 +230,30 @@ export function ratios(g) {
   v.quickRatio = currentAssets == null ? null : pct(currentAssets - (inventory ?? 0) - (g.bal('prepaid') ?? 0), currentLiabilities);
 
   // cost of revenue: the total concept, or the base line plus its separate amortisation / depreciation lines
-  const cogsOf = (f) => f('cogsTotal') ?? (f('cogsPartial') == null ? null : f('cogsPartial') + (f('cogsAmort') ?? 0) + (f('cogsDA') ?? 0));
+  // cost of revenue: the total concept; a partial concept plus its separately
+  // listed amortisation / depreciation; the estimate from the expense lines
+  // when there is nothing else - or when it is bigger than the concept (it
+  // then is that concept plus the direct-cost lines listed beside it)
+  const cogsOf = (f) => {
+    const syn = f('cogsSynthetic');
+    const total = f('cogsTotal');
+    const partial = f('cogsPartialReal');
+    const base = total ?? partial;
+    if (syn != null && (base == null || syn > base)) return syn + (f('cogsAmort') ?? 0) + (f('cogsDA') ?? 0);
+    if (total != null) return total;
+    return partial == null ? null : partial + (f('cogsAmort') ?? 0) + (f('cogsDA') ?? 0);
+  };
   const cogsA = cogsOf(g.flowA);
 
   // revenue: banks have no revenue line - use net interest income + non-interest income
   const revenueOf = (f) => {
     const direct = f('revenue');
-    if (direct != null) return direct;
     const nii = f('netInterestIncome') ?? f('interestIncome');
-    if (nii != null) return nii + (f('noninterestIncome') ?? 0);
-    return f('bdcRevenue'); // investment companies: total investment income
+    const bank = nii == null ? null : nii + (f('noninterestIncome') ?? 0);
+    // a bank's stray "Revenues" line (one segment, one fee) must not beat net interest + non-interest income
+    if (direct != null && (bank == null || direct >= bank * 0.5)) return direct;
+    if (bank != null) return bank;
+    return direct ?? f('bdcRevenue'); // investment companies: total investment income
   };
   // operating income: the concept; else revenue − total costs and expenses;
   // else gross profit (or revenue) − total operating expenses; else pre-tax
@@ -247,10 +262,12 @@ export function ratios(g) {
     const direct = f('operatingIncome');
     if (direct != null) return direct;
     if (f('revenue') == null && f('bdcRevenue') != null && f('bdcNetInvestmentIncome') != null) return f('bdcNetInvestmentIncome');
+    // banks: interest paid on deposits is their cost of doing business, not a financing item - pre-tax income is the operating result
+    if ((f('netInterestIncome') != null || f('interestIncome') != null) && f('pretaxIncome') != null) return f('pretaxIncome');
     const rev = revenueOf(f);
     if (rev != null && f('costsAndExpenses') != null) return rev - f('costsAndExpenses');
     if (rev != null && f('opexTotal') != null) {
-      const cogs = f('cogsTotal') ?? (f('cogsPartial') == null ? null : f('cogsPartial') + (f('cogsAmort') ?? 0) + (f('cogsDA') ?? 0));
+      const cogs = cogsOf(f);
       const gross = f('grossProfit') ?? (cogs != null ? rev - cogs : null);
       return (gross ?? rev) - f('opexTotal');
     }
@@ -294,12 +311,19 @@ export function ratios(g) {
   // a cost of revenue pieced together from expense lines is an estimate: when
   // it says the gross margin is deeply negative or below the operating margin
   // it picked up the wrong lines - better no figure than a wrong one
-  const synthetic = g.flow('cogsTotal') == null && g.flow('cogsPartialReal') == null && g.flow('cogsSynthetic') != null;
-  if (synthetic && v.grossMargin != null && (v.grossMargin < -50 || (v.opMargin != null && v.grossMargin < v.opMargin - 1))) v.grossMargin = null;
+  const baseCogs = g.flow('cogsTotal') ?? (g.flow('cogsPartialReal') == null ? null : g.flow('cogsPartialReal') + (g.flow('cogsAmort') ?? 0) + (g.flow('cogsDA') ?? 0));
+  const usedEstimate = g.flow('cogsSynthetic') != null && (baseCogs == null || g.flow('cogsSynthetic') > baseCogs);
+  const bankLike = g.flow('netInterestIncome') != null || g.flow('interestIncome') != null || g.flow('bdcRevenue') != null;
+  const implausible = (gm) => gm != null && (gm < -50 || (v.opMargin != null && gm < v.opMargin - 1));
+  if (usedEstimate && (bankLike || implausible(v.grossMargin))) {
+    // the estimate picked up the wrong lines: back to the concept alone, or to nothing
+    v.grossMargin = baseCogs != null && !bankLike ? pct(revenue - baseCogs, revenue) : null;
+    if (implausible(v.grossMargin)) v.grossMargin = null;
+  }
   // no cost of revenue anywhere on the statement (licensing biotech, SPAC, franchisor: only R&D,
   // administration, depreciation): the whole revenue is gross profit. Only with a real revenue
   // line - banks and investment companies get their revenue by construction and no such figure.
-  if (v.grossMargin == null && cogs == null && g.flow('noCogs') && g.flow('revenue') > 0) v.grossMargin = 100;
+  if (v.grossMargin == null && cogs == null && g.flow('noCogs') && g.flow('revenue') > 0 && !bankLike) v.grossMargin = 100;
   v.opexRatio = v.grossMargin != null && v.opMargin != null ? v.grossMargin - v.opMargin : null;
   v.safetyMargin = pct(v.opMargin, v.grossMargin);
   v.netMargin = pct(g.flow('netIncome'), revenue);

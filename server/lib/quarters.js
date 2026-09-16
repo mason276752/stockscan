@@ -280,6 +280,10 @@ const EXT_ALIASES = {
   CostOfGoodsAndServicesSold: 'us-gaap:CostOfGoodsAndServicesSold',
   CostOfServices: 'us-gaap:CostOfServices',
   CostOfProductsSold: 'us-gaap:CostOfGoodsSold',
+  CostOfServicesExcludingDepreciationAndAmortization: 'us-gaap:CostOfServicesExcludingDepreciationDepletionAndAmortization',
+  CostOfRevenueExcludingDepreciationAndAmortization: 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization',
+  CostOfGoodsSoldExcludingDepreciationAndAmortization: 'us-gaap:CostOfGoodsSoldExcludingDepreciationDepletionAndAmortization',
+  CostOfSalesExcludingDepreciationAndAmortization: 'us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization',
   Revenues: 'us-gaap:Revenues',
   Revenue: 'us-gaap:Revenues',
   TotalRevenues: 'us-gaap:Revenues',
@@ -391,30 +395,84 @@ const COGS_HEADING = /^(us-gaap:)?(CostOfRevenue|CostOfGoodsAndServicesSold|Cost
 // lines that are recognisably the cost of delivering the revenue count -
 // voyage / vessel costs (shipping), production costs, commissions (agencies),
 // royalties, purchases, subcontracting, fuel, freight, occupancy ...
-const EXPENSES_HEADING = /(OperatingExpenses|OperatingCostsAndExpenses|Expenses|CostsAndExpenses|OperatingCosts)Abstract$/;
-const DIRECT_COST = /DirectOperating|FloorBrokerage|Clearance|Voyage|Vessel|Charter|Bunker|Fuel|PortExpense|Crew|Dry[Dd]ock|ProductionCost|Commission|Royalt|Subcontract|ContractCost|DirectCost|Purchase|Merchandise|Materials|Freight|Shipping|ProductCost|ServiceCost|Occupancy|LeaseOperating|Exploration|Transportation|Processing|Gathering|Manufacturing|CostOf(?!Revenue$|GoodsSold$|GoodsAndServicesSold$|Services$)|Program(ming)?Cost|Content|Reinsurance|Claims|PolicyholderBenefits|InterestCreditedToPolicyholders|CostOfSales/;
+const EXPENSES_HEADING = /(OperatingExpenses|OperatingCostsAndExpenses|Expenses?|CostsAndExpenses|OperatingCosts|ExpensesByNature|ExpenseByNature|CostsByNature)Abstract$/;
+const DIRECT_COST = /DirectOperating|Production|Distribution(?!Expense)|StoreOperating|Restaurant|Hotel|Casino|Property(Operating|Expenses)|RealEstateOperating|Cost(s)?OfProperty|FloorBrokerage|Clearance|Voyage|Vessel|Ship(?!ping)|Charter|Bunker|Fuel|PortExpense|Crew|Dry[Dd]ock|ProductionCost|Commission|Royalt|Subcontract|ContractCost|DirectCost|CostDirect|Purchase|Merchandise|Materials?|RawMaterial|Freight|Shipping|ProductCost|ServiceCost|Occupancy|LeaseOperating|Exploration|Transportation|Processing|Gathering|Manufacturing|CostOf(?!Revenue$|GoodsSold$|GoodsAndServicesSold$|Services$)|Program(ming)?Cost|Content|Reinsurance|Claims|PolicyholderBenefits|Policy.*Benefits|LossAdjustment|LossesAndLoss|BenefitsIncurred|InsuranceBenefits|InterestCreditedToPolicyholders|CostOfSales|PurchasedPower|MaintenanceAndOperations|ProductsAndServices|CostOfEnergy|TransactionExpense$|Instruct|Tuition|Educator|Faculty|Course/;
 const COGS_TOTALS = /^(us-gaap:)?(CostOfRevenue|CostOfGoodsSold|CostOfGoodsAndServicesSold|CostOfServices|CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:(CostOfSales|OperatingExpense)$/;
 const NOT_COGS = /GeneralAndAdministrative|Pension|PostretirementBenefit|DefinedBenefit|SellingAndMarketing|SellingExpense|ResearchAndDevelopment|Depreciation|Amortization|Impairment|Restructuring|MarketingExpense$|AdvertisingExpense|IncomeTax|InterestExpense|ShareBasedCompensation|GainLoss|OtherOperating|OtherCostAndExpense/;
-export function costOfRevenueFromHeading(stmt, colId) {
-  if (!stmt || !colId) return null;
-  const items = stmt.lineItems;
-  const samePeriod = rollupColumns(stmt, colId);
-  const val = (li) => lineValue(li, colId, samePeriod);
-  const hasTotal = items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:OperatingExpense$/.test(li.concept) && typeof val(li) === 'number');
-  if (hasTotal) return null;
+// Lines of an income statement that make up the "costs" section, and whether
+// only whitelisted (recognisably direct) lines count:
+//   1. under a cost-of-revenue heading: every line but overhead
+//   2. under a generic expenses heading (or IFRS "expenses by nature"): whitelist
+//   3. a heading whose lines sit at its own depth (flat presentation): the
+//      lines after it up to the operating result
+//   4. no headings at all: the lines after the revenue up to the operating result
+// The section always stops at the first result line (operating income,
+// pre-tax income, net income) so those never get summed as costs.
+const REVENUE_LINE = /Revenue|^(us-gaap:)?(Sales|NetSales)|RevenueFromContract|GrossInvestmentIncome|InterestAndDividendIncomeOperating/;
+const RESULT_LINE = /OperatingIncomeLoss|IncomeLossFromContinuingOperationsBefore|ProfitLossBeforeTax|ProfitLossFromOperatingActivities|IncomeLossBeforeIncomeTaxes|OperatingIncome$|NetIncomeLoss$|ProfitLoss$|IncomeLossFromContinuingOperations$/;
+function expenseSection(items) {
+  const isResult = (li) => !li.abstract && RESULT_LINE.test(li.concept.split(':').pop());
   let h = items.findIndex((li) => li.abstract && COGS_HEADING.test(li.concept));
-  // under a cost-of-revenue heading everything but overhead is direct cost;
-  // under a generic expenses heading only whitelisted lines are
   let whitelist = false;
   if (h < 0) {
     h = items.findIndex((li) => li.abstract && EXPENSES_HEADING.test(li.concept));
     whitelist = true;
   }
-  if (h < 0) return null;
-  let end = h + 1;
-  while (end < items.length && items[end].depth > items[h].depth) end++;
+  let end;
+  if (h >= 0) {
+    end = h + 1;
+    while (end < items.length && items[end].depth > items[h].depth && !isResult(items[end])) end++;
+    if (end === h + 1) {
+      // nothing nested: the heading's siblings up to the next heading / result line
+      while (end < items.length && !items[end].abstract && !isResult(items[end])) end++;
+    }
+  } else {
+    let start = -1;
+    for (let i = 0; i < items.length; i++) if (!items[i].abstract && REVENUE_LINE.test(items[i].concept.split(':').pop())) start = i;
+    if (start < 0) return null;
+    h = start;
+    end = h + 1;
+    while (end < items.length && !isResult(items[end])) end++;
+    whitelist = true;
+  }
+  return end > h + 1 ? { h, end, whitelist } : null;
+}
+// the name to classify a line by: "CostOfServicesExcludingDepreciationAndAmortization" is a cost line, not D&A
+const classifyName = (concept) => concept.split(':').pop().replace(/(Excluding|Net|Before)[A-Z].*$/, '');
+const OVERHEAD_EXACT = /^(SellingGeneralAndAdministrativeExpense|GeneralAndAdministrativeExpense|ResearchAndDevelopmentExpense|ProfessionalFees|LegalFees|StockOrUnitOptionPlanExpense|AllocatedShareBasedCompensationExpense|OperatingLeaseExpense|OtherGeneralExpense|OtherExpenses|LaborAndRelatedExpense|SalariesAndWages|EmployeeBenefitsAndShareBasedCompensation|OfficersCompensation|ProvisionForDoubtfulAccounts|BusinessCombinationAcquisitionRelatedCosts|MarketingAndAdvertisingExpense|TravelAndEntertainmentExpense|OtherSellingGeneralAndAdministrativeExpense|Franchise.*Tax|FranchisorCosts|MarketingFundExpenses|OccupancyNet|OtherSellingAndMarketingExpense|Communications?|CommunicationsAndInformationTechnology|RegulatoryFeesAndAssessments|BusinessDevelopment|InvestorRelations|DirectorsRemunerationExpense|AccountingAndAuditFees|AuditFees|ShareBasedCompensation|CompensationExpense|EmployeeBenefitsExpense|WagesAndSalaries|SalariesWagesAndOfficersCompensation|ExplorationAndEvaluationCosts|FormationAndOperationalCosts|AdministrativeFeesExpense|AdministrativeExpense|SellingAndDistributionExpense|OtherExpenseByFunction|OtherExpenseByNature|PatentDevelopmentCosts|LitigationSettlementExpense)$/;
+const NOISE = /FairValue|ContingentConsideration|Warrant|Remeasurement|Litigation|Settlement|LossContingency|^Interest(Income|Expense|AndDebt|AndDividend)|EquityMethod|GainLoss|Derivative/;
+
+export function costOfRevenueFromHeading(stmt, colId) {
+  if (!stmt || !colId) return null;
+  const items = stmt.lineItems;
+  const samePeriod = rollupColumns(stmt, colId);
+  const val = (li) => lineValue(li, colId, samePeriod);
+  const isCogsLine = (li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:OperatingExpense$/.test(li.concept) && typeof val(li) === 'number';
+  // a real cost-of-revenue total: nothing to estimate
+  if (items.some((li) => isCogsLine(li) && /^(us-gaap:)?(CostOfRevenue|CostOfGoodsSold)$|^ifrs-full:CostOfSales$/.test(li.concept))) return null;
+  const sec = expenseSection(items);
+  if (!sec) return null;
+  const { h, end } = sec;
   const values = items.map((li, i) => (i > h && i < end && !li.abstract ? val(li) : undefined));
   const numeric = (i) => typeof values[i] === 'number';
+  // a partial cost line (CostOfGoodsAndServicesSold covering only part of the
+  // business - McDonald's franchised-restaurant costs) plus the other
+  // recognisably direct lines next to it (company-operated restaurant
+  // expenses); nothing extra found -> the partial line stands on its own
+  const partialIdx = items.findIndex((li, i) => i > h && i < end && isCogsLine(li));
+  if (partialIdx >= 0) {
+    let sum = values[partialIdx];
+    let n = 0;
+    for (let i = h + 1; i < end; i++) {
+      if (i === partialIdx || !numeric(i)) continue;
+      const name = classifyName(items[i].concept);
+      if (COGS_TOTALS.test(items[i].concept) || NOT_COGS.test(name) || NOISE.test(name) || !DIRECT_COST.test(name)) continue;
+      sum += values[i];
+      n++;
+    }
+    return n ? sum : null;
+  }
+  const { whitelist } = sec;
   // pass 1: the recognisable direct-cost lines; pass 2 (only when pass 1
   // found none): an itemised "Operating expenses" line - an oil producer's
   // lease operating costs, listed first and followed by DD&A, G&A and a
@@ -427,16 +485,17 @@ export function costOfRevenueFromHeading(stmt, colId) {
       if (!numeric(i)) continue;
       const li = items[i];
       const v = values[i];
+      const name = classifyName(li.concept);
       let followers = 0;
       for (let j = i + 1; j < end; j++) if (numeric(j)) followers++;
-      // a named total is one only when nothing follows it under the heading
+      // a named total is one only when nothing follows it in the section
       const namedTotal = COGS_TOTALS.test(li.concept) && followers === 0;
       const isTotal = namedTotal || (running > 0 && Math.abs(v - running) <= Math.abs(running) * 0.005);
       if (isTotal) continue;
       running += v;
-      if (NOT_COGS.test(li.concept)) continue;
-      const opexItem = /^(us-gaap:)?OperatingExpenses$/.test(li.concept);
-      if (whitelist && pass === 1 && (opexItem || !DIRECT_COST.test(li.concept.split(':').pop()))) continue;
+      if (NOT_COGS.test(name) || NOISE.test(name)) continue;
+      const opexItem = /^(us-gaap:)?(OperatingExpenses|OperatingCostsAndExpenses)$/.test(li.concept);
+      if (whitelist && pass === 1 && (opexItem || !DIRECT_COST.test(name))) continue;
       if (whitelist && pass === 2 && !opexItem) continue;
       if (!whitelist && opexItem) continue;
       sum += v;
@@ -459,17 +518,19 @@ export function noCostOfRevenue(stmt, colId) {
   const samePeriod = rollupColumns(stmt, colId);
   const val = (li) => lineValue(li, colId, samePeriod);
   if (items.some((li) => !li.abstract && COGS_TOTALS.test(li.concept) && !/^(us-gaap:)?(CostsAndExpenses|OperatingCostsAndExpenses|OperatingExpenses|BenefitsLossesAndExpenses)$|^ifrs-full:OperatingExpense$/.test(li.concept) && typeof val(li) === 'number')) return false;
-  const h = items.findIndex((li) => li.abstract && (COGS_HEADING.test(li.concept) || EXPENSES_HEADING.test(li.concept)));
-  if (h < 0) return false;
+  const sec = expenseSection(items);
+  if (!sec) return false;
   let lines = 0;
-  for (let i = h + 1; i < items.length && items[i].depth > items[h].depth; i++) {
+  for (let i = sec.h + 1; i < sec.end; i++) {
     const li = items[i];
     if (li.abstract || typeof val(li) !== 'number') continue;
     if (COGS_TOTALS.test(li.concept)) continue;
     lines++;
-    const local = li.concept.split(':').pop();
+    const name = classifyName(li.concept);
+    if (NOISE.test(name)) continue; // non-operating noise inside the section
+    if (DIRECT_COST.test(name)) return false;
     // anything that is not recognisably overhead could be a direct cost: then we do not know
-    if (!NOT_COGS.test(li.concept) && !/^(SellingGeneralAndAdministrativeExpense|GeneralAndAdministrativeExpense|ResearchAndDevelopmentExpense|ProfessionalFees|LegalFees|StockOrUnitOptionPlanExpense|AllocatedShareBasedCompensationExpense|OperatingLeaseExpense|OtherGeneralExpense|OtherExpenses|LaborAndRelatedExpense|SalariesAndWages|EmployeeBenefitsAndShareBasedCompensation|OfficersCompensation|ProvisionForDoubtfulAccounts|BusinessCombinationAcquisitionRelatedCosts|MarketingAndAdvertisingExpense|TravelAndEntertainmentExpense|OtherSellingGeneralAndAdministrativeExpense|Franchise.*Tax|FranchisorCosts|MarketingFundExpenses|OccupancyNet)$/.test(local)) return false;
+    if (!NOT_COGS.test(name) && !OVERHEAD_EXACT.test(name)) return false;
   }
   return lines > 0;
 }

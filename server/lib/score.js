@@ -21,7 +21,7 @@ import { balancesAt, costOfRevenueFromHeading, factsAt, months, noCostOfRevenue,
 import { store } from './store.js';
 import { reclassify } from './statements.js';
 
-export const SCORE_VERSION = 14;
+export const SCORE_VERSION = 15;
 
 const CATEGORY_OF = { debtRatio: '財務結構', ltCapToPpe: '財務結構', currentRatio: '償債能力', quickRatio: '償債能力', dso: '經營能力', dio: '經營能力', cycle: '經營能力', assetTurnover: '經營能力', grossMargin: '獲利能力', opMargin: '獲利能力', netMargin: '獲利能力', eps: '獲利能力', roe: '獲利能力', cfRatio: '現金流量', cfAdequacy: '現金流量', cfReinvest: '現金流量', cashPct: '現金流量' };
 export const CATEGORIES = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
