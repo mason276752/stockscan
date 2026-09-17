@@ -84,6 +84,18 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm --prefix web ci
 
+      # the small SQLite cache (market snapshot, crawl bookkeeping …) survives
+      # between runs so only what its TTLs say is stale gets fetched again.
+      # What the build needs from SEC beyond that (ETF list, CUSIP table,
+      # N-PORT filings) lives as files in the store itself (data/store/kv,
+      # see store.js DURABLE_KV) and so comes with the data ref.
+      - name: Restore the cache database
+        uses: actions/cache@v4
+        with:
+          path: data/cache.sqlite*
+          key: cache-sqlite-${{ github.run_id }}
+          restore-keys: cache-sqlite-
+
       # scheduled / manual runs: top the store up with the newest filings
       - name: Fetch new filings from EDGAR
         if: github.event_name != 'push'

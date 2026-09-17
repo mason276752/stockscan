@@ -56,6 +56,15 @@ const unpackLegacy = (col) => JSON.parse(col instanceof Uint8Array ? zlib.gunzip
 
 let root = null; // data/store
 let cache = null; // the kv SQLite
+
+// kv keys that also live as files in the store (see getKV): what the
+// static build needs from the network and would otherwise fetch again on
+// every CI run - the ETF list, the CUSIP table, each ETF's N-PORT filing
+// list and the parsed N-PORT documents (a filed document never changes)
+const DURABLE_KV = ['etfs', 'cusips', 'nport:', 'nport-list:'];
+const durableKV = (key) => DURABLE_KV.some((p) => (p.endsWith(':') ? key.startsWith(p) : key === p));
+// 'nport:0000036405-26-000480' -> 'kv/nport/0000036405-26-000480.json'
+const durableFile = (key) => `kv/${key.replace(/[^A-Za-z0-9:_.-]/g, '_').replace(/:/g, '/')}.json`;
 const filings = new Map(); // accession -> { cik, form, reportDate, version, file, bytes }
 const scores = new Map(); // accession -> { cik, reportDate, version, file }
 let docs = {}; // concept -> SEC documentation (standard concepts)
@@ -422,17 +431,30 @@ export const store = {
     }
   },
 
-  // kv entries come back with their age so callers can apply their own TTL
+  // kv entries come back with their age so callers can apply their own TTL.
+  // Durable keys (DURABLE_KV) are mirrored as data/store/kv/<key>.json with
+  // the write time inside, so they travel with the store (the data ref, a
+  // fresh CI runner) and the TTL still works after a git checkout; the
+  // SQLite row is only a faster copy of the file.
   getKV(key) {
     const row = cache.prepare('SELECT json, updated_at FROM kv WHERE key = ?').get(key);
-    if (!row) return null;
-    const value = kvUnpack(row.json);
-    // a row written as plain text (first migration pass): re-pack it on the way out
-    if (typeof row.json === 'string') cache.prepare('UPDATE kv SET json = ? WHERE key = ?').run(kvPack(value), key);
-    return { value, ageMs: Date.now() - row.updated_at };
+    if (row) {
+      const value = kvUnpack(row.json);
+      // a row written as plain text (first migration pass): re-pack it on the way out
+      if (typeof row.json === 'string') cache.prepare('UPDATE kv SET json = ? WHERE key = ?').run(kvPack(value), key);
+      return { value, ageMs: Date.now() - row.updated_at };
+    }
+    if (!durableKV(key)) return null;
+    const doc = this.getDoc(durableFile(key))?.value;
+    if (!doc || typeof doc !== 'object' || !('value' in doc)) return null;
+    const at = Date.parse(doc.updatedAt || '') || 0;
+    cache.prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, kvPack(doc.value), at);
+    return { value: doc.value, ageMs: Date.now() - at };
   },
   putKV(key, value) {
-    cache.prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, kvPack(value), Date.now());
+    const now = Date.now();
+    cache.prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, kvPack(value), now);
+    if (durableKV(key)) this.putDoc(durableFile(key), { key, updatedAt: new Date(now).toISOString(), value });
   },
   kvKeys(prefix) {
     return cache.prepare('SELECT key FROM kv WHERE substr(key, 1, ?) = ?').all(prefix.length, prefix).map((r) => r.key);

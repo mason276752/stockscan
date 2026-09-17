@@ -192,9 +192,18 @@ let building = null;
 
 // Cached universe: memory -> SQLite (refreshed in the background when older
 // than a week) -> built from SEC on first use.
+// the saved universe with its age from the updatedAt inside (a git checkout
+// resets file mtimes, so the file's own time is what counts)
+function savedUniverse() {
+  const saved = store.getDoc('universe.json');
+  if (!saved) return null;
+  const at = Date.parse(saved.value?.updatedAt || '');
+  return { value: saved.value, ageMs: Number.isFinite(at) ? Date.now() - at : saved.ageMs };
+}
+
 export async function getUniverse(client, { priority = 'high' } = {}) {
   if (memo) return memo;
-  const saved = store.getDoc('universe.json');
+  const saved = savedUniverse();
   if (saved) {
     memo = saved.value;
     if (saved.ageMs > UNIVERSE_TTL) refreshUniverse(client, 'low').catch((e) => console.warn(`universe refresh failed: ${e.message}`));
@@ -230,6 +239,6 @@ export function lookupFiler(cik) {
 }
 
 export function universeStale() {
-  const saved = store.getDoc('universe.json');
+  const saved = savedUniverse();
   return !saved || saved.ageMs > UNIVERSE_TTL;
 }
