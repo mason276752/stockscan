@@ -12,16 +12,33 @@ const SUBMISSIONS = 'https://data.sec.gov/submissions/';
 const TICKERS_TTL = 24 * 3600 * 1000;
 const SUBMISSIONS_TTL = 10 * 60 * 1000; // filing lists refresh every 10 minutes
 
-// Ticker table: served from SQLite, refreshed from SEC in the background at
-// startup (and daily) so the first search after a restart is instant.
+// Ticker table: served from the cache (SQLite) or, without one, the copy in
+// the store (data/store/tickers.json, in git - so a fresh clone or a CI runner
+// without a cache and without SEC can still resolve tickers); refreshed from
+// SEC in the background at startup (and daily) so the first search after a
+// restart is instant.
 let tickersMemo = null;
+const TICKERS_DOC = 'tickers.json';
 
 export async function refreshTickers(client) {
   const data = await client.json(TICKERS_URL);
   const rows = Object.values(data).map((r) => ({ cik: Number(r.cik_str), ticker: r.ticker, name: r.title }));
   store.putKV('tickers', rows);
+  store.putDoc(TICKERS_DOC, { updatedAt: new Date().toISOString(), tickers: rows });
   tickersMemo = rows;
   return rows;
+}
+
+// The saved table without going to SEC: the cache first, else the store's
+// copy (its age from the updatedAt inside - a git checkout resets mtimes).
+export function savedTickers() {
+  const kv = store.getKV('tickers');
+  if (kv) return kv;
+  const doc = store.getDoc(TICKERS_DOC)?.value;
+  const rows = Array.isArray(doc?.tickers) ? doc.tickers : null;
+  if (!rows?.length) return null;
+  const at = Date.parse(doc.updatedAt || '') || 0;
+  return { value: rows, ageMs: Date.now() - at };
 }
 
 // Delisted filers (no ticker on EDGAR any more) are nothing the user can buy:
@@ -38,7 +55,7 @@ export function purgeDelisted(rows) {
 // Listing status of a ticker from the saved table (no network): listed, or
 // delisted, or renamed when the same company now trades under another ticker.
 export function listingOf(ticker, cik = null) {
-  const rows = tickersMemo || store.getKV('tickers')?.value;
+  const rows = tickersMemo || savedTickers()?.value;
   if (!rows) return null; // not known yet
   if (!tickersMemo) tickersMemo = rows;
   const wanted = String(ticker).toUpperCase().replace(/\./g, '-');
@@ -49,7 +66,7 @@ export function listingOf(ticker, cik = null) {
 
 export async function tickerTable(client) {
   if (tickersMemo) return tickersMemo;
-  const saved = store.getKV('tickers');
+  const saved = savedTickers();
   if (saved) {
     tickersMemo = saved.value;
     if (saved.ageMs > TICKERS_TTL) refreshTickers(client).catch(() => {});

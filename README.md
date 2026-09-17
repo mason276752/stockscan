@@ -11,7 +11,7 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
   解析結果存在本機 `data/store/`（一份財報一個 brotli 壓縮的 JSON 小檔，可以直接 commit 進 git，見「資料存放」），重啟不用重抓。
 - 一份申報的 Inline XBRL 可能拆成多個檔（10-K 的財報放在 `xxx_d2.htm`），依 FilingSummary.xml 的 InputFiles 全部解析後合併；
   同一個命名空間宣告兩個前綴（`xmlns:i` 與 `xmlns:xbrli`）或 linkbase 同時有預設命名空間與前綴的申報也能解析。存檔裡報表沒有任何欄位的會在讀取時重新解析。
-- 公司代號表存在本機快取（`data/cache.sqlite`），申報清單存在 `data/store/companies/`；啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
+- 公司代號表存在本機快取（`data/cache.sqlite`）並留一份在 `data/store/tickers.json`（進 git，沒有快取時用），申報清單存在 `data/store/companies/`；啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
 - 閒置時背景預抓：看某一份申報時，會在沒有使用者請求 3 秒後，悄悄下載前後一期、去年/明年同一季、以及同年度其他申報
   （讓 Q4 推算即時）。預抓請求一律讓路給使用者操作。`GET /api/status` 可看存檔數與預抓佇列。
 - 啟動後背景爬蟲：把每家有股票代號的公司（約 6,300 家，公眾流通市值大的先）最近 5 期 10-K / 10-Q / 20-F 存到本機
@@ -62,8 +62,8 @@ npm run build:static        # -> web/dist-static/（約 210 MB：網頁 + data/s
 ```
 
 **GitHub Actions 自動部署**（[.github/workflows/pages.yml](.github/workflows/pages.yml)）：push 到 `main` 就 build 並發佈到 GitHub Pages。要先做兩件事：
-repo 的 Settings → Pages → Source 選 **GitHub Actions**；Settings → Secrets → 新增 `SEC_USER_AGENT`（`名字 email`）。
-Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報與申報清單直接用 repo 裡的 `data/store`。
+repo 的 Settings → Pages → Source 選 **GitHub Actions**；`SEC_USER_AGENT`（`名字 email`）用 Settings → Secrets 的同名 secret，沒設就用 workflow 檔裡寫的預設值。
+Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報、申報清單、以及 SEC 抓不到時的代號表與產業宇宙，直接用 repo 裡的 `data/store`。代號表或產業宇宙完全拿不到時 build 會失敗（exit 1），不會把搜尋不到東西的網站部署出去。
 除了 push，也**定時**在財報最常出現的時段跑（美東 08:30、17:45、19:45、22:30，週一到週五）：先 `npm run fetch:new` 從 EDGAR 每日索引把最近幾天新的 10-K / 10-Q 抓下來、解析、評分，
 commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workflow），再用新資料重建網站。`fetch:new` 在本機也能跑，等於爬蟲「監看新申報」那一步跑一次就結束。
 
@@ -81,6 +81,7 @@ commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workf
 data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.zst  一份財報一檔（zstd JSON，約 10 KB）
 data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.zst           一份財報一個評分（約 0.5 KB）
 data/store/documentation.json                                             標準科目的 SEC 定義，全站一份（不再每份財報重複存）
+data/store/tickers.json                                                   EDGAR 代號表的副本（快取沒有時用：新 clone、CI runner）
 data/store/companies/<CIK 10 碼>.json                                      每家公司的 EDGAR 申報清單（裁剪過的 submissions）：財報頁左側清單、爬蟲比對用
 data/bars/<來源>/<SYMBOL>/<年>.zst                                        自製 ETF 的日線，一個代號一年一檔（欄式 zstd，約 2.5 KB）；過去的年份寫完就不再動
 data/bars/<來源>/<SYMBOL>/meta.json                                       代號、來源、幣別、抓取時間、分割調整（adjust）

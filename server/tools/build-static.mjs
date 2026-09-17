@@ -67,10 +67,10 @@ try {
 } catch (err) {
   console.warn(`build-static: ${err.message} - using cached data only`);
 }
-const { tickerTable } = await import('../lib/edgar.js');
+const { tickerTable, savedTickers } = await import('../lib/edgar.js');
 const { getUniverse } = await import('../lib/universe.js');
 const { marketSnapshot } = await import('../lib/market.js');
-let tickers = store.getKV('tickers')?.value || [];
+let tickers = savedTickers()?.value || []; // the cache, else data/store/tickers.json (in git)
 let universe = store.getDoc('universe.json')?.value || { updatedAt: null, datasets: [], companies: [] };
 let market = store.getKV('market:snapshot')?.value || null;
 if (client) {
@@ -89,8 +89,12 @@ try {
 } catch (err) {
   console.warn(`build-static: market snapshot: ${err.message}`);
 }
-if (!tickers.length) console.warn('build-static: WARNING no ticker table - search will not work (set SEC_USER_AGENT)');
-if (!universe.companies.length) console.warn('build-static: WARNING no universe - browse / screener will be empty (set SEC_USER_AGENT)');
+// without these the site is broken (no search, no filing by ticker, empty
+// browse / screener): fail the build rather than publish it over a good one
+if (!tickers.length || !universe.companies.length) {
+  console.error(`build-static: ERROR ${!tickers.length ? 'no ticker table' : 'no universe'} - neither cached (data/cache.sqlite), in the store (data/store/${!tickers.length ? 'tickers' : 'universe'}.json) nor fetched from SEC (set SEC_USER_AGENT)`);
+  process.exit(1);
+}
 const byCik = new Map(universe.companies.map((c) => [c.cik, c]));
 const tickersByCik = new Map();
 for (const t of tickers) (tickersByCik.get(t.cik) || tickersByCik.set(t.cik, []).get(t.cik)).push(t.ticker);

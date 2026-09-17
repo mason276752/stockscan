@@ -5,10 +5,11 @@
 #     main, then the site is rebuilt with them (a push made by the workflow's
 #     own token does not trigger the workflow again, so no loop)
 #   - by hand (Actions → Run workflow)
-# Needs: Settings → Pages → Source = "GitHub Actions", and a repository secret
-# SEC_USER_AGENT ("Name email") - the build fetches the ticker table, the
-# SIC / filer universe and ETF lists from SEC; the market snapshot comes from
-# TradingView.
+# Needs: Settings → Pages → Source = "GitHub Actions". SEC_USER_AGENT ("Name
+# email") comes from the repository secret of that name, else the default
+# below - the build fetches the ticker table, the SIC / filer universe and ETF
+# lists from SEC (falling back to the copies in data/store); the market
+# snapshot comes from TradingView.
 name: Deploy static site to GitHub Pages
 
 on:
@@ -53,7 +54,7 @@ jobs:
         if: github.event_name != 'push'
         run: npm run fetch:new
         env:
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT || 'Mason mason276752@gmail.com' }}
           IB_ENABLED: '0'
           TV_ENABLED: '0'
       - name: Commit new filings
@@ -73,7 +74,7 @@ jobs:
       - name: Build the static site
         run: npm run build:static
         env:
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT || 'Mason mason276752@gmail.com' }}
           STOCKSCAN_CRAWL: '0'
           IB_ENABLED: '0'
           TV_ENABLED: '0'
