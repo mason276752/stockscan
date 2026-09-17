@@ -83,14 +83,3 @@ export async function history(ticker) {
   store.putKV(key, value);
   return value;
 }
-
-// Close on or before a date (null when the history does not reach it).
-export function closeOn(hist, date) {
-  if (!hist || !date) return null;
-  let best = null;
-  for (const d of hist.days) {
-    if (d.date > date) break;
-    best = d;
-  }
-  return best;
-}

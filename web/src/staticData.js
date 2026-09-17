@@ -1,98 +1,169 @@
-// Static-build data access: the prebuilt indexes (index/*.json) and the
-// saved filings / scores (data/store/**/*.json.zst, zstd with the same
-// dictionaries the server writes with), all fetched as plain files. Runs in
-// the data-layer worker (api.static.worker.js), so the inflating and parsing
-// here never block the page; the parsed indexes stay there.
+// Static-build data access: the prebuilt indexes (index/*.json.zst, named by
+// their content - meta.json says which file each index is in this build)
+// and the saved filings / scores (data/store/**/*.json.zst, zstd with the
+// same dictionaries the server writes with), all fetched as plain files.
+// Runs in the data-layer worker (api.static.worker.js), so the inflating and
+// parsing here never block the page; the parsed indexes stay there. A big
+// download is read in chunks and its progress reported (setProgress) so the
+// page can show how far along it is.
 import { init, createDCtx, decompress, decompressUsingDict } from '@bokuweb/zstd-wasm';
 // a relative path: the package's "exports" map does not expose the wasm file
 import wasmUrl from '../node_modules/@bokuweb/zstd-wasm/dist/web/zstd.wasm?url';
 import { url } from './base';
 
-const cache = new Map(); // path -> Promise of parsed JSON
+const utf8 = new TextDecoder();
 
-// The indexes change with every build: fetched with ?v=<build time> so the
-// browser's HTTP cache can keep them until the next build (meta.json itself
-// is always revalidated). All but meta.json are zstd'd (<name>.json.zst):
-// a quarter to a tenth of the bytes, 40 ms to inflate the biggest.
-let build = null;
-export function json(path) {
-  if (!cache.has(path)) {
-    cache.set(
-      path,
-      (async () => {
-        if (path !== '/index/meta.json') build ??= meta().then((m) => m.builtAt || '');
-        const v = path === '/index/meta.json' ? '' : await build;
-        const [res] = await Promise.all([v ? fetchVersioned(path, v) : fetch(url(path), { cache: 'no-cache' }), path.endsWith('.zst') ? zstd() : null]);
-        if (!res.ok) throw new Error(`${path}: ${res.status} ${res.statusText}`);
-        if (!path.endsWith('.zst')) return res.json();
-        const buf = new Uint8Array(await res.arrayBuffer());
-        return JSON.parse(utf8.decode(decompress(buf, { defaultHeapSize: 64 * 1024 * 1024 })));
-      })(),
-    );
-    cache.get(path).catch(() => cache.delete(path));
-  }
-  return cache.get(path);
-}
-
-// an index file of this build: Cache Storage keyed by the build, the copies
-// of earlier builds dropped
-async function fetchVersioned(path, v) {
-  const req = `${url(path)}?v=${encodeURIComponent(v)}`;
-  let c = null;
-  try {
-    c = 'caches' in globalThis ? await caches.open(STORE_CACHE) : null;
-    const hit = c && (await c.match(req));
-    if (hit) return hit;
-    if (c) for (const k of await c.keys()) if (k.url.startsWith(`${url(path)}?v=`) && k.url !== req) await c.delete(k);
-  } catch {
-    c = null;
-  }
-  const res = await fetch(req);
-  if (res.ok && c) {
-    try {
-      await c.put(req, res.clone());
-    } catch {
-      /* quota: fine */
-    }
-  }
-  return res;
-}
-
-// A saved filing / score never changes (its name carries the parser
-// version), so once fetched it is kept in the browser's Cache Storage and
-// never downloaded again; the same for the dictionaries.
+// ---- fetching ----
+// Everything but meta.json and this year's bars is immutable (a filing never
+// changes, an index or a finished year of bars is named by its content), so
+// once fetched it is kept in the browser's Cache Storage and never
+// downloaded again. Index files of earlier builds are dropped from it when
+// the current build's meta.json arrives.
 const STORE_CACHE = 'stockscan-store-v1';
+const PROGRESS_MIN = 32 * 1024; // report the progress of downloads from this size
+let onProgress = null; // (path, loaded, total, done) => void
+export function setProgress(fn) {
+  onProgress = fn;
+}
+
+const failed = (path, res) => Object.assign(new Error(`${path}: ${res.status} ${res.statusText}`), { status: res.status });
+
+// the bytes of a response, read in chunks so their arrival can be reported
+async function bytes(path, res) {
+  const total = Number(res.headers.get('content-length')) || 0;
+  if (!res.body || !onProgress || total < PROGRESS_MIN) return new Uint8Array(await res.arrayBuffer());
+  const chunks = [];
+  let loaded = 0;
+  onProgress(path, 0, total, false);
+  try {
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      onProgress(path, Math.min(loaded, total), total, false);
+    }
+  } finally {
+    onProgress(path, total, total, true);
+  }
+  const out = new Uint8Array(loaded);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
+}
+
+async function openCache() {
+  try {
+    return 'caches' in globalThis ? await caches.open(STORE_CACHE) : null;
+  } catch {
+    return null; // no Cache Storage (insecure origin, private mode …): plain fetches
+  }
+}
+
+// an immutable file: from Cache Storage, else fetched and put there
 async function fetchImmutable(path) {
   const req = url(path);
-  let c = null;
+  const c = await openCache();
   try {
-    c = 'caches' in globalThis ? await caches.open(STORE_CACHE) : null;
     const hit = c && (await c.match(req));
-    if (hit) return hit;
+    if (hit) return new Uint8Array(await hit.arrayBuffer());
   } catch {
-    c = null; // no Cache Storage (insecure origin, private mode …): plain fetch
+    /* a broken entry: fetch */
   }
   const res = await fetch(req);
-  if (res.ok && c) {
+  if (!res.ok) throw failed(path, res);
+  const type = res.headers.get('content-type') || 'application/octet-stream';
+  const buf = await bytes(path, res);
+  if (c) {
     try {
-      await c.put(req, res.clone());
+      await c.put(req, new Response(buf, { headers: { 'content-type': type } }));
     } catch {
       /* quota / storage error: fine, it is only a cache */
     }
   }
-  return res;
+  return buf;
 }
 
-// the indexes the build writes
-export const meta = () => json('/index/meta.json');
-export const tickers = () => json('/index/tickers.json.zst');
-export const companies = () => json('/index/companies.json.zst');
-export const scoresMin = () => json('/index/scores-min.json.zst');
-export const screenRowsIndex = () => json('/index/screen.json.zst');
-export const universe = () => json('/index/universe.json.zst');
-export const etfs = () => json('/index/etfs.json.zst');
-export const tvSymbols = () => json('/index/tvsymbols.json.zst');
-export const documentation = () => json('/index/documentation.json.zst');
+// a file that changes with the build (this year's bars): Cache Storage keyed
+// by the build (?v=<build time>), the copies of earlier builds dropped
+async function fetchVersioned(path, v) {
+  const req = `${url(path)}?v=${encodeURIComponent(v)}`;
+  const c = await openCache();
+  try {
+    const hit = c && (await c.match(req));
+    if (hit) return new Uint8Array(await hit.arrayBuffer());
+    if (c) for (const k of await c.keys()) if (k.url.startsWith(`${url(path)}?v=`) && k.url !== req) await c.delete(k);
+  } catch {
+    /* fetch */
+  }
+  const res = await fetch(req);
+  if (!res.ok) throw failed(path, res);
+  const type = res.headers.get('content-type') || 'application/octet-stream';
+  const buf = await bytes(path, res);
+  if (c) {
+    try {
+      await c.put(req, new Response(buf, { headers: { 'content-type': type } }));
+    } catch {
+      /* quota: fine */
+    }
+  }
+  return buf;
+}
+
+// index files not of this build (earlier hashes, the ?v= names of old app versions)
+async function pruneIndexes(files) {
+  const c = await openCache();
+  if (!c) return;
+  const keep = new Set(Object.values(files || {}).map((f) => url(`/index/${f}`)));
+  for (const k of await c.keys()) {
+    const p = new URL(k.url).pathname;
+    if (p.includes('/index/') && !keep.has(p)) await c.delete(k);
+  }
+}
+
+// ---- parsed JSON, once per file ----
+const parsed = new Map(); // key -> Promise of the parsed JSON
+function once(key, load) {
+  if (!parsed.has(key)) {
+    parsed.set(key, load());
+    parsed.get(key).catch(() => parsed.delete(key));
+  }
+  return parsed.get(key);
+}
+
+// meta.json: the first fetch, always revalidated, names this build's index files
+export const meta = () =>
+  once('meta', async () => {
+    const path = '/index/meta.json';
+    const res = await fetch(url(path), { cache: 'no-cache' });
+    if (!res.ok) throw failed(path, res);
+    const m = JSON.parse(utf8.decode(await bytes(path, res)));
+    pruneIndexes(m.files).catch(() => {});
+    return m;
+  });
+
+// the indexes the build writes (name -> the parsed JSON of this build's file)
+const index = (name) =>
+  once(`index:${name}`, async () => {
+    const [m] = await Promise.all([meta(), zstd()]);
+    const file = m.files?.[name];
+    if (!file) throw new Error(`index ${name}: not in this build`);
+    const buf = await fetchImmutable(`/index/${file}`);
+    return JSON.parse(utf8.decode(decompress(buf, { defaultHeapSize: 64 * 1024 * 1024 })));
+  });
+export const tickers = () => index('tickers');
+export const companies = () => index('companies');
+export const scoresMin = () => index('scores-min');
+export const screenIndex = () => index('screen');
+export const screenHistoryIndex = () => index('screen-history');
+export const universe = () => index('universe');
+export const etfs = () => index('etfs');
+export const tvSymbols = () => index('tvsymbols');
+export const documentation = () => index('documentation');
 
 // ---- zstd with dictionary ----
 let ready = null;
@@ -102,47 +173,30 @@ function zstd() {
     ready = Promise.all([
       init(wasmUrl),
       ...['filings', 'scores'].map((kind) =>
-        fetchImmutable(`/data/zdict/${kind}-v1.zdict`)
-          .then((r) => r.arrayBuffer())
-          .then((b) => (dicts[kind] = new Uint8Array(b))),
+        fetchImmutable(`/data/zdict/${kind}-v1.zdict`).then((b) => {
+          dicts[kind] = b;
+        }),
       ),
     ]);
   }
   return ready;
 }
-const utf8 = new TextDecoder();
-const files = new Map(); // path -> Promise of decoded JSON (a filing never changes)
 
 // a saved filing / score file -> the JSON the server would have read
-export function readZst(kind, path) {
-  if (!files.has(path)) {
-    files.set(
-      path,
-      (async () => {
-        const [res] = await Promise.all([fetchImmutable(path), zstd()]);
-        if (!res.ok) throw new Error(`${path}: ${res.status} ${res.statusText}`);
-        const buf = new Uint8Array(await res.arrayBuffer());
-        return JSON.parse(utf8.decode(decompressUsingDict(createDCtx(), buf, dicts[kind], { defaultHeapSize: 8 * 1024 * 1024 })));
-      })(),
-    );
-    files.get(path).catch(() => files.delete(path));
-  }
-  return files.get(path);
-}
+export const readZst = (kind, path) =>
+  once(path, async () => {
+    const [buf] = await Promise.all([fetchImmutable(path), zstd()]);
+    return JSON.parse(utf8.decode(decompressUsingDict(createDCtx(), buf, dicts[kind], { defaultHeapSize: 8 * 1024 * 1024 })));
+  });
 
 // ---- daily bars (data/bars/<source>/<SYMBOL>/…, plain zstd, no dictionary) ----
 // a finished year never changes (immutable); meta.json and head.zst change
-// with the build (versioned like the indexes)
+// with the build (versioned)
+const build = () => meta().then((m) => m.builtAt || '');
 export async function readBarsZst(path, { immutable = false } = {}) {
-  build ??= meta().then((m) => m.builtAt || '');
-  const [res] = await Promise.all([immutable ? fetchImmutable(path) : fetchVersioned(path, await build), zstd()]);
-  if (!res.ok) throw Object.assign(new Error(`${path}: ${res.status} ${res.statusText}`), { status: res.status });
-  const buf = new Uint8Array(await res.arrayBuffer());
+  const [buf] = await Promise.all([immutable ? fetchImmutable(path) : fetchVersioned(path, await build()), zstd()]);
   return JSON.parse(utf8.decode(decompress(buf, { defaultHeapSize: 2 * 1024 * 1024 })));
 }
 export async function readBarsMeta(path) {
-  build ??= meta().then((m) => m.builtAt || '');
-  const res = await fetchVersioned(path, await build);
-  if (!res.ok) throw Object.assign(new Error(`${path}: ${res.status} ${res.statusText}`), { status: res.status });
-  return res.json();
+  return JSON.parse(utf8.decode(await fetchVersioned(path, await build())));
 }

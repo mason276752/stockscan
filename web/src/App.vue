@@ -15,7 +15,7 @@ import BasketPage from './components/BasketPage.vue';
 import ScoreCard from './components/ScoreCard.vue';
 import Note from './components/Note.vue';
 import Loading from './components/Loading.vue';
-import { busy } from './busy';
+import { busy, download } from './busy';
 import { isPhone } from './viewport';
 import { drop, prefetch, setBusy } from './prefetch';
 import { memoize } from './memo';
@@ -322,11 +322,12 @@ async function loadQuarters(year) {
 // Once a filing is on screen, what a click is likely to ask for next is
 // fetched in the background, in this order: the filing's score (indicators
 // tab), the indicators with the current settings, the TradingView symbol
-// (chart tab), the next three older filings in the picker; on the server
-// build also the valuation, but only after an 8 s dwell since the server
-// has to fetch prices for it. The static build's indexes are warmed at
-// start-up (api.warmup). All of it waits while a real load is in flight.
-setBusy(() => loadingCompany.value || loadingFiling.value || loadingIndicators.value || loadingValuation.value);
+// (chart tab), the next three older filings in the picker; the valuation
+// only after an 8 s dwell since it needs the price history (the server
+// fetches it; the static build reads ten years of bars). The static
+// build's indexes are warmed at start-up (api.warmup). All of it waits
+// while a real load is in flight.
+setBusy(() => busy.count > 0); // any loading indicator on screen: the user is waiting for something
 function planPrefetch() {
   drop('company');
   const c = company.value;
@@ -341,7 +342,7 @@ function planPrefetch() {
   const i = c.filings.findIndex((x) => x.accession === f.accession);
   for (const nf of c.filings.slice(Math.max(i, 0) + 1, Math.max(i, 0) + 4)) prefetch(`filing:${nf.accession}:${view.value}`, () => cached.filing(nf.cik, nf.accession, view.value), { tag, priority: 1 });
   const vp = valuationParams.value;
-  if (vp && !isStatic) prefetch(`val:${cik}:${JSON.stringify(vp)}`, () => cached.valuation(cik, vp), { tag, priority: 1, delay: 8000 });
+  if (vp) prefetch(`val:${cik}:${JSON.stringify(vp)}`, () => cached.valuation(cik, vp), { tag, priority: 1, delay: 8000 });
 }
 watch([data, indicatorsParams], () => {
   if (!loadingFiling.value) planPrefetch();
@@ -457,7 +458,7 @@ onMounted(() => {
 
 <template>
   <div class="app">
-    <div v-if="busy.count" class="topbar" aria-hidden="true"></div>
+    <div v-if="busy.count" class="topbar" :class="{ known: download.total > 0 }" aria-hidden="true"><div v-if="download.total > 0" class="fill" :style="{ width: `${Math.round((100 * download.loaded) / download.total)}%` }"></div></div>
     <header>
       <h1 class="logo">stockscan <span class="muted">{{ t('header.subtitle') }}</span></h1>
       <nav class="nav">

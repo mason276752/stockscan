@@ -54,7 +54,7 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 | 觀察名單、K 線圖分頁、自製 ETF 的 TradingView widget 模式 | ✅ | ✅（嵌入圖由 tradingview.com 載入——純前端版唯一會連的外部服務） |
 | 自製 ETF 自己算的指數與成分股報酬 | ✅ 伺服器抓日線（TradingView，備用 TWS、Yahoo） | ✅ 日線隨網站發布（`data/bars`，排程從 TradingView 抓到前一個交易日），瀏覽器自己算，不連外 |
 | 抓 SEC 新申報、爬蟲、「更新」 | ✅ | ✗ 瀏覽器不連 SEC；資料由排程重新建置（每個交易日數次） |
-| 股價估值 | ✅ | ✗ 要每季的股價與即時報價 |
+| 股價估值 | ✅ 申報封面股數、Yahoo 分割事件與匯率 | ✅ 用隨網站發布的十年日線算；沒有封面股數（用各期稀釋加權平均）、沒有分割事件（由各期股數的整倍數跳動推得）、沒有匯率（非美元財報的每股數字不換算，頁面會標示） |
 | ETF 每日持股（SSGA / Nasdaq） | ✅ | ✗ 用 build 時的 N-PORT 季報成分 |
 
 ```bash
@@ -82,11 +82,14 @@ Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、�
   另有 service worker（[web/public/sw.js](web/public/sw.js)，只在純前端版註冊）：app shell（`index.html` 與 `assets/` 的 hash 檔）走快取、離線也能開，`index.html` 本身 network-first 所以新部署下次開就生效、舊 assets 會照新頁面引用的清單清掉；
   每次部署都會變的小檔（`index/meta.json`、今年的 `head.zst`）network-first、離線時用上次的。財報、字典、已結束年份的日線由 app 自己的 Cache Storage 管，service worker 不再存一份。
 - 閒置預抓（[web/src/prefetch.js](web/src/prefetch.js)，兩種版本都有）：瀏覽器閒置、且沒有使用者要的東西在載入時，一次一件把「接下來很可能會點的」先抓好——
-  開了一家公司後依序抓這份申報的評分、目前設定的財務指標、TradingView 代號、申報表裡接下來三份申報；伺服器版停留 8 秒後再抓股價估值（伺服器要去抓股價，不為路過的公司抓）。
+  開了一家公司後依序抓這份申報的評分、目前設定的財務指標、TradingView 代號、申報表裡接下來三份申報；停留 8 秒後再抓股價估值（要抓十年日線，不為路過的公司抓）。
   純前端版啟動時先把搜尋 / 公司 / 評分 / 科目說明索引抓好，再抓尋找股票與分類瀏覽用的大索引。結果進同一個 memo（[memo.js](web/src/memo.js)）／Cache Storage，之後點到就直接用；換公司時還沒跑的會丟掉，`navigator.connection.saveData` 開著就完全不預抓。
-  索引全部 zstd 壓過再放上去（靜態主機不一定會壓，瀏覽器反正已經為了財報載了 zstd-wasm）：尋找股票的 `screen.json` 11 MB → 3.4 MB、公司清單 12 MB → 0.7 MB，解壓最大的那個約 30 ms；只有 `meta.json` 是明文（第一個抓、帶 build 時間）。
-  `screen.json` 是欄位式（一個欄位一個陣列，`screen.js` 的 `screenColumns`）：比一列一個物件少四分之三的 JSON、parse 快一倍多，`screenQuery` 直接在欄位上篩選排序（數值欄是 `Float64Array`），只把回傳的那幾百列組回物件——伺服器那邊仍是每次請求現組的列物件，同一個 `screenQuery` 兩種都吃。
-- 純前端版的資料層跑在 Web Worker（[api.static.worker.js](web/src/api.static.worker.js)；頁面上的 [api.static.js](web/src/api.static.js) 只是把每個呼叫轉過去的 proxy）：抓檔、zstd 解壓、JSON parse、解財報算指標、算自製 ETF 指數全在 worker 裡，索引也留在 worker 不搬回頁面，只有結果過線——主執行緒沒有任何 long task（之前載尋找股票索引會卡 ~130 ms）。錯誤訊息要用的語言隨每個請求帶過去（[locales/translate.js](web/src/locales/translate.js)，無 Vue 的 `t()`）。
+  預抓在畫面上有任何載入中指示時都會等（`busy.count`）——使用者正在等的那個檔不會被背景下載搶頻寬；慢速連線（瀏覽器判定 3G 以下或低於 1.5 Mb/s）不預抓大索引（0.3–3.5 MB 那幾個），用到再抓。
+  索引全部 zstd 壓過再放上去（靜態主機不一定會壓，瀏覽器反正已經為了財報載了 zstd-wasm），檔名帶內容 hash（`screen.735697c7d8.json.zst`，`meta.json` 的 `files` 說這次 build 各索引是哪個檔）：每天重建時內容沒變的（產業宇宙、科目說明、ETF 清單）瀏覽器就不必重抓，Cache Storage 裡舊 build 的索引在拿到新 `meta.json` 時清掉；只有 `meta.json` 是明文（第一個抓、帶 build 時間）。
+  尋找股票的索引是欄位式（一個欄位一個陣列，`screen.js` 的 `screenColumns`）：比一列一個物件少四分之三的 JSON、parse 快一倍多，`screenQuery` 直接在欄位上篩選排序（數值欄是 `Float64Array`），只把回傳的那幾百列組回物件——伺服器那邊仍是每次請求現組的列物件，同一個 `screenQuery` 兩種都吃。
+  它分兩個檔：`screen.json.zst`（公司、評分、最新一份的 66 個指標、市場快照，1.6 MB）與 `screen-history.json.zst`（前一份與去年同期的對照，1.8 MB）——第一頁只等前者；「較前期」「較去年同期」的條件、排序或欄位（頁面帶 `history=1`）才等後者（`wantsHistory`）。
+- 純前端版的資料層跑在 Web Worker（[api.static.worker.js](web/src/api.static.worker.js)；頁面上的 [api.static.js](web/src/api.static.js) 只是把每個呼叫轉過去的 proxy）：抓檔、zstd 解壓、JSON parse、解財報算指標、算自製 ETF 指數與股價估值全在 worker 裡，索引也留在 worker 不搬回頁面，只有結果過線——主執行緒沒有任何 long task（之前載尋找股票索引會卡 ~130 ms）。錯誤訊息要用的語言隨每個請求帶過去（[locales/translate.js](web/src/locales/translate.js)，無 Vue 的 `t()`）。
+  32 KB 以上的下載 worker 逐段讀、回報進度（`busy.downloads`）：頂端那條進度條在有已知大小的下載時顯示真實百分比，載入中的訊息旁顯示「1.2 / 1.6 MB」。
 
 - 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、
   `index/*.json.zst`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。
@@ -264,6 +267,8 @@ C1、C2、C3 取各季 10-Q 的年初至今欄（沒有就用上一季累計 + �
   倍數、合理價與絕對估值模型都用這個基準價。頁首同時列出三個價格。
 - **流通股數**：SEC companyconcept API 的 `dei:EntityCommonStockSharesOutstanding`（申報封面），依 accession 對到各期；
   沒有時用 `us-gaap:CommonStockSharesOutstanding`，再沒有用稀釋加權平均股數。
+- **近四季 EPS 跨分割**：各季 EPS 是各自申報書裡的當時數字，四季相加前先把分割前那幾季換到最後一季的股數基準（分割 4:1 就除以 4），不然分割後那三季的本益比會差好幾倍。
+- **純前端版**：同一份 [valuation.js](server/lib/valuation.js)（資料來源用 `deps` 注入：伺服器版在 [valuationServer.js](server/lib/valuationServer.js)），股價用隨網站發布的十年日線。沒有封面股數（用稀釋加權平均）、沒有匯率（非美元財報不換算，頁面標示）、沒有分割事件——由各期申報的股數跳動推得（`inferSplits`：相鄰兩期整倍數跳動，2:1 以上或 1:2 以下、誤差 8% 內；3:2 這種抓不到），並在頁面註明是推得的。
 - **相對估值法**：本益比、股價淨值比、股價營收比、P/OCF、P/FCF、EV/EBITDA、EV/營收、現金股利殖利率、盈餘殖利率、自由現金流殖利率。
   每一期用「期末收盤價 × 該期近四季數字」，「現在」用現價 × 最近四季；再以歷史平均 / 中位數 / 最低 / 最高倍數 × 目前每股數字反推合理價、便宜價、昂貴價。
 - **絕對估值法**（假設可在頁面上改，預設 r 9%、gT 2.5%、N 5 年、g1 = 近幾年營收年複合成長率限 0–15%、稅率 = 近四季有效稅率限 10–30%）：
@@ -498,11 +503,11 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/quarters.js` | 季度拆分與 Q4 推算；`yearQuarterPoints` 供指標頁使用 |
 | `server/lib/indicators.js` | 財務指標（五大比率）計算 |
 | `server/lib/prices.js` | Yahoo Finance 日線與匯率（估值頁的匯率仍用它） |
-| `server/lib/priceSeries.js` | 估值頁的股價：日線走 TradingView → IBKR → Yahoo，以 Yahoo 分割事件還原成當時報價 |
+| `server/lib/priceSeries.js` | 估值頁的股價：日線走 TradingView → IBKR → Yahoo，附 Yahoo 分割事件（valuation.js 用它還原成當時報價） |
 | `server/lib/tvws.js` | TradingView 圖表 websocket：日線（含價差商品） |
 | `server/lib/ib.js` | IBKR TWS API 連線與日線（`@stoqey/ib`） |
 | `server/lib/bars.js` | 日 K（TradingView → IBKR → Yahoo）與自製 ETF 指數、統計 |
-| `server/lib/valuation.js` | 估值：近四季數字、股數、各期倍數、絕對模型輸入 |
+| `server/lib/valuation.js`、`valuationServer.js` | 估值：近四季數字、股數、各期倍數、絕對模型輸入（純計算，資料來源注入；伺服器與純前端版共用）；伺服器的資料來源（SEC 封面股數、日線、Yahoo 匯率） |
 | `shared/valuation.js` | 估值模型與倍數公式（伺服器與瀏覽器共用） |
 | `server/lib/score.js` | 單一申報的評分（五大類 × 20 分） |
 | `server/lib/universe.js` | 全部申報公司的 SIC / 申報身分 / 公眾流通市值（Financial Statement Data Sets + frames API） |

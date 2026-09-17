@@ -3,19 +3,28 @@
 // trailing-twelve-month figures of the chosen quarter and today's price.
 //
 // Financial inputs come from the same quarterly points as the indicators
-// page; shares outstanding from SEC's companyconcept API (cover page
-// dei:EntityCommonStockSharesOutstanding); prices from Yahoo Finance.
+// page. What else it needs comes through `deps`, so the server and the
+// static build share this file (no Node I/O here):
+//   load(filing)    -> the filing's data (scrapeFiling / the saved file)
+//   shares(cik)     -> { byAccn: { accession: shares }, list: [{ end, val, accn }] }
+//                      shares outstanding from cover pages (SEC's companyconcept
+//                      API on the server); { byAccn: {}, list: [] } when there
+//                      is none: then the weighted-average diluted count of each
+//                      filing stands in
+//   prices(ticker)  -> { symbol, source, currency, days: [{ date, close }],
+//                      splits, dividends?, fetchedAt, error?, eventsError? }
+//                      daily closes as the sources give them (split-adjusted
+//                      to today); splits: [{ date, ratio }] undoes them so
+//                      old prices line up with the EPS and share counts of old
+//                      filings, null when unknown - then the splits are
+//                      inferred from the jumps in the filings' share counts
+//   fx(pair)        -> { days: [{ date, close }] } for e.g. 'TWDUSD=X', or
+//                      null when there is no FX data (the figures then stay in
+//                      the reporting currency, flagged in `currency`)
 
 import { C, first, loadPoints, quarterKeys } from './indicators.js';
-import { closeOn, history } from './prices.js';
-import { priceSeries } from './priceSeries.js';
-import { pickFiling } from './edgar.js';
-import { scrapeFiling } from './scrape.js';
-import { store } from './store.js';
+import { pickFiling } from './filings.js';
 import { MODELS, cagr, clamp, impliedPrice, multiplesAt, runModels } from '../../shared/valuation.js';
-
-const CONCEPT_API = 'https://data.sec.gov/api/xbrl/companyconcept/';
-const SHARES_TTL = 24 * 3600 * 1000;
 
 // extra concepts beyond the indicators table
 const V = {
@@ -34,40 +43,53 @@ const V = {
 
 const nz = (x) => x ?? 0;
 
-// Shares outstanding per filing (accession) from the cover page, via companyconcept.
-async function sharesByAccession(client, cik) {
-  const key = `shares:${cik}`;
-  const saved = store.getKV(key);
-  if (saved && saved.ageMs < SHARES_TTL) return saved.value;
-  const padded = String(cik).padStart(10, '0');
-  const out = { byAccn: {}, list: [] };
-  for (const [tax, concept] of [
-    ['dei', 'EntityCommonStockSharesOutstanding'],
-    ['us-gaap', 'CommonStockSharesOutstanding'],
-  ]) {
-    try {
-      const j = await client.json(`${CONCEPT_API}CIK${padded}/${tax}/${concept}.json`);
-      for (const f of j.units?.shares || []) {
-        if (typeof f.val !== 'number' || f.val <= 0) continue;
-        if (!out.byAccn[f.accn]) out.byAccn[f.accn] = f.val;
-        out.list.push({ end: f.end, val: f.val, accn: f.accn });
-      }
-      if (out.list.length) break; // dei found: no need for the balance-sheet concept
-    } catch (err) {
-      if (err.status !== 404) console.warn(`companyconcept ${concept} for CIK ${cik}: ${err.message}`);
-    }
+// Close on or before a date (null when the history does not reach it).
+export function closeOn(hist, date) {
+  if (!hist || !date) return null;
+  let best = null;
+  for (const d of hist.days) {
+    if (d.date > date) break;
+    best = d;
   }
-  out.list.sort((a, b) => (a.end < b.end ? -1 : 1));
-  store.putKV(key, out);
+  return best;
+}
+
+// Split-adjusted closes -> the prices quoted on each day: every split after
+// the day is undone (a 4:1 split later multiplies the day's price by 4).
+const unadjusted = (days, splits) =>
+  days.map((d) => {
+    let factor = 1;
+    for (const s of splits) if (s.date > d.date) factor *= s.ratio;
+    return { date: d.date, adjClose: d.close, close: d.close * factor };
+  });
+
+// Splits inferred from the share counts of consecutive filings when no
+// split events are known: a jump by (about) a whole ratio - 2:1 … 100:1, or a
+// reverse split 1:2 … 1:100 - between two points is taken as a split dated
+// the day after the earlier period (buybacks and issues move the count by a
+// few percent, not by half or double). A 3:2 or 5:4 split is not caught.
+export function inferSplits(points, sharesOf) {
+  const out = [];
+  let prev = null;
+  for (const pt of points) {
+    const n = sharesOf(pt);
+    if (!(n > 0) || !pt.periodEnd) continue;
+    if (prev && prev.n > 0) {
+      const r = n / prev.n;
+      const ratio = r >= 1 ? Math.round(r) : 1 / Math.round(1 / r);
+      if (ratio !== 1 && (r >= 1.85 || r <= 0.54) && Math.abs(r / ratio - 1) < 0.08) out.push({ date: addDays(prev.periodEnd, 1), ratio });
+    }
+    prev = { n, periodEnd: pt.periodEnd };
+  }
   return out;
 }
 
 // Currency the statements are reported in (most common monetary unit on the income statement).
-async function reportingCurrency(client, company, year, period) {
+async function reportingCurrency(load, company, year, period) {
   const f = pickFiling(company.filings, { year, period }) || company.filings[0];
   if (!f) return 'USD';
   try {
-    const data = await scrapeFiling(client, f, company);
+    const data = await load(f);
     const counts = {};
     for (const stmt of [data.statements.income_statement, data.statements.balance_sheet]) {
       for (const li of stmt?.lineItems || []) for (const cell of Object.values(li.values)) if (/^[A-Z]{3}$/.test(cell.unit || '')) counts[cell.unit] = (counts[cell.unit] || 0) + 1;
@@ -109,8 +131,8 @@ const stats = (xs) => {
   return { n: v.length, avg: v.reduce((a, b) => a + b, 0) / v.length, median: s[Math.floor(s.length / 2)], min: s[0], max: s[s.length - 1] };
 };
 
-export async function buildValuation(client, company, { year, period, n = 20, adr = 1 }) {
-  const load = (f) => scrapeFiling(client, f, company);
+export async function buildValuation(company, { year, period, n = 20, adr = 1 }, deps) {
+  const { load } = deps;
   const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
   const ticker = company.tickers?.[0] || null;
   const endQ = period === 'FY' ? 4 : Number(period.slice(1));
@@ -130,30 +152,12 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
   }
 
   // --- shares, prices, currency (in parallel) ------------------------------
-  // prices: TradingView -> TWS -> Yahoo daily closes (fetched on view, no live quote: "now" = last close)
-  const [shares, hist, reporting] = await Promise.all([
-    sharesByAccession(client, company.cik),
-    ticker ? priceSeries(ticker).catch((e) => ({ error: e.message, days: [] })) : { days: [], error: 'no ticker' },
-    reportingCurrency(client, company, year, period),
+  // prices: daily closes, no live quote ("now" = last close)
+  const [shares, raw, reporting] = await Promise.all([
+    deps.shares(company.cik).catch(() => ({ byAccn: {}, list: [] })),
+    ticker ? deps.prices(ticker).catch((e) => ({ error: e.message, days: [] })) : Promise.resolve({ days: [], error: 'no ticker' }),
+    reportingCurrency(load, company, year, period),
   ]);
-  const q = hist.last
-    ? { symbol: hist.symbol, price: hist.last.close, time: `${hist.last.date}T21:00:00Z`, date: hist.last.date, currency: hist.currency, source: hist.source, live: false }
-    : { price: null, error: hist.error || 'no price data', source: null };
-  // statements in another currency than the quote (20-F filers, ADRs): convert
-  // per-share figures with the FX rate of each date, times the ADR ratio
-  const quoteCurrency = q.currency || 'USD';
-  let fxHist = null;
-  let fxNow = 1;
-  if (reporting !== quoteCurrency) {
-    try {
-      fxHist = await history(`${reporting}${quoteCurrency}=X`);
-      fxNow = fxHist.days.at(-1)?.close ?? 1;
-    } catch (err) {
-      console.warn(`FX ${reporting}${quoteCurrency}: ${err.message}`);
-    }
-  }
-  const fxOn = (date) => (fxHist ? (closeOn(fxHist, date)?.close ?? fxNow) : 1);
-  const toQuote = (ps, fx) => Object.fromEntries(Object.entries(ps).map(([k, v]) => [k, v == null ? null : v * fx * adr]));
   const sharesFor = (pt) => {
     for (const a of pt.sources || []) if (shares.byAccn[a]) return { value: shares.byAccn[a], source: 'cover' };
     if (pt.periodEnd) {
@@ -164,6 +168,46 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
     const wa = quarterly && pt.period === 'Q4' ? first(pt.fy, V.dilutedShares) : first(pt.flows, V.dilutedShares);
     return wa ? { value: wa, source: 'diluted' } : null;
   };
+  // the closes as quoted on each day: the known splits undone, else the ones the share counts betray
+  const splits = raw.splits ?? inferSplits(points, (pt) => sharesFor(pt)?.value);
+  const hist = { ...raw, splits, splitsInferred: raw.splits == null, days: unadjusted(raw.days || [], splits) };
+  hist.last = hist.days.at(-1) || null;
+  const q = hist.last
+    ? { symbol: hist.symbol, price: hist.last.close, time: `${hist.last.date}T21:00:00Z`, date: hist.last.date, currency: hist.currency, source: hist.source, live: false }
+    : { price: null, error: hist.error || 'no price data', source: null };
+  // statements in another currency than the quote (20-F filers, ADRs): convert
+  // per-share figures with the FX rate of each date, times the ADR ratio
+  const quoteCurrency = q.currency || 'USD';
+  let fxHist = null;
+  let fxNow = 1;
+  if (reporting !== quoteCurrency) {
+    try {
+      fxHist = await deps.fx(`${reporting}${quoteCurrency}=X`);
+      fxNow = fxHist?.days.at(-1)?.close ?? 1;
+    } catch (err) {
+      console.warn(`FX ${reporting}${quoteCurrency}: ${err.message}`);
+    }
+  }
+  const fxOn = (date) => (fxHist ? (closeOn(fxHist, date)?.close ?? fxNow) : 1);
+  const toQuote = (ps, fx) => Object.fromEntries(Object.entries(ps).map(([k, v]) => [k, v == null ? null : v * fx * adr]));
+
+  // a per-share flow of an earlier point on the share basis of a later one:
+  // the splits between the two period ends undone (a quarter's EPS reported
+  // before a 4:1 split is a quarter of itself after it)
+  const splitFactor = (from, to) => {
+    let f = 1;
+    for (const s of splits) if (s.date > from && s.date <= to) f *= s.ratio;
+    return f;
+  };
+  const sumPerShare = (i, len, keys) => {
+    let total = 0;
+    for (let k = i - len + 1; k <= i; k++) {
+      const x = first(points[k]?.flows, keys);
+      if (x == null) return null;
+      total += x / splitFactor(points[k].periodEnd, points[i].periodEnd);
+    }
+    return total;
+  };
 
   // --- one column per point with a full trailing year ------------------------
   const columns = [];
@@ -173,7 +217,7 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
     const ttm = {
       revenue: sumFlows(points, i, span, C.revenue),
       netIncome: sumFlows(points, i, span, C.netIncome),
-      eps: sumFlows(points, i, span, C.eps),
+      eps: sumPerShare(i, span, C.eps),
       ocf: sumFlows(points, i, span, C.ocf),
       capex: sumFlows(points, i, span, C.capex),
       dividends: sumFlows(points, i, span, C.dividends),
@@ -305,9 +349,10 @@ export async function buildValuation(client, company, { year, period, n = 20, ad
     end: { year, period },
     isLatest,
     quote: { ...q, source: q.source || null },
-    currency: { reporting, quote: quoteCurrency, fxNow: reporting === quoteCurrency ? 1 : fxNow, fxSource: fxHist ? `${reporting}${quoteCurrency}=X` : null, adr },
+    // fxMissing: another reporting currency but no rate - the per-share figures are still in it
+    currency: { reporting, quote: quoteCurrency, fxNow: reporting === quoteCurrency ? 1 : fxNow, fxSource: fxHist ? `${reporting}${quoteCurrency}=X` : null, fxMissing: reporting !== quoteCurrency && !fxHist, adr },
     nowPerShare: nowPs,
-    priceHistory: { source: hist.source || null, from: hist.days?.[0]?.date || null, to: hist.days?.at?.(-1)?.date || null, splits: hist.splits || [], error: hist.error || null, eventsError: hist.eventsError || null, fetchedAt: hist.fetchedAt || null },
+    priceHistory: { source: hist.source || null, from: hist.days[0]?.date || null, to: hist.last?.date || null, splits: hist.splits, splitsInferred: hist.splitsInferred, error: hist.error || null, eventsError: hist.eventsError || null, fetchedAt: hist.fetchedAt || null },
     shares: latest ? { value: latest.shares, source: latest.sharesSource, asOf: latest.periodEnd } : null,
     columns,
     now,

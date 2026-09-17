@@ -59,10 +59,14 @@ export function screenRows(scores, companiesByCik, marketByTicker = null) {
 // layouts share one implementation: the server hands it the row objects
 // screenRows builds per request (rowTable: nothing to convert), the static
 // build ships the same rows as columns (screenColumns: one array per field
-// - zstd packs those six times smaller than the rows, 4 MB -> 0.7 MB, and
-// the browser parses them in a third of the time) and the browser's worker
-// reads those (columnTable: the value columns as Float64Array, NaN for
-// null). Only the rows a query returns are materialised as objects.
+// - a quarter of the JSON of the rows, parsed in a third of the time) and
+// the browser's worker reads those (columnTable: the value columns as
+// Float64Array, NaN for null). The columns come in two files so the page
+// can show its first results before the bigger half has arrived: the
+// company / score / values / market columns (index/screen.json) and the
+// prev / yoy columns for the change filters (screen-history.json, loaded
+// when a query needs them - wantsHistory). Only the rows a query returns
+// are materialised as objects.
 const SCORE_KEYS = ['score', 'coverage', 'accession', 'form', 'fiscalYear', 'fiscalPeriod', 'periodEnd', 'filingDate', 'categories'];
 const BASE_KEYS = ['fiscalYear', 'fiscalPeriod', 'periodEnd', 'score']; // prev / yoy, plus values
 const ROW_KEYS = ['cik', 'ticker', 'tickers', 'name', 'sic', 'sicZh', 'afs', 'float', 'history'];
@@ -84,15 +88,20 @@ export function screenColumns(rows) {
   const valueKeys = [...new Set([...union((r) => r.values), ...union((r) => r.prev?.values), ...union((r) => r.yoy?.values)])];
   const base = (sel) => ({ has: col((r) => (sel(r) ? 1 : 0)), ...cols(BASE_KEYS, sel), values: cols(valueKeys, (r) => sel(r)?.values) });
   return {
-    n,
-    ...cols(ROW_KEYS, (r) => r),
-    score: cols(SCORE_KEYS, (r) => r.score),
-    values: cols(valueKeys, (r) => r.values),
-    prev: base((r) => r.prev),
-    yoy: base((r) => r.yoy),
-    market: { has: col((r) => (r.market ? 1 : 0)), ...cols(union((r) => r.market), (r) => r.market) },
+    screen: {
+      n,
+      ...cols(ROW_KEYS, (r) => r),
+      score: cols(SCORE_KEYS, (r) => r.score),
+      values: cols(valueKeys, (r) => r.values),
+      market: { has: col((r) => (r.market ? 1 : 0)), ...cols(union((r) => r.market), (r) => r.market) },
+    },
+    history: { n, prev: base((r) => r.prev), yoy: base((r) => r.yoy) },
   };
 }
+
+// does a query need the prev / yoy columns (a change filter or sort, or the
+// page saying it shows change columns: history=1)?
+export const wantsHistory = (q) => Object.keys(q).some((k) => /_(chg|yoy)_(min|max)$/.test(k)) || ['chg', 'yoy'].includes(String(q.sortmode || '')) || String(q.history || '') === '1';
 
 const rowTable = (rows) => ({
   length: rows.length,
@@ -120,7 +129,8 @@ function columnTable(c) {
       }),
     );
   const values = typed(c.values);
-  const bases = { chg: { ...c.prev, values: typed(c.prev.values) }, yoy: { ...c.yoy, values: typed(c.yoy.values) } };
+  // prev / yoy: absent until the history file is loaded (then every base is null)
+  const bases = { chg: c.prev && { ...c.prev, values: typed(c.prev.values) }, yoy: c.yoy && { ...c.yoy, values: typed(c.yoy.values) } };
   const num = (a, i) => (a && !Number.isNaN(a[i]) ? a[i] : null);
   const pick = (cols, keys, i) => {
     const o = {};
@@ -133,7 +143,7 @@ function columnTable(c) {
     for (const k of valueKeys) o[k] = num(cols[k], i);
     return o;
   };
-  const baseAt = (mode, i) => (bases[mode].has[i] ? { ...pick(bases[mode], BASE_KEYS, i), values: valuesAt(bases[mode].values, i) } : null);
+  const baseAt = (mode, i) => (bases[mode]?.has[i] ? { ...pick(bases[mode], BASE_KEYS, i), values: valuesAt(bases[mode].values, i) } : null);
   const marketKeys = Object.keys(c.market).filter((k) => k !== 'has');
   return {
     length: c.n,
@@ -145,8 +155,8 @@ function columnTable(c) {
     float: (i) => c.float[i],
     score: (i) => c.score.score[i],
     value: (i, key) => num(values[key], i),
-    baseScore: (i, mode) => (bases[mode].has[i] ? bases[mode].score[i] : null),
-    baseValue: (i, key, mode) => (bases[mode].has[i] ? num(bases[mode].values[key], i) : null),
+    baseScore: (i, mode) => (bases[mode]?.has[i] ? bases[mode].score[i] : null),
+    baseValue: (i, key, mode) => (bases[mode]?.has[i] ? num(bases[mode].values[key], i) : null),
     market: (i, key) => (c.market.has[i] ? (c.market[key]?.[i] ?? null) : null),
     // the row object screenRow would have built
     row: (i) => ({
@@ -161,7 +171,8 @@ function columnTable(c) {
   };
 }
 
-// rows (screenRows) or columns (screenColumns) -> the table screenQuery reads
+// rows (screenRows) or columns (screenColumns' screen, with or without its
+// history spread in) -> the table screenQuery reads
 export const screenTable = (x) => (Array.isArray(x) ? rowTable(x) : typeof x.length === 'number' && typeof x.row === 'function' ? x : columnTable(x));
 
 // change since the previous filing (chg) or the same period a year earlier
@@ -181,7 +192,8 @@ const valueOf = (t, i, key, mode = 'now') => {
 // The query of GET /api/screen applied to the rows (an array of screenRow
 // objects, the columns of screenColumns, or a screenTable of either): sic /
 // division / afs / exclusions / text, <key>[_chg|_yoy]_min|max ranges,
-// sort, limit.
+// sort, limit. (history=1 is the page's hint that it shows change columns:
+// no effect here, see wantsHistory.)
 export function screenQuery(rows, q) {
   const t = screenTable(rows);
   const sic = q.sic ? String(q.sic).padStart(4, '0') : null;

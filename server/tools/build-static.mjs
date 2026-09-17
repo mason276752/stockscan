@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -103,24 +104,34 @@ if (fs.existsSync(barsDir)) {
 // ---- 3. indexes ----
 const idx = path.join(OUT, 'index');
 fs.mkdirSync(idx, { recursive: true });
-// Index files go out zstd'd (<name>.zst): a static host may not compress
-// what it serves and the browser has zstd-wasm anyway (the filings need it).
-// screen.json is 11 MB raw, 3.4 MB so - 30 ms to inflate. meta.json stays
-// plain: it is the first fetch and carries the build id the rest is cached by.
-// with the native helper the raw JSON is written now and all of them are
-// compressed together (in parallel) at the end
+// Index files go out zstd'd and content-addressed (<name>.<hash>.json.zst,
+// the hash of the JSON): a static host may not compress what it serves and
+// the browser has zstd-wasm anyway (the filings need it); the name changing
+// only with the content lets the browser keep an index across builds until
+// it really changes (the SIC universe, the statement documentation and the
+// ETF lists rarely do). meta.json (plain, always revalidated) maps each
+// index to its current file. With the native helper the raw JSON is written
+// now and all of them are compressed together (in parallel) at the end.
 const toCompress = [];
+const files = {}; // index -> file name of this build
 const write = (name, obj, { compress = true } = {}) => {
   const json = Buffer.from(JSON.stringify(obj));
-  if (compress && NATIVE) {
-    const raw = path.join(idx, name);
+  if (!compress) {
+    fs.writeFileSync(path.join(idx, name), json);
+    return;
+  }
+  const base = name.replace(/\.json$/, '');
+  const hashed = `${base}.${createHash('sha1').update(json).digest('hex').slice(0, 10)}.json`;
+  files[base] = `${hashed}.zst`;
+  if (NATIVE) {
+    const raw = path.join(idx, hashed);
     fs.writeFileSync(raw, json);
     toCompress.push(raw);
     return;
   }
-  const file = path.join(idx, compress ? `${name}.zst` : name);
-  fs.writeFileSync(file, compress ? zlib.zstdCompressSync(json, { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } }) : json);
-  console.log(`build-static: ${path.basename(file)} ${(fs.statSync(file).size / 1048576).toFixed(1)} MB${compress ? ` (${(json.length / 1048576).toFixed(1)} MB raw)` : ''}`);
+  const file = path.join(idx, `${hashed}.zst`);
+  fs.writeFileSync(file, zlib.zstdCompressSync(json, { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } }));
+  console.log(`build-static: ${path.basename(file)} ${(fs.statSync(file).size / 1048576).toFixed(1)} MB (${(json.length / 1048576).toFixed(1)} MB raw)`);
 };
 
 // the headers of every filing and every score, decoded once by the helper;
@@ -230,8 +241,11 @@ write('tickers.json', tickers.map((t) => ({ cik: t.cik, ticker: t.ticker, name: 
 const scores = latestScores();
 write('scores-min.json', Object.fromEntries(scores.map((s) => [s.cik, scoreBadge(s)])));
 // the screener rows as columns (one array per field): a quarter of the
-// JSON of the rows, parsed by the browser's worker in a third of the time
-write('screen.json', screenColumns(screenRows(scores, byCik, market?.byTicker || null)));
+// JSON of the rows, parsed by the browser's worker in a third of the time;
+// the prev / yoy columns apart, so the first results need not wait for them
+const screenCols = screenColumns(screenRows(scores, byCik, market?.byTicker || null));
+write('screen.json', screenCols.screen);
+write('screen-history.json', screenCols.history);
 write('universe.json', { updatedAt: universe.updatedAt, datasets: universe.datasets, companies: universe.companies });
 write('tvsymbols.json', Object.fromEntries(Object.entries(market?.byTicker || {}).map(([t, r]) => [t, { symbol: r.tv, exchange: r.exchange || null }])));
 
@@ -267,6 +281,7 @@ write(
     scoreVersion: SCORE_VERSION,
     market: { count: market?.count ?? 0, updatedAt: market?.updatedAt ?? null, refreshing: false },
     bars: bars.symbols ? { symbols: bars.symbols, heads: bars.heads, sources: ['tv2'] } : null,
+    files,
   },
   { compress: false },
 );

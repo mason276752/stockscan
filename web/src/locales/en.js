@@ -202,6 +202,9 @@ export default {
   'vp.history': 'price history',
   'vp.splits': ', split-adjusted ({list})',
   'vp.splitsError': ', split data unavailable ({err}); older prices not adjusted',
+  'vp.splitsInferred': ', split-adjusted ({list}; the static build has no split events - these are inferred from the jumps in the share counts of the filings)',
+  'vp.splitsNoneInferred': ' (the static build has no split events: the filings\' share counts show no whole-ratio jump, so none is assumed)',
+  'vp.fxMissing': 'statements in {reporting} but the price in {quote}, and the static build has no FX rates: the per-share figures and multiples below are not converted',
   'vp.basis': 'Price basis',
   'vp.basisTitle': "Which day's price the valuation uses: the selected filing's period-end close (consistent with the history table), the filing-date close (the price when the report came out), or the current price",
   'vp.adr': 'ADR ratio',
@@ -565,7 +568,6 @@ export default {
   'bkNote.failed': '{symbol} has no price data; excluded ({error})',
   // static build
   'static.unavailable': 'The static build has no {what} (needs the server version)',
-  'static.whatValuation': 'valuation: it needs the price of every quarter',
   'static.whatTws': 'TWS connection',
   'static.whatBars': 'daily bars',
   'static.noCompany': 'The filings of this company (CIK {cik}) are not in this static data set',

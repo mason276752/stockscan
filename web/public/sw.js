@@ -1,7 +1,7 @@
 // Service worker of the pure-frontend build (registered by main.js only when
 // VITE_STATIC=1). What it adds on top of the app's own Cache Storage use
 // (staticData.js keeps every filing, score, dictionary, finished-year bar
-// file and build-versioned index it has fetched):
+// file and content-named index it has fetched):
 //   - the app shell (index.html, the hashed files under assets/) is served
 //     from the cache, so the app opens instantly and works offline with the
 //     data it has seen; index.html itself is network-first so a new deploy

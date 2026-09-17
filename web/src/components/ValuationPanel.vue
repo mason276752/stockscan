@@ -155,10 +155,11 @@ const tipStyle = computed(() => {
           · {{ t('vp.basisNow') }} <b>{{ money(data.quote?.price) }}</b><span v-if="data.quote?.date">{{ t('vp.closeParen', { date: data.quote.date }) }}</span><span v-else-if="data.quote?.time">（{{ new Date(data.quote.time).toLocaleString(dateLocale) }}）</span>
         </div>
         <div class="muted small">
-          {{ t('vp.marketCap') }} {{ bigMoney(marketCap) }} · {{ t('vp.shares') }} {{ bigShares(latest?.shares) }}<span v-if="latest?.sharesSource === 'diluted'">{{ t('vp.sharesDiluted') }}</span><span v-else-if="latest?.periodEnd">{{ t('vp.sharesCover', { date: latest.periodEnd }) }}</span>
+          {{ t('vp.marketCap') }} {{ bigMoney(marketCap) }} · {{ t('vp.shares') }} {{ bigShares(latest?.shares) }}<span v-if="latest?.sharesSource === 'diluted'">{{ t('vp.sharesDiluted') }}</span><span v-else-if="latest?.shares && latest?.periodEnd">{{ t('vp.sharesCover', { date: latest.periodEnd }) }}</span>
           · {{ t('vp.ttmTo') }} {{ latest?.periodEnd || '—' }}
-          <template v-if="foreign"> · {{ t('vp.fx', { reporting: data.currency.reporting, source: data.currency.fxSource, rate: data.currency.fxNow.toFixed(4), quote: data.currency.quote }) }}</template>
-          · {{ t('vp.history') }} {{ data.priceHistory?.source || '—' }} {{ data.priceHistory?.from || '—' }} ～ {{ data.priceHistory?.to || '—' }}<span v-if="data.priceHistory?.splits?.length">{{ t('vp.splits', { list: data.priceHistory.splits.map((s) => `${s.date} ${s.ratio}:1`).join(t('sep')) }) }}</span><span v-if="data.priceHistory?.eventsError" class="error-inline">{{ t('vp.splitsError', { err: data.priceHistory.eventsError }) }}</span>
+          <template v-if="foreign && data.currency.fxMissing"> · <span class="error-inline">{{ t('vp.fxMissing', { reporting: data.currency.reporting, quote: data.currency.quote }) }}</span></template>
+          <template v-else-if="foreign"> · {{ t('vp.fx', { reporting: data.currency.reporting, source: data.currency.fxSource, rate: data.currency.fxNow.toFixed(4), quote: data.currency.quote }) }}</template>
+          · {{ t('vp.history') }} {{ data.priceHistory?.source || '—' }} {{ data.priceHistory?.from || '—' }} ～ {{ data.priceHistory?.to || '—' }}<span v-if="data.priceHistory?.splits?.length">{{ t(data.priceHistory.splitsInferred ? 'vp.splitsInferred' : 'vp.splits', { list: data.priceHistory.splits.map((s) => `${s.date} ${s.ratio}:1`).join(t('sep')) }) }}</span><span v-else-if="data.priceHistory?.splitsInferred">{{ t('vp.splitsNoneInferred') }}</span><span v-if="data.priceHistory?.eventsError" class="error-inline">{{ t('vp.splitsError', { err: data.priceHistory.eventsError }) }}</span>
         </div>
       </div>
       <div class="controls">

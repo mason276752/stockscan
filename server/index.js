@@ -12,7 +12,7 @@ import { scrapeFiling, SCRAPE_VERSION } from './lib/scrape.js';
 import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
-import { buildValuation } from './lib/valuation.js';
+import { serverValuation } from './lib/valuationServer.js';
 import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession } from './lib/score.js';
 import { SCREEN_FIELDS, browseCompanies, filerCounts, scoreBadge, screenQuery, screenRows, sicCounts, wantsMarket } from './lib/screen.js';
 import { marketSnapshot, marketStatus } from './lib/market.js';
@@ -234,7 +234,7 @@ app.get(
     const n = Math.min(40, Math.max(4, Number(req.query.n) || 20));
     const adr = Math.max(0.0001, Number(req.query.adr) || 1); // ordinary shares per listed share (ADR ratio)
     const company = await getCompany(client, req.params.id);
-    res.json(await dedupe(`val:${company.cik}:${year}:${period}:${n}:${adr}`, () => buildValuation(client, company, { year, period, n, adr })));
+    res.json(await dedupe(`val:${company.cik}:${year}:${period}:${n}:${adr}`, () => serverValuation(client, company, { year, period, n, adr })));
   }),
 );
 

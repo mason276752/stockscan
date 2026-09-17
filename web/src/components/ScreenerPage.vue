@@ -195,6 +195,8 @@ const scale = (c) => (c.mode !== 'now' ? 1 : fieldOf(c.key)?.unit === '百萬' |
 const params = computed(() => {
   const p = { sort: sortKey.value, dir: sortDir.value, limit: 500, listed: listedOnly.value ? '1' : '0' };
   if (sortMode.value !== 'now') p.sortmode = sortMode.value;
+  // a change column is shown (a condition in chg / yoy mode, even before it has a number): the rows need prev / yoy
+  if (conditions.value.some((c) => c.key && c.mode !== 'now')) p.history = '1';
   if (text.value.trim()) p.q = text.value.trim();
   if (division.value) p.division = division.value;
   if (sicCode.value) p.sic = sicCode.value;

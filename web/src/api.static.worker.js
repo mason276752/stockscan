@@ -18,10 +18,11 @@ import { buildQuarterly } from '../../server/lib/quarters.js';
 import { buildIndicators } from '../../server/lib/indicators.js';
 import { filingUrls, pickFiling } from '../../server/lib/filings.js';
 import { ITEMS, SCORE_VERSION, scoreFiling } from '../../server/lib/scoreModel.js';
-import { SCREEN_FIELDS, browseCompanies, filerCounts, screenQuery, screenTable, searchRows, sicCounts } from '../../server/lib/screen.js';
+import { SCREEN_FIELDS, browseCompanies, filerCounts, screenQuery, screenTable, searchRows, sicCounts, wantsHistory } from '../../server/lib/screen.js';
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
 import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
 import { basketRequest, runBasket } from '../../server/lib/basket.js';
+import { buildValuation } from '../../server/lib/valuation.js';
 import * as data from './staticData';
 import { translate } from './locales/translate.js';
 
@@ -55,9 +56,11 @@ async function loadFiling(f) {
   return applyZh(reclassify(fatten(rec.data, docs)));
 }
 
-// the screener's columns as the table screenQuery reads (built once)
-let screenIndex = null;
-const screenRows = () => (screenIndex ??= data.screenRowsIndex().then(screenTable));
+// the screener's columns as the table screenQuery reads: without the prev /
+// yoy columns (index/screen.json alone, enough for most queries) or with
+// them (screen-history.json spread in); each built once
+const screenTables = {};
+const screenRows = (history) => (screenTables[history ? 'full' : 'core'] ??= (history ? Promise.all([data.screenIndex(), data.screenHistoryIndex()]) : Promise.all([data.screenIndex()])).then(([core, hist]) => screenTable(hist ? { ...core, prev: hist.prev, yoy: hist.yoy } : core)));
 
 const api = {
   meta: () => data.meta(),
@@ -103,7 +106,27 @@ const api = {
     const basis = params.basis === 'ttm' ? 'ttm' : 'x4';
     return buildIndicators(loadFiling, c, { year, period, n, basis, mode });
   },
-  valuation: () => unavailable('static.whatValuation'),
+  // the valuation page from the saved filings and the shipped bars: no
+  // cover-page share counts (the diluted weighted average of each filing
+  // stands in), no split events (inferred from the share counts), no FX
+  // rates (a non-USD reporter's figures stay in its currency, flagged)
+  async valuation(id, params) {
+    const c = await companyOf(id);
+    const year = Number(params.year);
+    const period = String(params.period || 'FY').toUpperCase();
+    if (!year || !/^(Q[1-4]|FY)$/.test(period)) throw new Error('year and period (Q1-Q4 or FY) required');
+    const n = Math.min(40, Math.max(4, Number(params.n) || 20));
+    const adr = Math.max(0.0001, Number(params.adr) || 1);
+    return buildValuation(c, { year, period, n, adr }, {
+      load: loadFiling,
+      shares: async () => ({ byAccn: {}, list: [] }),
+      prices: async (ticker) => {
+        const b = await api.bars(ticker);
+        return { symbol: b.symbol, source: b.source, currency: b.currency, days: b.days.map((d) => ({ date: d.date, close: d.close })), splits: null, fetchedAt: b.fetchedAt };
+      },
+      fx: async () => null,
+    });
+  },
   // an index the idle prefetcher warms after start-up (api.warmup on the
   // page lists them in order; here what each key loads - it stays here)
   async warm(key) {
@@ -119,7 +142,7 @@ const api = {
     return { fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS, market: m.market };
   },
   async screen(params) {
-    const [rows, m] = await Promise.all([screenRows(), data.meta()]);
+    const [rows, m] = await Promise.all([screenRows(wantsHistory(params)), data.meta()]);
     return { ...screenQuery(rows, params), scored: rows.length, market: m.market };
   },
   async scores(ciks) {
@@ -241,8 +264,19 @@ const WARM = {
   'idx:tvsymbols': data.tvSymbols,
   'idx:universe': data.universe,
   'idx:etfs': data.etfs,
-  'idx:screen': screenRows,
+  'idx:screen': () => screenRows(false),
+  'idx:screen-history': () => screenRows(true),
 };
+
+// download progress -> the page (busy.js), at most every 150 ms per file
+const reported = new Map(); // path -> time of the last report
+data.setProgress((path, loaded, total, done) => {
+  const now = Date.now();
+  if (!done && loaded > 0 && now - (reported.get(path) || 0) < 150) return;
+  if (done) reported.delete(path);
+  else reported.set(path, now);
+  self.postMessage({ progress: { path, loaded, total, done } });
+});
 
 // ---- the message loop ----
 // page -> worker  { id, method, args, locale }   call api[method](...args)
