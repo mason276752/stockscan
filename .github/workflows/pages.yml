@@ -128,17 +128,13 @@ jobs:
             echo "pushed $(git rev-parse --short HEAD)"
           fi
 
-      # the Rust helper the build uses for its heavy parts (tools/stockscan-static);
-      # cached between runs, so this is seconds unless the crate changed
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: tools/stockscan-static
-      - run: cargo build --release --manifest-path tools/stockscan-static/Cargo.toml
-
-      # --link: the store goes into the site as hard links (same filesystem)
+      # the heavy parts run in the committed Linux binary of tools/stockscan-static
+      # (bin/stockscan-static-x86_64-linux, rebuilt with build-linux.sh - nothing
+      # is compiled here); --link: the store goes into the site as hard links
       - name: Build the static site
-        run: node server/tools/build-static.mjs --link
+        run: |
+          chmod +x tools/stockscan-static/bin/stockscan-static-x86_64-linux
+          node server/tools/build-static.mjs --link
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

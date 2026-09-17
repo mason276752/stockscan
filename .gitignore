@@ -7,4 +7,4 @@ web/dist/
 # cache.sqlite、今年的 head.zst 等其他 data/ 底下的東西本來就不進 git。
 data/
 web/dist-static/
-tools/stockscan-static/target/
+tools/stockscan-static/target*/

@@ -12,9 +12,11 @@
 //
 // The slow parts - copying 900 MB of store, decoding 60,000 filing / score
 // files for their headers, zstd-19 of the indexes - are done by the Rust
-// helper tools/stockscan-static when its binary is there (built here with
-// cargo when it is not; STOCKSCAN_STATIC_NATIVE=0 forces the pure-Node
-// path, which produces the same output, only slower). What goes into the
+// helper tools/stockscan-static: the committed binary for this platform
+// (bin/stockscan-static-<arch>-<os>; the Linux one is what the Pages
+// workflow runs, nothing is compiled there), else a local cargo build
+// (made here when missing). STOCKSCAN_STATIC_NATIVE=0 forces the pure-Node
+// path, which produces the same output, only slower. What goes into the
 // indexes is decided in this file either way.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,11 +37,13 @@ const t0 = Date.now();
 // ---- the native helper (tools/stockscan-static) ----
 const NATIVE = (() => {
   if (/^(0|false|no|off)$/i.test(process.env.STOCKSCAN_STATIC_NATIVE || '')) return null;
-  const bin = process.env.STOCKSCAN_STATIC_BIN || path.join(REPO, 'tools', 'stockscan-static', 'target', 'release', 'stockscan-static');
+  const tool = path.join(REPO, 'tools', 'stockscan-static');
+  const bundled = path.join(tool, 'bin', `stockscan-static-${process.arch === 'x64' ? 'x86_64' : process.arch === 'arm64' ? 'aarch64' : process.arch}-${process.platform}`);
+  const bin = process.env.STOCKSCAN_STATIC_BIN || (fs.existsSync(bundled) ? bundled : path.join(tool, 'target', 'release', 'stockscan-static'));
   if (!fs.existsSync(bin)) {
     try {
       console.log('build-static: building tools/stockscan-static (cargo build --release) …');
-      execFileSync('cargo', ['build', '--release', '--quiet'], { cwd: path.join(REPO, 'tools', 'stockscan-static'), stdio: 'inherit' });
+      execFileSync('cargo', ['build', '--release', '--quiet'], { cwd: tool, stdio: 'inherit' });
     } catch (err) {
       console.warn(`build-static: no native helper (${err.message.split('\n')[0]}) - the slower Node path is used`);
       return null;

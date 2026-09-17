@@ -60,8 +60,10 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 ```bash
 npm run build:static        # -> web/dist-static/（網頁 + data/store + data/bars + index/，約 550 MB）
 # 慢的部分（複製 900 MB 的 store、解開 6 萬個財報／評分檔取表頭、索引 zstd -19）交給 Rust 寫的
-# tools/stockscan-static 平行處理：有 cargo 時第一次會自己 build；沒有就走純 Node（結果相同、慢約 3 倍）。
-# STOCKSCAN_STATIC_NATIVE=0 強制純 Node；--link 用 hard link 代替複製（CI 用）。
+# tools/stockscan-static 平行處理：Linux x86_64 的 binary 已 commit 在 tools/stockscan-static/bin/（Pages 的
+# workflow 直接跑它，不編譯；改了 src/ 後用 build-linux.sh 在 Docker 裡重編再 commit）；其他平台有 cargo
+# 時第一次會自己 build；都沒有就走純 Node（結果相同、慢約 3 倍）。STOCKSCAN_STATIC_NATIVE=0 強制純 Node；
+# --link 用 hard link 代替複製（CI 用）。
 # 放到任何靜態主機；手動推 GitHub Pages 的話：npx gh-pages -d web/dist-static -t
 ```
 
