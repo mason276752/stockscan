@@ -84,7 +84,10 @@ jobs:
           fi
 
       # this year's bars (head.zst of every symbol): restored from the last
-      # run's cache, topped up from TradingView, saved for the next run. A
+      # run's cache, topped up from TradingView on scheduled / manual runs
+      # (one request per symbol, ~12 min the first time after a close, a
+      # minute when they are already fresh), saved for the next run. A push
+      # only rebuilds with the bars the last such run left in the cache. A
       # cache key is immutable, so it carries the run id; restore-keys picks
       # the newest previous one.
       - name: Restore this year's bars
@@ -94,6 +97,7 @@ jobs:
           key: bars-head-${{ github.run_id }}
           restore-keys: bars-head-
       - name: Fetch this year's bars from TradingView
+        if: github.event_name != 'push'
         run: npm run fetch:bars
         continue-on-error: true
         env:
