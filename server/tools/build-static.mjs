@@ -118,6 +118,7 @@ const write = (name, obj, { compress = true } = {}) => {
   const json = Buffer.from(JSON.stringify(obj));
   if (!compress) {
     fs.writeFileSync(path.join(idx, name), json);
+    console.log(`build-static: ${name} ${(json.length / 1024).toFixed(1)} KB`);
     return;
   }
   const base = name.replace(/\.json$/, '');
@@ -238,6 +239,7 @@ console.log(`build-static: ${Object.keys(companies).length} companies (${headers
 
 write('tickers.json', tickers.map((t) => ({ cik: t.cik, ticker: t.ticker, name: t.name })));
 
+console.log('build-static: latest scores, screener columns …');
 const scores = latestScores();
 write('scores-min.json', Object.fromEntries(scores.map((s) => [s.cik, scoreBadge(s)])));
 // the screener rows as columns (one array per field): a quarter of the
@@ -249,17 +251,23 @@ write('screen-history.json', screenCols.history);
 write('universe.json', { updatedAt: universe.updatedAt, datasets: universe.datasets, companies: universe.companies });
 write('tvsymbols.json', Object.fromEntries(Object.entries(market?.byTicker || {}).map(([t, r]) => [t, { symbol: r.tv, exchange: r.exchange || null }])));
 
-// ETF list and the popular ETFs' holdings (from the caches; fetched when SEC_USER_AGENT allows)
+// ETF list and the popular ETFs' holdings (from the caches; fetched when
+// SEC_USER_AGENT allows - a new N-PORT quarter means one big XML per ETF
+// from EDGAR, which is where a build spends minutes when it does)
 let etfs = { updatedAt: null, popular: POPULAR_ETFS, etfs: [], holdings: {} };
 try {
   if (!client) throw new Error('no SEC client');
   const { etfList, etfHoldings } = await import('../lib/etf.js');
+  console.log('build-static: ETF list …');
   const list = await etfList(client);
   etfs.updatedAt = list.updatedAt;
   etfs.etfs = list.etfs;
   for (const t of POPULAR_ETFS) {
+    const t0 = Date.now();
     try {
       etfs.holdings[t] = await etfHoldings(client, t);
+      const ms = Date.now() - t0;
+      if (ms > 1000) console.log(`build-static: ETF ${t} holdings (N-PORT from EDGAR) ${(ms / 1000).toFixed(1)} s`);
     } catch (err) {
       console.warn(`build-static: ETF ${t}: ${err.message}`);
     }
@@ -286,7 +294,10 @@ write(
   { compress: false },
 );
 
-if (toCompress.length) native('compress', '19', ...toCompress);
+if (toCompress.length) {
+  console.log(`build-static: compressing ${toCompress.length} index files (zstd -19, ${(toCompress.reduce((n, f) => n + fs.statSync(f).size, 0) / 1048576).toFixed(0)} MB raw) …`);
+  native('compress', '19', ...toCompress);
+}
 
 // GitHub Pages: no Jekyll processing (paths with __ would otherwise be skipped)
 fs.writeFileSync(path.join(OUT, '.nojekyll'), '');
