@@ -2,6 +2,10 @@ node_modules/
 web/dist/
 *.log
 .env
-# data/store (財報與評分，小檔案) 進 git；快取與舊的 SQLite 不進
+# data/store (財報與評分) 與 data/bars (日線) 進 git；cache.sqlite 與舊的 SQLite 不進
+# （git 不能 re-include 被排除目錄底下的檔案，所以要寫 data/* 而不是 data/）
+data/*
+!data/store/
+!data/bars/
 data/store/**/*.tmp
 web/dist-static/

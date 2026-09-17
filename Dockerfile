@@ -8,6 +8,8 @@ COPY web/package.json web/package-lock.json* ./
 RUN npm ci
 COPY web/ ./
 COPY shared/ /src/shared/
+# web/src/api.static.js (static build) imports the pure modules of server/lib
+COPY server/ /src/server/
 # relative asset URLs: one build serves any BASE_URL (the server injects the prefix)
 RUN npx vite build
 # the licensed TradingView Advanced Charts library (optional): web/assets/tradingview/

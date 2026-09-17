@@ -28,6 +28,10 @@ const WATCH_EVERY = 30 * 60 * 1000; // daily-index poll interval
 const WATCH_DAYS = 7; // how far back the daily index is read on (re)start
 const MAX_FAILS = 3; // give up on a filing that keeps failing to parse
 const LOG_EVERY = 10_000; // progress line during the sweep
+// Companies crawled at the same time. One filing is ~8 short SEC requests
+// done one after another, so a single lane spends most of its time waiting
+// on the network; a few lanes fill the client's 10 req/s allowance instead.
+const LANES = Math.max(1, Number(process.env.STOCKSCAN_CRAWL_PARALLEL) || 4);
 const DAILY_INDEX = 'https://www.sec.gov/Archives/edgar/daily-index';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -73,7 +77,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     skipped: 0,
     failed: 0,
     done: 0, // companies whose latest filing is on disk (this sweep)
-    current: null,
+    current: null, // the filings being fetched right now
+    lanes: LANES,
     startedAt: null,
     lastWatch: null,
     watched: 0, // filings picked up from the daily index
@@ -81,6 +86,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     watchLog: [], // the last new filings picked up by the daily index
   };
   const fails = store.getKV('crawl:fails')?.value || {};
+  const inFlight = new Set(); // one label per lane, shown in the status line
+  const setCurrent = () => (state.current = inFlight.size ? [...inFlight].join(', ') : null);
 
   // wait while the user is active or the neighbour prefetcher has work
   async function yieldToUser() {
@@ -90,7 +97,9 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   async function saveLatest(company, filing) {
     if (!filing || store.hasFiling(filing.accession)) return false;
     if ((fails[filing.accession] || 0) >= MAX_FAILS) return false;
-    state.current = `${company.tickers?.[0] || company.cik} ${filing.form} ${filing.fiscalYear} ${filing.fiscalPeriod}`;
+    const label = `${company.tickers?.[0] || company.cik} ${filing.form} ${filing.fiscalYear} ${filing.fiscalPeriod}`;
+    inFlight.add(label);
+    setCurrent();
     try {
       await ensureStored(low, filing, company);
       state.saved++;
@@ -107,7 +116,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
       console.warn(`crawl ${filing.accession} (${company.name}) failed: ${err.message}`);
       return false;
     } finally {
-      state.current = null;
+      inFlight.delete(label);
+      setCurrent();
     }
   }
 
@@ -124,42 +134,48 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     state.position = 0;
     state.done = 0;
     const timer = setInterval(logProgress, LOG_EVERY);
-    for (const c of targets) {
-      state.position++;
-      if (checked[c.cik] && Date.now() - Date.parse(checked[c.cik]) < CHECK_TTL) {
-        state.done++;
-        continue;
-      }
-      await yieldToUser();
-      // today's filings must not wait for a multi-hour sweep
-      if (!state.lastWatch || Date.now() - Date.parse(state.lastWatch) > WATCH_EVERY) {
+    let next = 0; // index of the next company to hand to a lane
+    let watching = null; // the daily-index poll in progress (the lanes wait for it)
+    const lane = async () => {
+      for (;;) {
+        const c = targets[next++];
+        if (!c) return;
+        state.position++;
+        if (checked[c.cik] && Date.now() - Date.parse(checked[c.cik]) < CHECK_TTL) {
+          state.done++;
+          continue;
+        }
+        await yieldToUser();
+        // today's filings must not wait for a multi-hour sweep
+        if (!state.lastWatch || Date.now() - Date.parse(state.lastWatch) > WATCH_EVERY) {
+          watching ??= watch()
+            .catch((err) => console.warn(`crawl watch failed: ${err.message}`))
+            .finally(() => {
+              watching = null;
+              state.phase = 'sweep';
+            });
+          await watching;
+        }
         try {
-          await watch();
+          const company = await getCompany(low, String(c.cik));
+          // the newest DEPTH originals (amendments rarely carry full statements)
+          const wanted = company.filings.filter((f) => !/\/A$/i.test(f.form || '')).slice(0, DEPTH);
+          let had = 0;
+          for (const filing of wanted) {
+            if (store.hasFiling(filing.accession)) had++;
+            else if (await saveLatest(company, filing)) had++;
+            else state.skipped++;
+          }
+          if (!wanted.length || had === wanted.length) state.done++;
         } catch (err) {
-          console.warn(`crawl watch failed: ${err.message}`);
+          state.failed++;
+          console.warn(`crawl ${c.ticker} (CIK ${c.cik}): ${err.message}`);
         }
-        state.phase = 'sweep';
+        checked[c.cik] = new Date().toISOString();
+        if (state.position % 25 === 0) store.putKV(CHECKED_KEY, checked);
       }
-      try {
-        // a list up to a week old is fine here (the daily-index watch adds today's filings):
-        // a company whose newest DEPTH filings are all saved costs no request at all
-        const company = await getCompany(low, String(c.cik), { maxAge: CHECK_TTL });
-        // the newest DEPTH originals (amendments rarely carry full statements)
-        const wanted = company.filings.filter((f) => !/\/A$/i.test(f.form || '')).slice(0, DEPTH);
-        let had = 0;
-        for (const filing of wanted) {
-          if (store.hasFiling(filing.accession)) had++;
-          else if (await saveLatest(company, filing)) had++;
-          else state.skipped++;
-        }
-        if (!wanted.length || had === wanted.length) state.done++;
-      } catch (err) {
-        state.failed++;
-        console.warn(`crawl ${c.ticker} (CIK ${c.cik}): ${err.message}`);
-      }
-      checked[c.cik] = new Date().toISOString();
-      if (state.position % 25 === 0) store.putKV(CHECKED_KEY, checked);
-    }
+    };
+    await Promise.all(Array.from({ length: LANES }, lane));
     store.putKV(CHECKED_KEY, checked);
     clearInterval(timer);
     logProgress();
