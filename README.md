@@ -82,7 +82,8 @@ data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.z
 data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.zst           一份財報一個評分（約 0.5 KB）
 data/store/documentation.json                                             標準科目的 SEC 定義，全站一份（不再每份財報重複存）
 data/store/companies/<CIK 10 碼>.json                                      每家公司的 EDGAR 申報清單（裁剪過的 submissions）：財報頁左側清單、爬蟲比對用
-data/bars/<來源>/<SYMBOL>.json.br                                         自製 ETF 的日線快取，一檔一檔（.gitignore）
+data/bars/<來源>/<SYMBOL>/<年>.zst                                        自製 ETF 的日線，一個代號一年一檔（欄式 zstd，約 2.5 KB）；過去的年份寫完就不再動
+data/bars/<來源>/<SYMBOL>/meta.json                                       代號、來源、幣別、抓取時間、分割調整（adjust）
 data/cache.sqlite                                                         快取：代號表、申報清單、市場快照…（.gitignore）
 ```
 
@@ -416,9 +417,11 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
   （`@stoqey/ib`，`reqHistoricalData` 日線、TRADES；只讀歷史資料、不碰帳戶；TWS 要開 API，10 分鐘 60 次限制）→ ③ Yahoo Finance。
   每檔獨立走這條鏈：前一個來源查不到或逾時就換下一個，表格會標各檔實際來源。裸代號在 TradingView 可能對到別國掛牌（COCO → 印尼），
   所以非美國交易所的結果會改以 NASDAQ / NYSE / AMEX / OTC 前綴重查。
-  日線存在 `data/bars/<來源>/<SYMBOL>.json.br`（[barStore.js](server/lib/barStore.js)）：盤中 30 分鐘內視為新鮮；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路；
+  日線存在 `data/bars/<來源>/<SYMBOL>/<年>.zst`（[barStore.js](server/lib/barStore.js)），一年一檔：日期存成日差、價格存成相對前一收盤的定點整數再 zstd，是原本 row JSON + brotli 的一半；
+  過去的年份寫完就不再動，平常只有當年的檔在長（進 git 時每次 commit 只有幾 KB 的差異）。盤中 30 分鐘內視為新鮮；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路；
   最近讀過的 400 檔解碼後留在記憶體，同一個籃子連開是 0 ms。過期時**只抓最後一根之後的幾天**（往前多抓 7 天核對）接上去，不重抓整段 10 年——三個來源都支援（TradingView 指定根數、TWS 指定天數、Yahoo 指定起日）；
-  核對段的收盤價對不上（期間發生分割、來源改了調整）就整段重抓。一個月沒人讀的檔啟動時清掉。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
+  盤中停機存下的最後一根還沒收完，重開時允許它跟核對段不同（只重寫那一年）。核對段對不上（期間發生分割）才整段重抓，但重抓回來**不改歷史檔**：整段差一個固定倍數就在 `meta.json` 的 `adjust` 記一筆 `{ date, price, volume }`，讀的時候把該日之前的價量乘上去；
+  只有對不成一個倍數的資料修訂才重寫牽涉到的那幾年。一個月沒人讀的檔啟動時清掉。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
 - **K 線圖（預設：Advanced Charts）**：伺服器把各成分股日線組成指數後餵給 TradingView 授權版 **Advanced Charts**
   （`charting_library` 放在 `web/assets/tradingview/`，後端以 `/tradingview/` 提供、Vite 開發模式代理過去；資料由 `web/src/tvDatafeed.js`
   以 Datafeed API 餵入，大盤 ETF 以 Overlay 指標疊同一價格軸，週／月線由函式庫從日線合成），沒有這個資料夾時用開源的
