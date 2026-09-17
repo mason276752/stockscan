@@ -117,11 +117,14 @@ jobs:
           path: data-repo/data/bars/**/head.zst
           key: bars-head-${{ github.run_id }}
           restore-keys: bars-head-
+      # (the job turns TradingView off for the server-side tools - this is
+      # the one step that needs it on)
       - name: Fetch this year's bars from TradingView
         if: github.event_name != 'push' || steps.bars.outputs.cache-matched-key == ''
         run: npm run fetch:bars
         continue-on-error: true
         env:
+          TV_ENABLED: '1'
           STOCKSCAN_BARS_CRAWL_PARALLEL: '8'
 
       # the store as it is now, as one more commit on the data ref
