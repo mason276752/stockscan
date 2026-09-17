@@ -15,6 +15,7 @@ import BasketPage from './components/BasketPage.vue';
 import ScoreCard from './components/ScoreCard.vue';
 import { isWatched, toggleWatch, watchlist } from './watchlist';
 import { baskets } from './baskets';
+import { bigMoney, dateLocale, isZh, locale, LOCALES, pick, t } from './i18n';
 
 // background crawl progress (server-side), shown in the header
 const status = ref(null);
@@ -29,14 +30,14 @@ const isStatic = api.isStatic;
 const crawlText = computed(() => {
   if (status.value?.static) {
     const m = status.value.meta;
-    return `純前端版 · ${Number(m.filings || 0).toLocaleString()} 份財報，資料至 ${m.builtAt ? new Date(m.builtAt).toLocaleDateString() : '—'}（沒有伺服器：不會抓新申報，也沒有股價）`;
+    return t('crawl.static', { n: Number(m.filings || 0).toLocaleString(), date: m.builtAt ? new Date(m.builtAt).toLocaleDateString(dateLocale.value) : '—' });
   }
   const c = status.value?.crawler;
   if (!c?.enabled) return '';
   const saved = status.value.store.filings.toLocaleString();
-  const watchNote = c.lastWatch ? ` · 新申報監看 ${new Date(c.lastWatch).toLocaleTimeString()}${c.watched ? `，今起已抓 ${c.watched} 份` : ''}` : '';
-  if (c.phase === 'sweep') return `背景下載最近 ${c.depth || 5} 期財報 ${c.position.toLocaleString()} / ${c.total.toLocaleString()} 家${c.current ? ` · ${c.current}` : ''} · 已存 ${saved} 份${watchNote}`;
-  if (c.phase === 'watch') return `已存 ${saved} 份財報 · 監看 EDGAR 新申報中${watchNote}`;
+  const watchNote = c.lastWatch ? t('crawl.watchNote', { time: new Date(c.lastWatch).toLocaleTimeString(dateLocale.value), watched: c.watched ? t('crawl.watched', { n: c.watched }) : '' }) : '';
+  if (c.phase === 'sweep') return t('crawl.sweep', { depth: c.depth || 5, position: c.position.toLocaleString(), total: c.total.toLocaleString(), current: c.current ? ` · ${c.current}` : '', saved, watch: watchNote });
+  if (c.phase === 'watch') return t('crawl.watch', { saved, watch: watchNote });
   return '';
 });
 
@@ -65,11 +66,11 @@ async function refreshFilings() {
     const added = fresh.filings.filter((f) => !before.has(f.accession));
     company.value = fresh;
     refreshMessage.value = added.length
-      ? `新增 ${added.length} 份：${added.map((f) => `${f.form} ${f.fiscalYear} ${f.fiscalPeriod}`).join('、')}`
-      : `沒有新申報（SEC 清單 ${new Date(fresh.filingsUpdatedAt).toLocaleTimeString()}）`;
+      ? t('refresh.added', { n: added.length, list: added.map((f) => `${f.form} ${f.fiscalYear} ${f.fiscalPeriod}`).join(t('sep')) })
+      : t('refresh.none', { time: new Date(fresh.filingsUpdatedAt).toLocaleTimeString(dateLocale.value) });
     if (added.length && !filing.value?.quartersYear) await loadFiling(added[0]);
   } catch (e) {
-    refreshMessage.value = `更新失敗：${e.message}`;
+    refreshMessage.value = t('refresh.failed', { msg: e.message });
   } finally {
     refreshing.value = false;
   }
@@ -86,7 +87,6 @@ const showConcept = ref(false);
 // rolled up where the filer tagged a line only per member
 const simple = ref(localStorage.getItem('stockscan.simple') !== '0');
 watch(simple, (v) => localStorage.setItem('stockscan.simple', v ? '1' : '0'));
-const lang = ref('zh');
 const view = ref('current'); // current = only the filing's own period | all = every column in the filing
 
 // financial indicators page
@@ -194,12 +194,7 @@ watch([tab, indicatorsParams], ([t, p], [, prev]) => {
   loadIndicators();
 });
 
-const TABS = [
-  ['balance_sheet', '資產負債表'],
-  ['income_statement', '損益表'],
-  ['cash_flow', '現金流量表'],
-  ['equity', '股東權益變動表'],
-];
+const TABS = ['balance_sheet', 'income_statement', 'cash_flow', 'equity'];
 const isIndicators = computed(() => tab.value === 'indicators');
 
 // score of the selected filing, shown on the indicators tab
@@ -239,7 +234,7 @@ function openBrowse(params) {
   browseParams.value = { cat: 'sic', code: '', afs: '', etf: '', ...params };
   page.value = 'browse';
 }
-const fmtFloat = (v) => (v >= 1e12 ? `${(v / 1e12).toFixed(2)} 兆美元` : v >= 1e8 ? `${Math.round(v / 1e8).toLocaleString()} 億美元` : `${Math.round(v / 1e6).toLocaleString()} 百萬美元`);
+const fmtFloat = (v) => `${bigMoney(v)} ${t('usd')}`;
 
 // From the search box or a browse list: show the statements page for that company.
 function openCompany(idOrRow) {
@@ -288,7 +283,7 @@ async function loadFiling(f) {
 async function loadQuarters(year) {
   error.value = null;
   loadingFiling.value = true;
-  filing.value = { accession: `q4-${year}`, form: 'Q4 推算', fiscalYear: year, fiscalPeriod: 'Q4', quartersYear: year };
+  filing.value = { accession: `q4-${year}`, form: 'Q4*', fiscalYear: year, fiscalPeriod: 'Q4', quartersYear: year };
   try {
     data.value = await api.quarters(String(company.value.cik), year);
     if (!data.value.statements[tab.value] && !tab.value.startsWith('role:') && tab.value !== 'indicators' && tab.value !== 'valuation' && tab.value !== 'chart') tab.value = 'income_statement';
@@ -307,13 +302,13 @@ const jsonUrl = computed(() => {
   return api.filingUrl(data.value.filing.cik, data.value.filing.accession, view.value);
 });
 
-// switching 本期 / 全部 reloads the same filing (fast: both are served from cache)
+// switching current / all reloads the same filing (fast: both are served from cache)
 watch(view, () => {
   if (filing.value && !filing.value.quartersYear) loadFiling(filing.value);
 });
 
 // Keep the selection in the URL so a view can be bookmarked / shared. Switching
-// between 財報 and 分類瀏覽 pushes a history entry so the browser's Back
+// between the report and browse pages pushes a history entry so the browser's Back
 // button returns to the list you came from.
 let lastPage = page.value;
 let restoring = false;
@@ -408,17 +403,20 @@ onMounted(() => {
 <template>
   <div class="app">
     <header>
-      <h1>stockscan <span class="muted">SEC Inline XBRL 財報瀏覽</span></h1>
+      <h1>stockscan <span class="muted">{{ t('header.subtitle') }}</span></h1>
       <nav class="nav">
-        <button :class="{ active: page === 'report' }" @click="page = 'report'">財報</button>
-        <button :class="{ active: page === 'browse' }" @click="page = 'browse'">分類瀏覽</button>
-        <button :class="{ active: page === 'screen' }" @click="openScreen">尋找股票</button>
-        <button :class="{ active: page === 'watch' }" @click="page = 'watch'">觀察名單<span v-if="watchlist.items.length" class="count">{{ watchlist.items.length }}</span></button>
-        <button :class="{ active: page === 'basket' }" @click="page = 'basket'">自製 ETF<span v-if="baskets.items.length" class="count">{{ baskets.items.length }}</span></button>
+        <button :class="{ active: page === 'report' }" @click="page = 'report'">{{ t('nav.report') }}</button>
+        <button :class="{ active: page === 'browse' }" @click="page = 'browse'">{{ t('nav.browse') }}</button>
+        <button :class="{ active: page === 'screen' }" @click="openScreen">{{ t('nav.screen') }}</button>
+        <button :class="{ active: page === 'watch' }" @click="page = 'watch'">{{ t('nav.watch') }}<span v-if="watchlist.items.length" class="count">{{ watchlist.items.length }}</span></button>
+        <button :class="{ active: page === 'basket' }" @click="page = 'basket'">{{ t('nav.basket') }}<span v-if="baskets.items.length" class="count">{{ baskets.items.length }}</span></button>
       </nav>
       <CompanySearch @select="openCompany" />
+      <select v-model="locale" class="lang" :title="t('header.language')">
+        <option v-for="[k, name] in LOCALES" :key="k" :value="k">{{ name }}</option>
+      </select>
     </header>
-    <p v-if="crawlText" class="muted small crawl" title="啟動後在背景把每家有代號的公司最新一份 10-K / 10-Q 存到本機，之後點開就不用等下載；使用中會自動讓路">{{ crawlText }}</p>
+    <p v-if="crawlText" class="muted small crawl" :title="t('crawl.title')">{{ crawlText }}</p>
 
     <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" @basket="page = 'basket'" />
     <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" />
@@ -427,96 +425,94 @@ onMounted(() => {
 
     <template v-else>
     <p v-if="error" class="error">{{ error }}</p>
-    <p v-if="loadingCompany" class="muted">讀取公司資料…</p>
+    <p v-if="loadingCompany" class="muted">{{ t('loading.company') }}</p>
 
     <div v-if="company" class="layout">
       <aside class="panel">
         <h2>
-          <button class="star" :class="{ on: isWatched(company.cik) }" :title="isWatched(company.cik) ? '從觀察名單移除' : '加入觀察名單'" @click="toggleWatch(company)">{{ isWatched(company.cik) ? '★' : '☆' }}</button>
+          <button class="star" :class="{ on: isWatched(company.cik) }" :title="isWatched(company.cik) ? t('watch.remove') : t('watch.add')" @click="toggleWatch(company)">{{ isWatched(company.cik) ? '★' : '☆' }}</button>
           {{ company.name }}
         </h2>
         <div class="muted small">
           {{ company.tickers.join(', ') }} · CIK {{ company.cik }}
-          <span v-if="company.fiscalYearEnd"> · 會計年度結束 {{ company.fiscalYearEnd.slice(0, 2) }}/{{ company.fiscalYearEnd.slice(2) }}</span>
+          <span v-if="company.fiscalYearEnd"> · {{ t('company.fye') }} {{ company.fiscalYearEnd.slice(0, 2) }}/{{ company.fiscalYearEnd.slice(2) }}</span>
           <div v-if="company.sic">
-            <a :href="`?page=browse&cat=sic&code=${company.sic}`" title="看同產業的公司" @click.prevent="openBrowse({ cat: 'sic', code: String(company.sic) })">
-              SIC {{ company.sic }} {{ company.sicZh || company.sicDescription }}
+            <a :href="`?page=browse&cat=sic&code=${company.sic}`" :title="t('company.sameIndustry')" @click.prevent="openBrowse({ cat: 'sic', code: String(company.sic) })">
+              SIC {{ company.sic }} {{ isZh ? company.sicZh || company.sicDescription : company.sicDescription || company.sicZh }}
             </a>
           </div>
           <div v-if="company.filer?.filerStatus">
-            <a :href="`?page=browse&cat=filer&afs=${company.filer.afs}`" title="看同一申報身分的公司" @click.prevent="openBrowse({ cat: 'filer', afs: company.filer.afs })">{{ company.filer.filerStatus.zh }}</a><span v-if="company.filer.wksi"> · WKSI</span>
-            <span v-if="company.filer.publicFloat != null"> · 公眾流通市值 {{ fmtFloat(company.filer.publicFloat) }}<span v-if="company.filer.publicFloatAdjusted" title="申報值疑似單位錯誤，已除以 1,000">*</span>（{{ company.filer.publicFloatDate }}）</span>
+            <a :href="`?page=browse&cat=filer&afs=${company.filer.afs}`" :title="t('company.sameFiler')" @click.prevent="openBrowse({ cat: 'filer', afs: company.filer.afs })">{{ pick(company.filer.filerStatus, 'zh', 'label') }}</a><span v-if="company.filer.wksi"> · WKSI</span>
+            <span v-if="company.filer.publicFloat != null"> · {{ t('company.publicFloat') }} {{ fmtFloat(company.filer.publicFloat) }}<span v-if="company.filer.publicFloatAdjusted" :title="t('company.floatAdjusted')">*</span>（{{ company.filer.publicFloatDate }}）</span>
           </div>
         </div>
         <h3>
-          選擇年度 / 季度
-          <button v-if="!isStatic" class="refresh" :disabled="refreshing" title="重新向 SEC 讀取申報清單，今天剛發布的 10-Q / 10-K 會出現在這裡" @click="refreshFilings">
-            {{ refreshing ? '更新中…' : '↻ 更新' }}
+          {{ t('filings.pick') }}
+          <button v-if="!isStatic" class="refresh" :disabled="refreshing" :title="t('filings.refreshTitle')" @click="refreshFilings">
+            {{ refreshing ? t('filings.refreshing') : t('filings.refresh') }}
           </button>
         </h3>
         <p v-if="refreshMessage" class="small refresh-msg">{{ refreshMessage }}</p>
         <FilingPicker :filings="company.filings" :selected="filing?.accession" @select="loadFiling" @select-quarters="loadQuarters" />
-        <p class="muted small">FY = 年報 (10-K / 20-F / 40-F)，Q1–Q3 = 季報 (10-Q)。Q4 數字請看年報。</p>
-        <p class="muted small">清單讀取時間 {{ new Date(company.filingsUpdatedAt).toLocaleString() }}<span v-if="company.filingsStale">（SEC 連不上，顯示舊清單）</span></p>
+        <p class="muted small">{{ t('filings.legend') }}</p>
+        <p class="muted small">{{ t('filings.listTime', { time: new Date(company.filingsUpdatedAt).toLocaleString(dateLocale) }) }}<span v-if="company.filingsStale">{{ t('filings.stale') }}</span></p>
       </aside>
 
       <main>
-        <p v-if="loadingFiling" class="muted">下載並解析 {{ filing?.form }} {{ filing?.fiscalYear }} {{ filing?.fiscalPeriod }}…</p>
+        <p v-if="loadingFiling" class="muted">{{ t('loading.filing', { form: filing?.form, year: filing?.fiscalYear, period: filing?.fiscalPeriod }) }}</p>
 
         <template v-if="data && !loadingFiling">
           <div class="panel meta">
             <div v-if="data.derived">
-              <strong>FY{{ data.filing.fiscalYear }} 各季推算</strong>
-              · Q4 = FY − Q1 − Q2 − Q3 · 來源：
+              <strong>{{ t('derived.head', { year: data.filing.fiscalYear }) }}</strong>
+              · Q4 = FY − Q1 − Q2 − Q3 · {{ t('derived.sources') }}
               <template v-for="(src, p, i) in data.sources" :key="p">
-                <span v-if="i">、</span>
+                <span v-if="i">{{ t('sep') }}</span>
                 <a :href="src.viewerUrl" target="_blank" rel="noopener">{{ p }} {{ src.form }}</a>
               </template>
             </div>
             <div v-else>
               <strong>{{ data.filing.form }}</strong>
-              {{ data.filing.fiscalPeriod === 'FY' ? `FY${data.filing.fiscalYear}` : `FY${data.filing.fiscalYear} ${data.filing.fiscalPeriod}` }} · 期末 {{ data.filing.periodEnd }} · 申報日 {{ data.filing.filingDate }}
+              {{ data.filing.fiscalPeriod === 'FY' ? `FY${data.filing.fiscalYear}` : `FY${data.filing.fiscalYear} ${data.filing.fiscalPeriod}` }} · {{ t('meta.periodEnd') }} {{ data.filing.periodEnd }} · {{ t('meta.filingDate') }} {{ data.filing.filingDate }}
             </div>
             <div class="links">
-              <a v-if="!data.derived" :href="data.filing.viewerUrl" target="_blank" rel="noopener">SEC 原始 Inline XBRL</a>
+              <a v-if="!data.derived" :href="data.filing.viewerUrl" target="_blank" rel="noopener">{{ t('meta.secLink') }}</a>
               <a v-if="!isStatic" :href="jsonUrl" target="_blank" rel="noopener">JSON</a>
               <span class="muted small">{{ data.stats.facts }} facts<template v-if="data.stats.contexts"> · {{ data.stats.contexts }} contexts</template></span>
             </div>
           </div>
           <p v-if="data.view === 'current' && !isIndicators && !isValuation" class="muted small note">
-            只看本期：資產負債表 = 本期末；損益表 = {{ data.filing.form?.startsWith('10-Q') ? '本季三個月' : '全年度' }}；現金流量表、權益變動表一欄到底 —— 「（期初）」列是期初餘額、「（期末）」列是期末餘額、其餘列是本期發生數。
-            <template v-if="data.previous">10-Q 的現金流量表只有年初至今，本季 = 年初至今 − 上一季（{{ data.previous.fiscalYear }} {{ data.previous.fiscalPeriod }}）年初至今，期初餘額 = 上一季期末，這些欄標「推算」。</template>
-            <template v-for="n in data.notes.filter((x) => /找不到/.test(x))" :key="n"> {{ n }}</template>
-            比較欄位請切換「欄位 → 申報書全部欄位」。
+            {{ t('note.current', { is: data.filing.form?.startsWith('10-Q') ? t('note.currentQ') : t('note.currentFY') }) }}
+            <template v-if="data.previous">{{ t('note.previous', { year: data.previous.fiscalYear, period: data.previous.fiscalPeriod }) }}</template>
+            <template v-for="n in data.notes.filter((x) => x.code === 'ytdOnly')" :key="n.title"> {{ t('note.ytdOnly', n) }}</template>
+            {{ t('note.compare') }}
           </p>
-          <p v-if="data.derived" class="muted small note">
-            損益表 / 現金流量表：Q1–Q3 取自 10-Q（三個月欄或年初至今欄相減），Q4 = 10-K 全年 − 前三季。每股金額以相減近似（以 ≈ 標示）；股數等不可相減的項目 Q4 留空。資產負債表為各季期末餘額。股東權益變動表不提供推算。
-          </p>
+          <p v-if="data.derived" class="muted small note">{{ t('note.derived') }}</p>
 
           <div class="toolbar">
             <div class="tabs">
-              <button v-for="[key, name] in TABS" :key="key" :class="{ active: tab === key }" :disabled="!data.statements[key]" @click="tab = key">
-                {{ name }}
+              <button v-for="key in TABS" :key="key" :class="{ active: tab === key }" :disabled="!data.statements[key]" @click="tab = key">
+                {{ t(`stmt.${key}`) }}
               </button>
-              <button :class="{ active: tab === 'indicators' }" @click="tab = 'indicators'">財務指標</button>
-              <button :class="{ active: tab === 'valuation' }" @click="tab = 'valuation'">股價估值</button>
-              <button :class="{ active: tab === 'chart' }" title="TradingView 的 K 線圖（TradingView 自己的資料與指標）" @click="tab = 'chart'">K 線圖</button>
+              <button :class="{ active: tab === 'indicators' }" @click="tab = 'indicators'">{{ t('tab.indicators') }}</button>
+              <button :class="{ active: tab === 'valuation' }" @click="tab = 'valuation'">{{ t('tab.valuation') }}</button>
+              <button :class="{ active: tab === 'chart' }" :title="t('tab.chartTitle')" @click="tab = 'chart'">{{ t('tab.chart') }}</button>
               <select v-if="otherStatements.length" :value="tab.startsWith('role:') ? tab : ''" @change="tab = $event.target.value">
-                <option value="" disabled>其他報表…</option>
+                <option value="" disabled>{{ t('tab.other') }}</option>
                 <option v-for="s in otherStatements" :key="s.role" :value="`role:${s.role}`">{{ s.title }}</option>
               </select>
             </div>
             <div v-if="isIndicators" class="options">
               <label v-if="indicators?.quarterly !== false">
-                檢視
+                {{ t('ind.view') }}
                 <select v-model="indMode">
-                  <option value="quarter">逐季</option>
-                  <option value="year">逐年（近四季合計）</option>
-                  <option value="same">同季比較（歷年同一季）</option>
+                  <option value="quarter">{{ t('ind.modeQuarter') }}</option>
+                  <option value="year">{{ t('ind.modeYear') }}</option>
+                  <option value="same">{{ t('ind.modeSame') }}</option>
                 </select>
               </label>
               <label v-if="indMode !== 'quarter' || indicators?.quarterly === false">
-                年數
+                {{ t('ind.years') }}
                 <select v-model.number="indCountY">
                   <option :value="3">3</option>
                   <option :value="5">5</option>
@@ -525,7 +521,7 @@ onMounted(() => {
                 </select>
               </label>
               <label v-else>
-                季數
+                {{ t('ind.quarters') }}
                 <select v-model.number="indCountQ">
                   <option :value="8">8</option>
                   <option :value="12">12</option>
@@ -535,18 +531,18 @@ onMounted(() => {
               </label>
               <template v-if="indMode !== 'year' && indicators?.quarterly !== false">
                 <label>
-                  年化
+                  {{ t('ind.annualize') }}
                   <select v-model="indBasis">
-                    <option value="x4">單季 ×4</option>
-                    <option value="ttm">近四季合計</option>
+                    <option value="x4">{{ t('ind.x4') }}</option>
+                    <option value="ttm">{{ t('ind.ttm') }}</option>
                   </select>
                 </label>
-                <label><input v-model="indAnnualizeAmounts" type="checkbox" /> 金額列也年化</label>
+                <label><input v-model="indAnnualizeAmounts" type="checkbox" /> {{ t('ind.annualizeAmounts') }}</label>
               </template>
             </div>
             <div v-else-if="isValuation" class="options">
               <label>
-                {{ valuation?.quarterly === false ? '年數' : '季數' }}
+                {{ valuation?.quarterly === false ? t('ind.years') : t('ind.quarters') }}
                 <select v-model.number="valCount">
                   <option :value="8">8</option>
                   <option :value="12">12</option>
@@ -558,115 +554,104 @@ onMounted(() => {
             </div>
             <div v-else-if="isChart" class="options">
               <label>
-                區間
+                {{ t('chart.range') }}
                 <select v-model="chartRange">
-                  <option value="1M">1 月</option>
-                  <option value="3M">3 月</option>
-                  <option value="6M">6 月</option>
-                  <option value="12M">1 年</option>
-                  <option value="36M">3 年</option>
-                  <option value="61M">5 年</option>
-                  <option value="120M">10 年</option>
-                  <option value="ALL">全部</option>
+                  <option value="1M">{{ t('chart.months', { n: 1 }) }}</option>
+                  <option value="3M">{{ t('chart.months', { n: 3 }) }}</option>
+                  <option value="6M">{{ t('chart.months', { n: 6 }) }}</option>
+                  <option value="12M">{{ t('chart.years', { n: 1 }) }}</option>
+                  <option value="36M">{{ t('chart.years', { n: 3 }) }}</option>
+                  <option value="61M">{{ t('chart.years', { n: 5 }) }}</option>
+                  <option value="120M">{{ t('chart.years', { n: 10 }) }}</option>
+                  <option value="ALL">{{ t('chart.all') }}</option>
                 </select>
               </label>
               <label>
-                K 棒
+                {{ t('chart.candles') }}
                 <select v-model="chartColors">
-                  <option value="tw">紅漲綠跌</option>
-                  <option value="us">綠漲紅跌</option>
+                  <option value="tw">{{ t('chart.tw') }}</option>
+                  <option value="us">{{ t('chart.us') }}</option>
                 </select>
               </label>
-              <a v-if="tvSymbol?.symbol" :href="`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol.symbol)}`" target="_blank" rel="noopener" class="small">在 TradingView 開啟</a>
+              <a v-if="tvSymbol?.symbol" :href="`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol.symbol)}`" target="_blank" rel="noopener" class="small">{{ t('chart.openTv') }}</a>
             </div>
             <div v-else class="options">
               <label v-if="!data.derived">
-                欄位
+                {{ t('stmt.columns') }}
                 <select v-model="view">
-                  <option value="current">只看本期</option>
-                  <option value="all">申報書全部欄位</option>
+                  <option value="current">{{ t('stmt.viewCurrent') }}</option>
+                  <option value="all">{{ t('stmt.viewAll') }}</option>
                 </select>
               </label>
               <label>
-                科目
-                <select v-model="lang">
-                  <option value="zh">中文</option>
-                  <option value="en">英文</option>
-                </select>
-              </label>
-              <label>
-                單位
+                {{ t('stmt.unit') }}
                 <select v-model.number="divisor">
-                  <option :value="1">原始</option>
-                  <option :value="1e3">千</option>
-                  <option :value="1e6">百萬</option>
-                  <option :value="1e9">十億</option>
+                  <option :value="1">{{ t('stmt.unitRaw') }}</option>
+                  <option :value="1e3">{{ t('stmt.unitK') }}</option>
+                  <option :value="1e6">{{ t('stmt.unitM') }}</option>
+                  <option :value="1e9">{{ t('stmt.unitB') }}</option>
                 </select>
               </label>
-              <label><input v-model="simple" type="checkbox" title="四大報表只留合計欄，隱藏股本組成、股別、產品線等分欄；只標在分欄的數字加總計入合計" /> 簡化（只留合計欄）</label>
-              <label><input v-model="applyNegation" type="checkbox" /> 依報表顯示反號</label>
-              <label><input v-model="showConcept" type="checkbox" /> 顯示 XBRL 概念名稱</label>
+              <label><input v-model="simple" type="checkbox" :title="t('stmt.simpleTitle')" /> {{ t('stmt.simple') }}</label>
+              <label><input v-model="applyNegation" type="checkbox" /> {{ t('stmt.negation') }}</label>
+              <label><input v-model="showConcept" type="checkbox" /> {{ t('stmt.concept') }}</label>
             </div>
           </div>
 
           <template v-if="isIndicators">
             <ScoreCard v-if="filingScore && !filing?.quartersYear" :score="filingScore" />
-            <p v-if="loadingIndicators" class="muted">計算到 {{ indicatorsEnd }} 為止的 {{ indCount }} {{ indMode === 'quarter' ? '期' : '年' }}指標，需下載多份申報，第一次約 20–40 秒…</p>
+            <p v-if="loadingIndicators" class="muted">{{ t('ind.loading', { end: indicatorsEnd, n: indCount, unit: indMode === 'quarter' ? t('ind.periodUnit') : t('ind.yearUnit') }) }}</p>
             <p v-else-if="indicatorsError" class="error">{{ indicatorsError }}</p>
             <template v-else-if="indicators">
               <p v-if="indicators.quarterly && indicators.mode === 'year'" class="muted small note">
-                以所選申報（{{ indicatorsEnd }}）為最後一期，每一欄 = 到該季為止連續四季的合計（例如 {{ indicators.columns.at(-1)?.sublabel || indicators.columns.at(-1)?.label }}），往前共 {{ indicators.columns.length }} 年，左舊右新。
-                餘額取該季季末，平均餘額用季末與四季前季末平均。Q4 流量 = 10-K 全年 − 前三季。
+                {{ t('ind.noteYear', { end: indicatorsEnd, example: indicators.columns.at(-1)?.sublabel || indicators.columns.at(-1)?.label, n: indicators.columns.length }) }}
                 <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <p v-else-if="indicators.quarterly && indicators.mode === 'same'" class="muted small note">
-                只看所選季度（{{ indicatorsParams.period }}）：{{ indicators.columns[0]?.label }} ～ {{ indicators.columns.at(-1)?.label }} 共 {{ indicators.columns.length }} 年同一季的單季數字，左舊右新，避開季節性直接比年增。
-                流量類指標分子換算為年（{{ indBasis === 'ttm' ? '近四季合計' : '單季 ×4' }}），分母用該季末與上季末平均。Q4 流量 = 10-K 全年 − 前三季。
+                {{ t('ind.noteSame', { period: indicatorsParams.period, from: indicators.columns[0]?.label, to: indicators.columns.at(-1)?.label, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}
                 <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <p v-else-if="indicators.quarterly" class="muted small note">
-                以所選申報（{{ indicatorsEnd }}）為最後一期，往前共 {{ indicators.columns.length }} 季，左舊右新。
-                週轉率、ROA、ROE、現金流量比率等使用流量的指標，分子皆換算為年（{{ indBasis === 'ttm' ? '近四季合計' : '單季 ×4' }}），分母用本季末與上季末平均。
-                Q4 流量 = 10-K 全年 − 前三季。
+                {{ t('ind.noteQuarter', { end: indicatorsEnd, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}
                 <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <p v-else class="muted small note">
-                年報公司：每一欄為一個會計年度，往前共 {{ indicators.columns.length }} 年，左舊右新。
+                {{ t('ind.noteAnnual', { n: indicators.columns.length }) }}
                 <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
               </p>
               <IndicatorsTable :data="indicators" :annualize-amounts="indAnnualizeAmounts" />
             </template>
           </template>
           <template v-else-if="isChart">
-            <p v-if="!company.tickers?.length" class="muted">這家公司在 EDGAR 沒有股票代號，沒有可畫的 K 線。</p>
-            <p v-else-if="!tvSymbol" class="muted">查詢 TradingView 商品代號…</p>
+            <p v-if="!company.tickers?.length" class="muted">{{ t('chart.noTicker') }}</p>
+            <p v-else-if="!tvSymbol" class="muted">{{ t('chart.lookup') }}</p>
             <template v-else>
               <p class="muted small note">
-                {{ tvSymbol.symbol }}<template v-if="tvSymbol.exchange"> · {{ tvSymbol.exchange }}</template> · TradingView 官方嵌入圖，價格、成交量與技術指標都是 TradingView 的資料；圖上可直接換週期、加指標
-                <span v-if="tvSymbol.known === false">（市場快照沒有這個代號，改用代號讓 TradingView 自行判斷交易所）</span>
+                {{ tvSymbol.symbol }}<template v-if="tvSymbol.exchange"> · {{ tvSymbol.exchange }}</template> · {{ t('chart.embedNote') }}
+                <span v-if="tvSymbol.known === false">{{ t('chart.unknown') }}</span>
               </p>
               <TvEmbedChart :expression="tvSymbol.symbol" :range="chartRange" :colors="chartColors" :height="620" volume symbol-change />
             </template>
           </template>
           <template v-else-if="isValuation">
-            <p v-if="loadingValuation" class="muted">計算到 {{ valuationParams?.year }} {{ valuationParams?.period }} 為止 {{ valCount }} 期的估值，需下載多份申報與股價，第一次約 20–40 秒…</p>
+            <p v-if="loadingValuation" class="muted">{{ t('val.loading', { year: valuationParams?.year, period: valuationParams?.period, n: valCount }) }}</p>
             <p v-else-if="valuationError" class="error">{{ valuationError }}</p>
             <ValuationPanel v-else-if="valuation" :data="valuation" :adr="valAdr" @update:adr="valAdr = $event" />
           </template>
           <template v-else>
-            <StatementTable v-if="current" :statement="current" :divisor="divisor" :apply-negation="applyNegation" :show-concept="showConcept" :lang="lang" />
-            <p v-else class="muted">這份申報沒有這張報表。</p>
+            <StatementTable v-if="current" :statement="current" :divisor="divisor" :apply-negation="applyNegation" :show-concept="showConcept" :lang="locale" />
+            <p v-else class="muted">{{ t('stmt.missing') }}</p>
           </template>
         </template>
       </main>
     </div>
 
     <div v-else-if="!loadingCompany" class="empty muted">
-      輸入股票代號開始，例如 <a href="?company=GOOGL" @click.prevent="loadCompany('GOOGL')">GOOGL</a>、
-      <a href="?company=AAPL" @click.prevent="loadCompany('AAPL')">AAPL</a>、
-      <a href="?company=TSM" @click.prevent="loadCompany('TSM')">TSM</a>，
-      或到 <a href="?page=browse" @click.prevent="page = 'browse'">分類瀏覽</a> 依產業、申報身分、ETF 成分股找公司，
-      或用 <a href="?page=screen" @click.prevent="page = 'screen'">尋找股票</a> 依最新財報的指標篩選。
+      {{ t('empty.start') }} <a href="?company=GOOGL" @click.prevent="loadCompany('GOOGL')">GOOGL</a>{{ t('sep') }}
+      <a href="?company=AAPL" @click.prevent="loadCompany('AAPL')">AAPL</a>{{ t('sep') }}
+      <a href="?company=TSM" @click.prevent="loadCompany('TSM')">TSM</a>{{ t('empty.comma') }}
+      {{ t('empty.orBrowse') }} <a href="?page=browse" @click.prevent="page = 'browse'">{{ t('nav.browse') }}</a> {{ t('empty.browseTail') }}
+      {{ t('empty.orScreen') }} <a href="?page=screen" @click.prevent="page = 'screen'">{{ t('nav.screen') }}</a> {{ t('empty.screenTail') }}
     </div>
     </template>
   </div>
@@ -680,10 +665,18 @@ onMounted(() => {
 }
 header {
   display: grid;
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: auto auto 1fr auto;
   gap: 24px;
   align-items: center;
   margin-bottom: 16px;
+}
+header .lang {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
 }
 .nav {
   display: flex;

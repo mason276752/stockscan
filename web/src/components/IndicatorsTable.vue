@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { t, tr } from '../i18n';
 
 const props = defineProps({
   data: { type: Object, required: true }, // /api/company/:id/indicators response
@@ -22,7 +23,7 @@ const OPS = { '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b
 const OP_TEXT = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
 function benchmarkText(row) {
   if (!row.benchmark) return '';
-  const unit = row.unit === '百萬' ? '' : row.unit === '%' ? '%' : ` ${row.unit}`;
+  const unit = row.unit === '百萬' ? '' : row.unit === '%' ? '%' : ` ${tr(row.unit)}`;
   return `${OP_TEXT[row.benchmark.op]} ${row.benchmark.value}${unit}`;
 }
 function verdict(row, col) {
@@ -56,12 +57,12 @@ function cell(row, col) {
 }
 
 function cellTitle(row, col) {
-  if (row.key === 'cfAdequacy' && col.values.cfAdequacyPeriods) return `以最近 ${col.values.cfAdequacyPeriods} ${props.data.quarterly ? '季' : '年'}計算`;
-  if (col.missing) return props.data.mode === 'year' && props.data.quarterly ? '這一年有季度缺 Inline XBRL 申報' : '此期沒有 Inline XBRL 申報';
+  if (row.key === 'cfAdequacy' && col.values.cfAdequacyPeriods) return t(props.data.quarterly ? 'it.adequacyQ' : 'it.adequacyY', { n: col.values.cfAdequacyPeriods });
+  if (col.missing) return props.data.mode === 'year' && props.data.quarterly ? t('it.missingYear') : t('it.missingPeriod');
   return '';
 }
 
-// rows grouped for the rowspan "類別" column
+// rows grouped for the rowspan group column
 const groups = computed(() => {
   const out = [];
   for (const r of props.data.rows) {
@@ -72,7 +73,7 @@ const groups = computed(() => {
   return out;
 });
 
-const basisLabel = computed(() => (props.data.basis === 'ttm' ? '近四季合計' : props.data.basis === 'x4' ? '單季 ×4' : '年度'));
+const basisLabel = computed(() => (props.data.basis === 'ttm' ? t('ind.ttm') : props.data.basis === 'x4' ? t('ind.x4') : t('it.annual')));
 const quarterMode = computed(() => props.data.quarterly && (props.data.mode === 'quarter' || props.data.mode === 'same'));
 
 // newest quarter (the one the user picked) is on the far right: start there
@@ -106,24 +107,24 @@ const tipStyle = computed(() => {
     <table>
       <thead>
         <tr>
-          <th class="group">類別</th>
-          <th class="name">財務比率</th>
-          <th v-for="c in data.columns" :key="c.label" class="num" :class="{ missing: c.missing }" :title="c.periodEnd ? `期末 ${c.periodEnd}` : ''">
+          <th class="group">{{ t('it.group') }}</th>
+          <th class="name">{{ t('it.ratio') }}</th>
+          <th v-for="c in data.columns" :key="c.label" class="num" :class="{ missing: c.missing }" :title="c.periodEnd ? `${t('meta.periodEnd')} ${c.periodEnd}` : ''">
             <div>{{ c.label }}</div>
-            <div class="muted end">{{ c.sublabel || c.periodEnd || '無資料' }}</div>
+            <div class="muted end">{{ c.sublabel || c.periodEnd || t('it.noData') }}</div>
           </th>
         </tr>
       </thead>
       <tbody>
         <template v-for="g in groups" :key="g.name">
           <tr v-for="(row, i) in g.rows" :key="row.key" :class="{ first: i === 0, flow: row.kind === 'flow', hover: hoverKey === row.key }" @mouseenter="hoverKey = row.key" @mouseleave="hoverKey = null">
-            <td v-if="i === 0" class="group" :rowspan="g.rows.length">{{ g.name }}</td>
+            <td v-if="i === 0" class="group" :rowspan="g.rows.length">{{ tr(g.name) }}</td>
             <td class="name" @mouseenter="showTip(row, $event)" @mouseleave="hideTip">
-              {{ row.name }}
-              <span class="unit muted">{{ row.unit === '百萬' ? '百萬' : row.unit }}</span>
-              <span v-if="row.annualized && quarterMode" class="badge" :title="`分子為 ${basisLabel}`">年化</span>
+              {{ tr(row.name) }}
+              <span class="unit muted">{{ tr(row.unit) }}</span>
+              <span v-if="row.annualized && quarterMode" class="badge" :title="t('it.numerator', { basis: basisLabel })">{{ t('it.annualized') }}</span>
               <span v-else-if="row.kind === 'flow' && annualizeAmounts && quarterMode" class="badge">{{ basisLabel }}</span>
-              <span v-if="row.benchmark" class="bench muted" :title="`標準：${benchmarkText(row)}`">{{ benchmarkText(row) }}</span>
+              <span v-if="row.benchmark" class="bench muted" :title="`${t('it.benchmark')}${benchmarkText(row)}`">{{ benchmarkText(row) }}</span>
             </td>
             <td v-for="c in data.columns" :key="c.label" class="num" :class="[{ neg: cell(row, c).neg, missing: c.missing }, verdict(row, c)]" :title="cellTitle(row, c)">
               {{ cell(row, c).text }}
@@ -134,11 +135,11 @@ const tipStyle = computed(() => {
     </table>
     <Teleport to="body">
       <div v-if="tip" class="tip" :style="tipStyle">
-        <div class="tip-en">{{ tip.row.name }}</div>
-        <div class="tip-doc">{{ tip.row.formula }}</div>
-        <div v-if="tip.row.benchmark" class="tip-doc">標準：{{ benchmarkText(tip.row) }}（符合的格子綠底、不符合紅底）</div>
-        <div v-if="tip.row.annualized && quarterMode" class="tip-doc">年化方式：{{ basisLabel }}；平均餘額 = (本季末 + 上季末) ÷ 2</div>
-        <div v-else-if="tip.row.annualized && data.mode === 'year' && data.quarterly" class="tip-doc">流量為四季合計；平均餘額 = (期末 + 四季前期末) ÷ 2</div>
+        <div class="tip-en">{{ tr(tip.row.name) }}</div>
+        <div class="tip-doc">{{ tr(tip.row.formula) }}</div>
+        <div v-if="tip.row.benchmark" class="tip-doc">{{ t('it.benchmark') }}{{ benchmarkText(tip.row) }}{{ t('it.benchmarkTip') }}</div>
+        <div v-if="tip.row.annualized && quarterMode" class="tip-doc">{{ t('it.annualTipQ', { basis: basisLabel }) }}</div>
+        <div v-else-if="tip.row.annualized && data.mode === 'year' && data.quarterly" class="tip-doc">{{ t('it.annualTipY') }}</div>
       </div>
     </Teleport>
   </div>

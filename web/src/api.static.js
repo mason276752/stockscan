@@ -17,8 +17,9 @@ import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
 import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
 import { basketRequest, runBasket } from '../../server/lib/basket.js';
 import * as data from './staticData';
+import { t } from './i18n';
 
-const unavailable = (what) => Promise.reject(new Error(`純前端版沒有${what}（需要伺服器版）`));
+const unavailable = (what) => Promise.reject(new Error(t('static.unavailable', { what: t(what) })));
 
 // ticker / CIK -> the company record of the index
 async function companyOf(id) {
@@ -32,14 +33,14 @@ async function companyOf(id) {
     cik = row.cik;
   }
   const c = all[cik];
-  if (!c) throw new Error(`這家公司（CIK ${cik}）的財報不在這份靜態資料裡`);
+  if (!c) throw new Error(t('static.noCompany', { cik }));
   if (!c.filings[0]?.viewerUrl) for (const f of c.filings) Object.assign(f, { cik, isInlineXBRL: true }, f.primaryDocument ? filingUrls(cik, f.accession, f.primaryDocument) : {});
   return c;
 }
 
 // a saved filing, as the server hands it out
 async function loadFiling(f) {
-  if (!f?.file) throw new Error(`${f?.accession || '這份申報'} 沒有存檔`);
+  if (!f?.file) throw new Error(t('static.notSaved', { what: f?.accession || t('static.thisFiling') }));
   const [rec, docs] = await Promise.all([data.readZst('filings', `/data/store/${f.file}`), data.documentation()]);
   return applyZh(reclassify(fatten(rec.data, docs)));
 }
@@ -92,7 +93,7 @@ export const api = {
     return buildIndicators(loadFiling, c, { year, period, n, basis, mode });
   },
   indicatorsUrl: () => null,
-  valuation: () => unavailable('股價估值：估值要抓每季的股價'),
+  valuation: () => unavailable('static.whatValuation'),
   valuationUrl: () => null,
   async status() {
     const m = await data.meta();
@@ -147,7 +148,7 @@ export const api = {
   async etfHoldings(ticker) {
     const e = await data.etfs();
     const h = e.holdings[String(ticker).toUpperCase()];
-    if (!h) throw new Error(`純前端版只有 build 時放進來的 ETF 成分（${e.popular.join('、')}）`);
+    if (!h) throw new Error(t('static.onlyEtfs', { list: e.popular.join(t('sep')) }));
     return h;
   },
   etfHoldingsUrl: () => null,
@@ -156,11 +157,11 @@ export const api = {
     const h = await api.etfHoldings(ticker);
     return {
       etf: h.etf,
-      source: `N-PORT（${h.filing?.reportDate || '—'} 持股，build 時的快照）`,
+      source: `N-PORT (${h.filing?.reportDate || '—'})`,
       asOf: h.filing?.reportDate || null,
       holdings: h.holdings.filter((x) => x.symbol && x.pctVal > 0 && x.assetCat === 'EC').map((x) => ({ symbol: x.symbol, name: x.name, weight: x.pctVal, shares: x.balance ?? null, cik: x.cik })),
       nport: true,
-      note: '純前端版沒有發行商每日持股，用的是 build 時的季報成分',
+      note: 'static build: the N-PORT holdings of the build stand in for the issuer daily file',
       fallbackErrors: [],
       fetchedAt: null,
     };
@@ -169,34 +170,34 @@ export const api = {
   // to the build's day), else only TradingView's own widget
   async quotesStatus() {
     const m = await data.meta();
-    return { static: true, bars: m.bars || null, builtAt: m.builtAt, tv: { enabled: false, connected: false }, ib: { enabled: false, connected: false }, source: m.bars ? 'TradingView（build 時的日線）' : 'TradingView widget', tvLibrary: false };
+    return { static: true, bars: m.bars || null, builtAt: m.builtAt, tv: { enabled: false, connected: false }, ib: { enabled: false, connected: false }, source: 'TradingView', tvLibrary: false };
   },
   async tvSymbol(ticker) {
     const t = String(ticker).toUpperCase().replace(/\./g, '-');
     const m = (await data.tvSymbols())[t];
     return m ? { ticker: t, ...m, known: true } : { ticker: t, symbol: t.replace(/-/g, '.'), exchange: null, known: false };
   },
-  ibConnect: () => unavailable('TWS 連線'),
+  ibConnect: () => unavailable('static.whatTws'),
   // ten years of daily bars from the files the build shipped: the finished
   // years (immutable, cached for good) plus this year's head, split
   // adjustments applied - the same series the server hands out
   async bars(symbol) {
     const m = await data.meta();
-    if (!m.bars) return unavailable('日線');
+    if (!m.bars) return unavailable('static.whatBars');
     const s = String(symbol).toUpperCase().replace(/[^A-Z0-9.\-=^]/gi, '_');
     const dir = `/data/bars/tv2/${s}`;
     let meta;
     try {
       meta = await data.readBarsMeta(`${dir}/meta.json`);
     } catch (err) {
-      throw new Error(err.status === 404 ? `這份靜態資料裡沒有 ${s} 的日線` : err.message);
+      throw new Error(err.status === 404 ? t('static.noBars', { s }) : err.message);
     }
     const [years, head] = await Promise.all([
       Promise.all((meta.years || []).map((y) => data.readBarsZst(`${dir}/${y}.zst`, { immutable: true }))),
       data.readBarsZst(`${dir}/head.zst`).catch(() => null),
     ]);
     const raw = years.flatMap(decodeBars).concat(head ? decodeBars(head) : []);
-    if (!raw.length) throw new Error(`${s} 沒有日線資料`);
+    if (!raw.length) throw new Error(t('static.noBars', { s }));
     return { symbol: s, source: meta.source || 'TradingView', currency: meta.currency || 'USD', resolved: meta.resolved || null, fetchedAt: head?.fetchedAt || null, days: adjusted(raw, meta.adjust || []) };
   },
   // the custom-ETF index, computed here from those bars

@@ -5,6 +5,7 @@
 // bar by bar (candles included); the benchmark rides along as a compare
 // symbol. TradingView allows at most 10 tickers in one spread.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { locale, t } from '../i18n';
 
 const props = defineProps({
   expression: { type: String, required: true }, // spread symbol
@@ -35,7 +36,7 @@ function mount() {
     timezone: 'America/New_York',
     theme: 'light',
     style: '1',
-    locale: 'zh_TW',
+    locale: locale.value === 'zh' ? 'zh_TW' : 'en',
     allow_symbol_change: props.symbolChange,
     hide_volume: !props.volume,
     withdateranges: true,
@@ -75,13 +76,13 @@ onBeforeUnmount(() => {
   clearTimeout(timer);
   if (el.value) el.value.innerHTML = '';
 });
-watch(() => [props.expression, props.compare, props.range, props.colors, props.volume, props.symbolChange], remount);
+watch(() => [props.expression, props.compare, props.range, props.colors, props.volume, props.symbolChange, locale.value], remount);
 </script>
 
 <template>
   <div class="tv">
     <div ref="el" class="frame" :style="{ height: `${height}px` }"></div>
-    <p v-if="failed" class="muted small">載入不了 TradingView 的圖（需要能連到 tradingview.com）。</p>
+    <p v-if="failed" class="muted small">{{ t('tv.failed') }}</p>
   </div>
 </template>
 

@@ -5,6 +5,7 @@ import { createBasket } from '../baskets';
 import CompanyTable from './CompanyTable.vue';
 import ScoreBadge from './ScoreBadge.vue';
 import { isWatched, toggleWatch } from '../watchlist';
+import { dateLocale, isZh, pick, t, tr } from '../i18n';
 
 // params: { cat: 'sic'|'filer'|'etf', code, afs, etf }
 const props = defineProps({ params: { type: Object, default: () => ({}) } });
@@ -177,10 +178,10 @@ async function copyToBasket() {
       sync = { at: new Date().toISOString(), asOf: live.asOf, sourceName: live.source, added: [], removed: [], changed: 0 };
     } catch {
       rows = (n ? copyable.value.slice(0, n) : copyable.value).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.pctVal }));
-      sync = { at: new Date().toISOString(), asOf: holdings.value.filing.reportDate, sourceName: `N-PORT（${holdings.value.filing.reportDate}）`, added: [], removed: [], changed: 0 };
+      sync = { at: new Date().toISOString(), asOf: holdings.value.filing.reportDate, sourceName: `N-PORT (${holdings.value.filing.reportDate})`, added: [], removed: [], changed: 0 };
     }
     if (!rows.length) return;
-    createBasket(`${ticker} 複製${n ? `（前 ${rows.length} 檔）` : ''}`, rows, { prune: true, source: { type: 'etf', ticker, n: n || null }, sync });
+    createBasket(t('br.copyName', { ticker, top: n ? t('br.copyNameTop', { n: rows.length }) : '' }), rows, { prune: true, source: { type: 'etf', ticker, n: n || null }, sync });
     emit('basket');
   } finally {
     copying.value = false;
@@ -197,7 +198,7 @@ const usd = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const money = (v) => (v == null ? '—' : usd.format(v / 1e6));
 const num = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
-function pick(c) {
+function pickCat(c) {
   cat.value = c;
   filter.value = '';
 }
@@ -225,27 +226,27 @@ onMounted(async () => {
 <template>
   <div class="browse">
     <div class="tabs">
-      <button :class="{ active: cat === 'sic' }" @click="pick('sic')">產業分類 (SIC)</button>
-      <button :class="{ active: cat === 'filer' }" @click="pick('filer')">規模與申報身分</button>
-      <button :class="{ active: cat === 'etf' }" @click="pick('etf')">ETF 成分股</button>
-      <span v-if="sic" class="muted small src">資料：SEC Financial Statement Data Sets {{ sic.datasets.join(' / ') }}，更新 {{ new Date(sic.updatedAt).toLocaleDateString() }}</span>
+      <button :class="{ active: cat === 'sic' }" @click="pickCat('sic')">{{ t('br.tabSic') }}</button>
+      <button :class="{ active: cat === 'filer' }" @click="pickCat('filer')">{{ t('br.tabFiler') }}</button>
+      <button :class="{ active: cat === 'etf' }" @click="pickCat('etf')">{{ t('br.tabEtf') }}</button>
+      <span v-if="sic" class="muted small src">{{ t('br.dataSource', { sets: sic.datasets.join(' / '), date: new Date(sic.updatedAt).toLocaleDateString(dateLocale) }) }}</span>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
 
     <!-- ===== SIC ===== -->
     <div v-if="cat === 'sic'" class="layout">
       <aside class="panel side">
-        <input v-model="sicFilter" type="text" placeholder="搜尋代碼或產業名稱" />
-        <label class="small"><input v-model="listedOnly" type="checkbox" /> 只列有股票代號的公司</label>
-        <p v-if="!sic" class="muted small">讀取產業清單…</p>
+        <input v-model="sicFilter" type="text" :placeholder="t('br.sicSearch')" />
+        <label class="small"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
+        <p v-if="!sic" class="muted small">{{ t('br.loadingSic') }}</p>
         <div v-for="d in sicGroups" :key="d.id" class="division">
           <div class="division-head" @click="toggleDivision(d.id)">
             <span class="caret">{{ openDivisions.has(d.id) || sicFilter ? '▾' : '▸' }}</span>
-            {{ d.id }} · {{ d.zh }} <span class="muted small">({{ listedOnly ? d.listed : d.total }})</span>
+            {{ d.id }} · {{ pick(d, 'zh', 'en') }} <span class="muted small">({{ listedOnly ? d.listed : d.total }})</span>
           </div>
           <div v-if="openDivisions.has(d.id) || sicFilter" class="codes">
             <div v-for="c in d.codes" :key="c.code" class="code" :class="{ active: c.code === code }" :title="c.title" @click="code = c.code">
-              <span class="mono">{{ c.code }}</span> {{ c.zh || c.title }}
+              <span class="mono">{{ c.code }}</span> {{ pick(c, 'zh', 'title') }}
               <span class="muted count">{{ listedOnly ? c.listed : c.total }}</span>
             </div>
           </div>
@@ -255,99 +256,93 @@ onMounted(async () => {
         <template v-if="selectedSic">
           <div class="panel meta">
             <div>
-              <strong>SIC {{ selectedSic.code }} · {{ selectedSic.zh || selectedSic.title }}</strong>
+              <strong>SIC {{ selectedSic.code }} · {{ pick(selectedSic, 'zh', 'title') }}</strong>
               <div class="muted small">{{ selectedSic.title }}<span v-if="selectedSic.office"> · {{ selectedSic.office }}</span></div>
             </div>
             <div class="options">
-              <input v-model="filter" type="text" placeholder="篩選代號 / 公司名" class="filter" />
-              <span class="muted small">{{ visibleCompanies.length }} 家</span>
+              <input v-model="filter" type="text" :placeholder="t('br.filterCompanies')" class="filter" />
+              <span class="muted small">{{ t('companies', { n: visibleCompanies.length }) }}</span>
             </div>
           </div>
-          <p v-if="loadingCompanies" class="muted">讀取公司清單…</p>
+          <p v-if="loadingCompanies" class="muted">{{ t('br.loadingCompanies') }}</p>
           <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-sic="false" :scores="scores" @open="emit('open', $event)" />
         </template>
-        <p v-else class="empty muted">左邊選一個產業（SIC 4 碼），點公司即可進入財報。</p>
+        <p v-else class="empty muted">{{ t('br.pickSic') }}</p>
       </main>
     </div>
 
     <!-- ===== filer status ===== -->
     <div v-else-if="cat === 'filer'" class="layout">
       <aside class="panel side">
-        <p class="muted small">
-          SEC 依「公眾流通市值」（非關係人持股市值）把申報公司分成三種身分，決定 10-K / 10-Q 的申報期限與揭露要求。
-        </p>
-        <label class="small"><input v-model="listedOnly" type="checkbox" /> 只列有股票代號的公司</label>
-        <p v-if="!filer" class="muted small">讀取分類…</p>
+        <p class="muted small">{{ t('br.filerIntro') }}</p>
+        <label class="small"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
+        <p v-if="!filer" class="muted small">{{ t('br.loadingFiler') }}</p>
         <div v-for="c in filer?.categories || []" :key="c.key" class="card" :class="{ active: c.key === afs }" @click="afs = c.key">
-          <div class="card-title">{{ c.zh }}</div>
-          <div class="muted small">{{ c.label }}</div>
-          <div class="small">{{ c.note }}</div>
-          <div class="muted small">{{ listedOnly ? c.listed : c.total }} 家<span v-if="c.wksi"> · WKSI {{ c.wksi }}</span></div>
+          <div class="card-title">{{ pick(c, 'zh', 'label') }}</div>
+          <div v-if="isZh" class="muted small">{{ c.label }}</div>
+          <div class="small">{{ tr(c.note) }}</div>
+          <div class="muted small">{{ t('companies', { n: listedOnly ? c.listed : c.total }) }}<span v-if="c.wksi"> · WKSI {{ c.wksi }}</span></div>
         </div>
-        <p class="muted small">
-          大型加速申報公司：10-K 年度結束後 60 天內、10-Q 40 天內申報；加速申報公司 75 / 40 天；非加速申報公司 90 / 45 天。WKSI（well-known seasoned issuer）為公眾流通市值 ≥ 7 億美元且符合條件、可自動生效發行的公司。
-        </p>
+        <p class="muted small">{{ t('br.filerDeadlines') }}</p>
       </aside>
       <main>
         <template v-if="afs && companies?.filer">
           <div class="panel meta">
             <div>
-              <strong>{{ companies.filer.zh }}</strong> <span class="muted small">{{ companies.filer.label }}</span>
+              <strong>{{ pick(companies.filer, 'zh', 'label') }}</strong> <span v-if="isZh" class="muted small">{{ companies.filer.label }}</span>
             </div>
             <div class="options">
-              <input v-model="filter" type="text" placeholder="篩選代號 / 公司名" class="filter" />
-              <span class="muted small">{{ visibleCompanies.length }} 家，依公眾流通市值排序</span>
+              <input v-model="filter" type="text" :placeholder="t('br.filterCompanies')" class="filter" />
+              <span class="muted small">{{ t('br.sortedByFloat', { n: visibleCompanies.length }) }}</span>
             </div>
           </div>
-          <p v-if="loadingCompanies" class="muted">讀取公司清單…</p>
+          <p v-if="loadingCompanies" class="muted">{{ t('br.loadingCompanies') }}</p>
           <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-afs="false" :scores="scores" @open="emit('open', $event)" />
         </template>
-        <p v-else-if="loadingCompanies" class="muted">讀取公司清單…</p>
-        <p v-else class="empty muted">左邊選一種申報身分。</p>
+        <p v-else-if="loadingCompanies" class="muted">{{ t('br.loadingCompanies') }}</p>
+        <p v-else class="empty muted">{{ t('br.pickFiler') }}</p>
       </main>
     </div>
 
     <!-- ===== ETF ===== -->
     <div v-else class="layout">
       <aside class="panel side">
-        <input v-model="etfQuery" type="text" placeholder="搜尋 ETF 代號 / 名稱 / 發行商" />
-        <p class="muted small">
-          清單來自 SEC 投資公司系列資料（{{ etfs ? `${etfs.total} 檔` : '…' }}）；成分股取自各基金最新的 Form N-PORT（每季申報，落後約兩個月）。
-        </p>
+        <input v-model="etfQuery" type="text" :placeholder="t('br.etfSearch')" />
+        <p class="muted small">{{ t('br.etfIntro', { n: etfs ? etfs.total : '…' }) }}</p>
         <template v-if="!etfQuery && popular.length">
-          <div class="muted small head">常用</div>
+          <div class="muted small head">{{ t('br.popular') }}</div>
           <div v-for="e in popular" :key="e.ticker" class="etf" :class="{ active: e.ticker === etf }" @click="etf = e.ticker">
             <span class="mono">{{ e.ticker }}</span> <span class="small">{{ e.name }}</span>
           </div>
-          <div class="muted small head">全部（A–Z）</div>
+          <div class="muted small head">{{ t('br.allAz') }}</div>
         </template>
         <div class="etf-list">
           <div v-for="e in etfResults" :key="e.ticker" class="etf" :class="{ active: e.ticker === etf }" :title="e.entity" @click="etf = e.ticker">
             <span class="mono">{{ e.ticker }}</span> <span class="small">{{ e.name }}</span>
           </div>
-          <p v-if="etfs && etfResults.length >= 300" class="muted small">只顯示前 300 筆，請輸入代號縮小範圍。</p>
+          <p v-if="etfs && etfResults.length >= 300" class="muted small">{{ t('br.first300') }}</p>
         </div>
       </aside>
       <main>
-        <p v-if="loadingHoldings" class="muted">下載 {{ etf }} 的 N-PORT 並比對成分股…（第一次需下載 CUSIP 對照，約 10 秒）</p>
+        <p v-if="loadingHoldings" class="muted">{{ t('br.loadingHoldings', { etf }) }}</p>
         <template v-else-if="holdings">
           <div class="panel meta">
             <div>
               <strong>{{ holdings.etf.ticker }} · {{ holdings.etf.name }}</strong>
               <div class="muted small">
-                {{ holdings.etf.entity }} · 持股日 {{ holdings.filing.reportDate }} · 申報 {{ holdings.filing.filingDate }} ·
-                淨資產 {{ money(holdings.filing.netAssets) }} 百萬美元 ·
+                {{ holdings.etf.entity }} · {{ t('br.holdingsDate') }} {{ holdings.filing.reportDate }} · {{ t('meta.filingDate') }} {{ holdings.filing.filingDate }} ·
+                {{ t('br.netAssets') }} {{ money(holdings.filing.netAssets) }} {{ t('millionUsd') }} ·
                 <a :href="holdings.filing.viewerUrl" target="_blank" rel="noopener">N-PORT</a> ·
                 <a v-if="!api.isStatic" :href="api.etfHoldingsUrl(holdings.etf.ticker)" target="_blank" rel="noopener">JSON</a>
               </div>
             </div>
             <div class="options">
-              <label class="small"><input v-model="equityOnly" type="checkbox" /> 只看股票</label>
-              <input v-model="filter" type="text" placeholder="篩選代號 / 名稱" class="filter" />
-              <span class="muted small">{{ visibleHoldings.length }} 筆 · 可查財報 {{ holdings.stats.mapped }}/{{ holdings.stats.total }}</span>
-              <span class="copy" title="把成分股（依權重排序、有代號的）複製成自製 ETF，權重照 N-PORT 比例換算成 100%，之後可以自己增減、改權重；留空 = 全部">
-                前 <input v-model="copyN" type="number" min="1" class="n" :placeholder="String(copyable.length)" /> 檔
-                <button class="small" :disabled="!copyable.length || copying" @click="copyToBasket">{{ copying ? '抓最新成分…' : `${Number(copyN) > 0 ? `前 ${Math.min(Number(copyN), copyable.length)} 檔` : '全部'}複製成自製 ETF` }}</button>
+              <label class="small"><input v-model="equityOnly" type="checkbox" /> {{ t('br.equityOnly') }}</label>
+              <input v-model="filter" type="text" :placeholder="t('br.filterHoldings')" class="filter" />
+              <span class="muted small">{{ t('br.holdingsCount', { n: visibleHoldings.length, mapped: holdings.stats.mapped, total: holdings.stats.total }) }}</span>
+              <span class="copy" :title="t('br.copyTitle')">
+                {{ t('top') }} <input v-model="copyN" type="number" min="1" class="n" :placeholder="String(copyable.length)" /> {{ t('br.holdingsUnit') }}
+                <button class="small" :disabled="!copyable.length || copying" @click="copyToBasket">{{ copying ? t('br.copying') : t('br.copyButton', { which: Number(copyN) > 0 ? t('br.copyTop', { n: Math.min(Number(copyN), copyable.length) }) : t('all') }) }}</button>
               </span>
             </div>
           </div>
@@ -357,14 +352,14 @@ onMounted(async () => {
                 <tr>
                   <th class="num">#</th>
                   <th class="star"></th>
-                  <th>代號</th>
-                  <th>評分</th>
-                  <th>名稱</th>
-                  <th class="num">權重</th>
-                  <th class="num">市值 (百萬美元)</th>
-                  <th class="num">股數</th>
-                  <th>類別</th>
-                  <th>國家</th>
+                  <th>{{ t('col.ticker') }}</th>
+                  <th>{{ t('col.score') }}</th>
+                  <th>{{ t('col.name') }}</th>
+                  <th class="num">{{ t('br.weight') }}</th>
+                  <th class="num">{{ t('br.valueMusd') }}</th>
+                  <th class="num">{{ t('br.sharesHeld') }}</th>
+                  <th>{{ t('br.assetClass') }}</th>
+                  <th>{{ t('br.country') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -373,7 +368,7 @@ onMounted(async () => {
                   <td class="star" @click.stop="h.cik && toggleWatch({ cik: h.cik, ticker: h.symbol, name: h.name })"><span v-if="h.cik" :class="{ on: isWatched(h.cik) }">{{ isWatched(h.cik) ? '★' : '☆' }}</span></td>
                   <td class="mono">
                     <a v-if="h.cik" :href="`?company=${h.symbol || h.cik}`" @click.prevent>{{ h.symbol || `CIK ${h.cik}` }}</a>
-                    <span v-else class="muted" :title="h.cusip ? `CUSIP ${h.cusip}：找不到對應的 EDGAR 公司（外國公司、未上市或已下市）` : '無 CUSIP'">{{ h.symbol || '—' }}</span>
+                    <span v-else class="muted" :title="h.cusip ? t('br.noEdgar', { cusip: h.cusip }) : t('br.noCusip')">{{ h.symbol || '—' }}</span>
                   </td>
                   <td><ScoreBadge v-if="h.cik" :score="scores[h.cik] ?? null" /></td>
                   <td class="name">
@@ -382,17 +377,15 @@ onMounted(async () => {
                   <td class="num">{{ pct(h.pctVal) }}</td>
                   <td class="num">{{ money(h.valUSD) }}</td>
                   <td class="num small">{{ h.balance == null ? '—' : num.format(h.balance) }}</td>
-                  <td class="small">{{ h.assetZh || h.assetCat || '—' }}</td>
+                  <td class="small">{{ (isZh ? h.assetZh : tr(h.assetZh)) || h.assetCat || '—' }}</td>
                   <td class="small muted">{{ h.country || '' }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <p class="muted small note">
-            灰色列為無法對應到 EDGAR 申報公司的持股（外國股票、已被收購下市、衍生性商品、現金等）。對應方式：N-PORT 的 CUSIP → SEC 交割失敗資料的股票代號 → EDGAR 公司；找不到時以名稱比對。
-          </p>
+          <p class="muted small note">{{ t('br.holdingsNote') }}</p>
         </template>
-        <p v-else class="empty muted">左邊選一檔 ETF，點成分股即可進入財報。</p>
+        <p v-else class="empty muted">{{ t('br.pickEtf') }}</p>
       </main>
     </div>
   </div>

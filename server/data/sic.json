@@ -4,61 +4,71 @@
 "id": "A",
 "from": "01",
 "to": "09",
-"zh": "農林漁牧"
+"zh": "農林漁牧",
+"en": "Agriculture, forestry & fishing"
 },
 {
 "id": "B",
 "from": "10",
 "to": "14",
-"zh": "礦業"
+"zh": "礦業",
+"en": "Mining"
 },
 {
 "id": "C",
 "from": "15",
 "to": "17",
-"zh": "營造"
+"zh": "營造",
+"en": "Construction"
 },
 {
 "id": "D",
 "from": "20",
 "to": "39",
-"zh": "製造業"
+"zh": "製造業",
+"en": "Manufacturing"
 },
 {
 "id": "E",
 "from": "40",
 "to": "49",
-"zh": "運輸、通訊與公用事業"
+"zh": "運輸、通訊與公用事業",
+"en": "Transportation, communications & utilities"
 },
 {
 "id": "F",
 "from": "50",
 "to": "51",
-"zh": "批發"
+"zh": "批發",
+"en": "Wholesale trade"
 },
 {
 "id": "G",
 "from": "52",
 "to": "59",
-"zh": "零售"
+"zh": "零售",
+"en": "Retail trade"
 },
 {
 "id": "H",
 "from": "60",
 "to": "67",
-"zh": "金融、保險與不動產"
+"zh": "金融、保險與不動產",
+"en": "Finance, insurance & real estate"
 },
 {
 "id": "I",
 "from": "70",
 "to": "89",
-"zh": "服務業"
+"zh": "服務業",
+"en": "Services"
 },
 {
 "id": "J",
 "from": "91",
 "to": "99",
-"zh": "公共行政與其他"
+"zh": "公共行政與其他",
+"en": "Public administration & other"
 }
 ],
 "codes": [

@@ -8,13 +8,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { CandlestickSeries, ColorType, CrosshairMode, LineSeries, createChart } from 'lightweight-charts';
 import { makeDatafeed } from '../tvDatafeed';
 import { url } from '../base';
+import { locale, t } from '../i18n';
 
 const props = defineProps({
   bars: { type: Array, default: () => [] }, // [{ time: 'YYYY-MM-DD', open, high, low, close }]
   overlay: { type: Array, default: () => [] }, // [{ time, value }]
   overlayLabel: { type: String, default: '' },
   label: { type: String, default: '' },
-  colors: { type: String, default: 'tw' }, // 'tw' 紅漲綠跌 | 'us' 綠漲紅跌
+  colors: { type: String, default: 'tw' }, // 'tw' red up / green down | 'us' green up / red down
   advanced: { type: Boolean, default: false }, // TradingView Advanced Charts available (window.TradingView.widget)
   height: { type: Number, default: 440 },
 });
@@ -58,7 +59,7 @@ function mountLight() {
     crosshair: { mode: CrosshairMode.Normal },
     rightPriceScale: { borderColor: '#e2e5ea' },
     timeScale: { borderColor: '#e2e5ea', rightOffset: 3 },
-    localization: { locale: 'zh-TW' },
+    localization: { locale: locale.value === 'zh' ? 'zh-TW' : 'en-US' },
   });
   candles = chart.addSeries(CandlestickSeries, seriesOptions());
   line = chart.addSeries(LineSeries, { color: '#2563eb', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false });
@@ -93,7 +94,7 @@ const OVERLAY_COLOR = '#2563eb';
 function mountAdvanced() {
   const TV = window.TradingView;
   if (!TV?.widget) return false;
-  const name = props.label || '自製 ETF';
+  const name = props.label || t('nav.basket');
   const overlayName = props.overlay.length ? props.overlayLabel : '';
   widget = new TV.widget({
     container: el.value,
@@ -101,7 +102,7 @@ function mountAdvanced() {
     datafeed: makeDatafeed({ name, bars: () => props.bars, overlayName, overlay: () => props.overlay }),
     symbol: name,
     interval: 'D',
-    locale: 'zh_TW',
+    locale: locale.value === 'zh' ? 'zh_TW' : 'en',
     timezone: 'America/New_York',
     autosize: true,
     theme: 'light',
@@ -166,6 +167,7 @@ onBeforeUnmount(unmount);
 watch(() => [props.bars, props.overlay], () => (widget ? remount() : setData(true)), { deep: false });
 watch(() => props.colors, () => (widget ? remount() : candles?.applyOptions(seriesOptions())));
 watch(() => props.advanced, remount);
+watch(locale, remount);
 </script>
 
 <template>
@@ -174,12 +176,12 @@ watch(() => props.advanced, remount);
       <template v-if="shown">
         <span class="lbl">{{ label }}</span>
         <span class="mono">{{ shown.time }}</span>
-        <span>開 <b class="mono">{{ f2.format(shown.open) }}</b></span>
-        <span>高 <b class="mono">{{ f2.format(shown.high) }}</b></span>
-        <span>低 <b class="mono">{{ f2.format(shown.low) }}</b></span>
-        <span>收 <b class="mono">{{ f2.format(shown.close) }}</b></span>
+        <span>{{ t('kl.open') }} <b class="mono">{{ f2.format(shown.open) }}</b></span>
+        <span>{{ t('kl.high') }} <b class="mono">{{ f2.format(shown.high) }}</b></span>
+        <span>{{ t('kl.low') }} <b class="mono">{{ f2.format(shown.low) }}</b></span>
+        <span>{{ t('kl.close') }} <b class="mono">{{ f2.format(shown.close) }}</b></span>
         <span v-if="change != null" class="mono" :class="change >= 0 ? 'up' : 'down'">{{ pct(change) }}</span>
-        <span v-if="sinceStart != null" class="muted small">自起點 <b class="mono" :class="sinceStart >= 0 ? 'up' : 'down'">{{ pct(sinceStart) }}</b></span>
+        <span v-if="sinceStart != null" class="muted small">{{ t('kl.sinceStart') }} <b class="mono" :class="sinceStart >= 0 ? 'up' : 'down'">{{ pct(sinceStart) }}</b></span>
         <span v-if="overlay.length && shown.overlay != null" class="ov small"><i></i>{{ overlayLabel }} <b class="mono">{{ f2.format(shown.overlay) }}</b> <span class="muted">{{ pct(shown.overlay / 100 - 1) }}</span></span>
       </template>
     </div>

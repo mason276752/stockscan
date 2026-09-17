@@ -28,9 +28,9 @@ function rangeStart(range, end) {
 // weighted highs / lows of the constituents, which slightly overstates the
 // basket's true intraday range.
 export function basketSeries(members, { range = '5y', rebalance = 'none', base = 100 } = {}) {
-  const notes = [];
+  const notes = []; // { code, ...params }: worded by the UI in its language
   const rows = members.filter((m) => m.days?.length);
-  if (!rows.length) return { bars: [], start: null, end: null, notes: ['沒有任何成分股的價格資料'] };
+  if (!rows.length) return { bars: [], start: null, end: null, notes: [{ code: 'noPrices' }] };
   const wsum = rows.reduce((s, m) => s + (m.weight > 0 ? m.weight : 0), 0) || rows.length;
   const w = rows.map((m) => (m.weight > 0 ? m.weight : wsum / rows.length) / wsum);
   const first = rows.map((m) => m.days[0].date);
@@ -41,12 +41,12 @@ export function basketSeries(members, { range = '5y', rebalance = 'none', base =
   const earliest = first.reduce((d, x) => (x < d ? x : d), first[0]);
   if (earliest > start) {
     start = earliest;
-    notes.push(`成分股的價格資料最早從 ${start} 開始，指數從那天起算`);
+    notes.push({ code: 'startsLater', start });
   }
 
   // trading calendar: every date any constituent traded, from the first date at/after start
   const dates = [...new Set(rows.flatMap((m) => m.days.map((d) => d.date)))].filter((d) => d >= start).sort();
-  if (dates.length < 2) return { bars: [], start, end: last, notes: [...notes, '區間內的交易日不足'] };
+  if (dates.length < 2) return { bars: [], start, end: last, notes: [...notes, { code: 'tooFewDays' }] };
   // per constituent: date -> bar between its first and last day, carrying the
   // previous close over days it did not trade
   const at = rows.map((m) => {
@@ -64,7 +64,7 @@ export function basketSeries(members, { range = '5y', rebalance = 'none', base =
     // the start, Yahoo's single last bar of a taken-private company) would
     // join and leave within days: leave it out instead
     if (out.size < 5) {
-      notes.push(`${m.symbol} 在區間內只有 ${out.size} 天價格資料（${m.days[0].date} ～ ${m.days.at(-1).date}），未納入`);
+      notes.push({ code: 'fewDays', symbol: m.symbol, n: out.size, first: m.days[0].date, last: m.days.at(-1).date });
       out.clear();
     }
     return out;
@@ -124,9 +124,9 @@ export function basketSeries(members, { range = '5y', rebalance = 'none', base =
   }
 
   for (let i = 0; i < rows.length; i++) {
-    if (joined[i] && joined[i] !== dates[0]) notes.push(`${rows[i].symbol} 的價格資料從 ${joined[i]} 開始，那天起納入指數`);
-    if (left[i]) notes.push(`${rows[i].symbol} 的價格資料到 ${left[i]} 為止（下市或更名），之後從指數除名`);
-    if (!joined[i] && at[i].size) notes.push(`${rows[i].symbol} 在區間內沒有價格資料，未納入`);
+    if (joined[i] && joined[i] !== dates[0]) notes.push({ code: 'joined', symbol: rows[i].symbol, date: joined[i] });
+    if (left[i]) notes.push({ code: 'left', symbol: rows[i].symbol, date: left[i] });
+    if (!joined[i] && at[i].size) notes.push({ code: 'noData', symbol: rows[i].symbol });
   }
 
   const constituents = rows.map((m, i) => {
@@ -224,7 +224,7 @@ function basketResult({ wanted, range, rebalance }, out, { partial = false, done
     if (!l.listed) c.delisted = true;
   }
   const failed = members.filter((m) => m.error).map((m) => ({ ticker: m.ticker, error: m.error, ...(listingOf(m.ticker, m.cik) || {}) }));
-  for (const f of failed) series.notes.push(`${f.ticker} 沒有價格資料，已排除（${f.error}）`);
+  for (const f of failed) series.notes.push({ code: 'failed', symbol: f.ticker, error: f.error });
   const sources = [...new Set(members.filter((m) => !m.error).map((m) => m.source))];
   return {
     range,

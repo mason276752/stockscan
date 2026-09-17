@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 
 import ScoreBadge from './ScoreBadge.vue';
 import { isWatched, toggleWatch } from '../watchlist';
+import { bigMoney, isZh, t } from '../i18n';
 
 const props = defineProps({
   companies: { type: Array, required: true },
@@ -12,7 +13,6 @@ const props = defineProps({
 });
 const emit = defineEmits(['open']);
 
-const AFS_ZH = { LAF: '大型加速', ACC: '加速', NON: '非加速' };
 const sortKey = ref('float');
 const sortDir = ref(-1);
 
@@ -36,14 +36,8 @@ const rows = computed(() => {
   });
 });
 
-const grouped = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
-const fmtFloat = (v) => {
-  if (v == null) return '—';
-  if (v >= 1e12) return `${(v / 1e12).toFixed(2)} 兆`;
-  if (v >= 1e8) return `${grouped.format(v / 1e8)} 億`;
-  if (v >= 1e6) return `${grouped.format(v / 1e6)} 百萬`;
-  return `${(v / 1e6).toFixed(2)} 百萬`;
-};
+const fmtFloat = bigMoney;
+const afsShort = (k) => (!k ? '—' : ['LAF', 'ACC', 'NON'].includes(k) ? t(`afs.${k}`) : k);
 const fmtDate = (s) => (s && /^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}` : s || '—');
 const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
 </script>
@@ -54,19 +48,19 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
       <thead>
         <tr>
           <th class="star"></th>
-          <th class="sortable" @click="sortBy('ticker')">代號{{ arrow('ticker') }}</th>
-          <th class="sortable" title="最新一份財報的評分（0–100），依財務指標的判斷標準計分；尚未下載的顯示 —" @click="sortBy('score')">評分{{ arrow('score') }}</th>
-          <th class="sortable" @click="sortBy('name')">公司{{ arrow('name') }}</th>
-          <th v-if="showSic" class="sortable" @click="sortBy('sic')">產業 (SIC){{ arrow('sic') }}</th>
-          <th v-if="showAfs" class="sortable" @click="sortBy('afs')">申報身分{{ arrow('afs') }}</th>
-          <th class="num sortable" title="公眾流通市值（非關係人持有股份市值，10-K 揭露，決定申報身分）" @click="sortBy('float')">公眾流通市值 USD{{ arrow('float') }}</th>
-          <th class="sortable" @click="sortBy('filed')">最新申報{{ arrow('filed') }}</th>
-          <th>地區</th>
+          <th class="sortable" @click="sortBy('ticker')">{{ t('col.ticker') }}{{ arrow('ticker') }}</th>
+          <th class="sortable" :title="t('col.scoreTitle')" @click="sortBy('score')">{{ t('col.score') }}{{ arrow('score') }}</th>
+          <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
+          <th v-if="showSic" class="sortable" @click="sortBy('sic')">{{ t('col.sic') }}{{ arrow('sic') }}</th>
+          <th v-if="showAfs" class="sortable" @click="sortBy('afs')">{{ t('col.afs') }}{{ arrow('afs') }}</th>
+          <th class="num sortable" :title="t('col.floatTitle')" @click="sortBy('float')">{{ t('col.float') }} USD{{ arrow('float') }}</th>
+          <th class="sortable" @click="sortBy('filed')">{{ t('col.latestFiling') }}{{ arrow('filed') }}</th>
+          <th>{{ t('col.region') }}</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="c in rows" :key="c.cik" class="row" @click="emit('open', c)">
-          <td class="star" @click.stop="toggleWatch(c)"><span :class="{ on: isWatched(c.cik) }" :title="isWatched(c.cik) ? '從觀察名單移除' : '加入觀察名單'">{{ isWatched(c.cik) ? '★' : '☆' }}</span></td>
+          <td class="star" @click.stop="toggleWatch(c)"><span :class="{ on: isWatched(c.cik) }" :title="isWatched(c.cik) ? t('watch.remove') : t('watch.add')">{{ isWatched(c.cik) ? '★' : '☆' }}</span></td>
           <td class="mono">
             <a :href="`?company=${c.ticker || c.cik}`" @click.prevent>{{ c.ticker || `CIK ${c.cik}` }}</a>
             <span v-if="c.tickers.length > 1" class="muted small"> +{{ c.tickers.length - 1 }}</span>
@@ -74,13 +68,13 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
           <td><ScoreBadge :score="scores[c.cik] ?? null" /></td>
           <td class="name">{{ c.name }}</td>
           <td v-if="showSic" class="small">
-            <span v-if="c.sic">{{ c.sic }} {{ c.sicZh || c.sicTitle || '' }}</span>
+            <span v-if="c.sic">{{ c.sic }} {{ (isZh ? c.sicZh || c.sicTitle : c.sicTitle || c.sicZh) || '' }}</span>
             <span v-else class="muted">—</span>
           </td>
           <td v-if="showAfs" class="small">
-            {{ AFS_ZH[c.afs] || (c.afs ? c.afs : '—') }}<span v-if="c.wksi" class="tag" title="Well-known seasoned issuer：可用自動生效的 S-3 註冊聲明">WKSI</span>
+            {{ afsShort(c.afs) }}<span v-if="c.wksi" class="tag" :title="t('col.wksiTitle')">WKSI</span>
           </td>
-          <td class="num" :title="c.floatAdjusted ? '申報的 EntityPublicFloat 疑似單位錯誤（大 1,000 倍），已除以 1,000' : ''">
+          <td class="num" :title="c.floatAdjusted ? t('company.floatAdjusted') : ''">
             {{ fmtFloat(c.float) }}<span v-if="c.floatAdjusted" class="warn">*</span>
             <div v-if="c.floatDate" class="muted tiny">{{ c.floatDate }}</div>
           </td>
@@ -89,7 +83,7 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
         </tr>
       </tbody>
     </table>
-    <p v-if="!companies.length" class="muted empty">沒有公司。</p>
+    <p v-if="!companies.length" class="muted empty">{{ t('col.noCompanies') }}</p>
   </div>
 </template>
 

@@ -8,21 +8,22 @@ import TvEmbedChart from './TvEmbedChart.vue';
 import Icon from './Icon.vue';
 import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, renameConstituent, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
 import { watchlist } from '../watchlist';
+import { dateLocale, t, tr } from '../i18n';
 
 const emit = defineEmits(['open', 'screen']);
 
 const RANGES = [
-  ['1y', '1 年'],
-  ['3y', '3 年'],
-  ['5y', '5 年'],
-  ['10y', '10 年'],
+  ['1y', 1],
+  ['3y', 3],
+  ['5y', 5],
+  ['10y', 10],
 ];
 const BENCHMARKS = [
-  ['SPY', 'S&P 500 (SPY)'],
-  ['QQQ', 'Nasdaq 100 (QQQ)'],
-  ['DIA', '道瓊 (DIA)'],
-  ['IWM', 'Russell 2000 (IWM)'],
-  ['', '不比較'],
+  ['SPY', () => 'S&P 500 (SPY)'],
+  ['QQQ', () => 'Nasdaq 100 (QQQ)'],
+  ['DIA', () => t('bk.dow')],
+  ['IWM', () => 'Russell 2000 (IWM)'],
+  ['', () => t('bk.noBenchmark')],
 ];
 
 const range = ref(localStorage.getItem('stockscan.basket.range') || '3y');
@@ -86,15 +87,15 @@ function delistedWhy(c) {
   const p = perf.value[c.ticker];
   const f = result.value?.failed?.find((x) => x.ticker === c.ticker);
   const l = p || f;
-  if (l?.renamed) return { text: `已更名為 ${l.renamed}（EDGAR 同一公司改用新代號）`, renamed: l.renamed };
-  if (l && l.listed === false) return { text: p?.last ? `EDGAR 代號表已無此代號，${p.last} 後無報價` : 'EDGAR 代號表已無此代號', renamed: null };
-  if (p?.delisted) return { text: `${p.last} 後無報價（最近兩週沒有成交資料）`, renamed: null };
-  return { text: `查無報價資料${f?.error ? `（${f.error}）` : ''}`, renamed: null };
+  if (l?.renamed) return { text: t('bk.whyRenamed', { to: l.renamed }), renamed: l.renamed };
+  if (l && l.listed === false) return { text: p?.last ? t('bk.whyUnlistedSince', { last: p.last }) : t('bk.whyUnlisted'), renamed: null };
+  if (p?.delisted) return { text: t('bk.whyNoQuotes', { last: p.last }), renamed: null };
+  return { text: t('bk.whyNoData', { err: f?.error ? ` (${f.error})` : '' }), renamed: null };
 }
 function removeDelisted() {
   if (!current.value || !delisted.value.length) return;
   const n = removeConstituents(current.value.id, delisted.value);
-  pruned.value = `已移除 ${n} 檔`;
+  pruned.value = t('bk.removedN', { n });
 }
 function followRename(c, to) {
   if (renameConstituent(current.value.id, c.ticker, to)) run(true);
@@ -103,7 +104,9 @@ function followRename(c, to) {
 // ---- source resync ----
 const syncing = ref(false);
 const syncMsg = ref('');
-const sourceLabel = (src) => (!src ? '' : src.type === 'etf' ? `${src.ticker} 成分股${src.n ? `（前 ${src.n} 檔）` : ''}` : src.type === 'screen' ? `尋找股票：${src.label || ''}${src.n ? `（前 ${src.n} 家）` : ''}` : src.type === 'watch' ? `觀察名單：${src.group === 'all' ? '全部' : src.group}` : '');
+const syncFailed = ref(false);
+const sourceLabel = (src) =>
+  !src ? '' : src.type === 'etf' ? t('bk.srcEtf', { ticker: src.ticker, top: src.n ? t('bk.topParen', { n: src.n }) : '' }) : src.type === 'screen' ? t('bk.srcScreen', { label: src.label || '', top: src.n ? t('bk.topParen', { n: src.n }) : '' }) : src.type === 'watch' ? t('bk.srcWatch', { group: src.group === 'all' ? t('wl.all') : src.group }) : '';
 async function fetchSource(src) {
   if (src.type === 'etf') {
     const r = await api.etfLive(src.ticker);
@@ -113,7 +116,7 @@ async function fetchSource(src) {
   if (src.type === 'screen') {
     const r = await api.screen({ ...src.params, limit: src.n || 2000 });
     const rows = r.rows.filter((x) => x.ticker);
-    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), sourceName: '尋找股票（最新財報指標）', asOf: new Date().toISOString().slice(0, 10) };
+    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), sourceName: '尋找股票（最新財報指標）', asOf: new Date().toISOString().slice(0, 10) }; // tr() words it
   }
   if (src.type === 'watch') {
     const items = (src.group === 'all' ? watchlist.items : watchlist.items.filter((x) => x.groups.includes(src.group))).filter((x) => x.ticker);
@@ -131,12 +134,14 @@ async function resync() {
     const d = applySource(b, r.holdings, { sourceName: r.sourceName, asOf: r.asOf });
     b.prune = true; // newly added names may already be delisted
     const parts = [];
-    if (d.added.length) parts.push(`新增 ${d.added.length} 檔：${d.added.slice(0, 12).join('、')}${d.added.length > 12 ? '…' : ''}`);
-    if (d.removed.length) parts.push(`移除 ${d.removed.length} 檔：${d.removed.slice(0, 12).join('、')}${d.removed.length > 12 ? '…' : ''}`);
-    if (d.changed) parts.push(`${d.changed} 檔來源權重有變`);
-    syncMsg.value = parts.length ? `已同步（${r.sourceName}，資料日 ${r.asOf || '—'}）：${parts.join('；')}` : `已同步（${r.sourceName}，資料日 ${r.asOf || '—'}）：沒有變化`;
+    if (d.added.length) parts.push(t('bk.syncAdded', { n: d.added.length, list: d.added.slice(0, 12).join(t('sep')) + (d.added.length > 12 ? '…' : '') }));
+    if (d.removed.length) parts.push(t('bk.syncRemoved', { n: d.removed.length, list: d.removed.slice(0, 12).join(t('sep')) + (d.removed.length > 12 ? '…' : '') }));
+    if (d.changed) parts.push(t('bk.syncChanged', { n: d.changed }));
+    syncMsg.value = t('bk.synced', { source: tr(r.sourceName), asOf: r.asOf || '—', changes: parts.length ? parts.join(t('bk.semicolon')) : t('bk.noChange') });
+    syncFailed.value = false;
   } catch (e) {
-    syncMsg.value = `同步失敗：${e.message}`;
+    syncMsg.value = t('bk.syncFailed', { msg: e.message });
+    syncFailed.value = true;
   } finally {
     syncing.value = false;
   }
@@ -149,9 +154,9 @@ const groups = computed(() => {
   const rowsOf = (pred) => live.filter(pred);
   if (!current.value.source) return [{ key: 'all', title: '', rows: live }];
   return [
-    { key: 'source', title: `來源成分（${sourceLabel(current.value.source)}）`, rows: rowsOf((c) => c.origin === 'source' && !c.gone), hint: '重新同步時：權重跟著來源；手動改過權重的（標「手動」）保留' },
-    { key: 'manual', title: '手動新增', rows: rowsOf((c) => c.origin === 'manual'), hint: '重新同步不會動這些' },
-    { key: 'gone', title: '已不在來源（因手動調整而保留）', rows: rowsOf((c) => c.origin === 'source' && c.gone), hint: '來源已移除、但你改過權重所以留著；按 ↺ 就移除' },
+    { key: 'source', title: t('bk.groupSource', { src: sourceLabel(current.value.source) }), rows: rowsOf((c) => c.origin === 'source' && !c.gone), hint: t('bk.groupSourceHint') },
+    { key: 'manual', title: t('bk.groupManual'), rows: rowsOf((c) => c.origin === 'manual'), hint: t('bk.groupManualHint') },
+    { key: 'gone', title: t('bk.groupGone'), rows: rowsOf((c) => c.origin === 'source' && c.gone), hint: t('bk.groupGoneHint') },
   ].filter((g) => g.rows.length);
 });
 // put an excluded name back: off the list, then a resync brings it in with the source's weight
@@ -263,7 +268,7 @@ async function run(force = false) {
       aborter.signal,
     );
     if (id !== seq) return;
-    if (!r) throw new Error('連線中斷，沒有收到完整結果');
+    if (!r) throw new Error(t('bk.disconnected'));
     result.value = r;
     // a basket copied from an ETF / list: names that no longer trade go now that the prices show which they are
     if (b.prune) {
@@ -272,7 +277,7 @@ async function run(force = false) {
       for (const f of r.failed || []) gone.push(f.ticker); // no price data anywhere: not tradeable either
       if (gone.length) {
         removeConstituents(b.id, gone);
-        pruned.value = `已移除目前買不到的 ${gone.length} 檔（下市 / 查無報價）：${gone.join('、')}`;
+        pruned.value = t('bk.pruned', { n: gone.length, list: gone.join(t('sep')) });
       }
     }
     // TWS may have come up (or gone) since the page loaded
@@ -310,12 +315,12 @@ watch(
 
 // ---- baskets ----
 function create() {
-  const name = newName.value.trim() || `自製 ETF ${baskets.items.length + 1}`;
+  const name = newName.value.trim() || `${t('nav.basket')} ${baskets.items.length + 1}`;
   createBasket(name, []);
   newName.value = '';
 }
 function remove(b) {
-  if (!confirm(`刪除「${b.name}」？`)) return;
+  if (!confirm(t('bk.confirmDelete', { name: b.name }))) return;
   removeBasket(b.id);
 }
 function startSideRename(b) {
@@ -331,17 +336,17 @@ function finishSideRename() {
   sideRename.value = null;
 }
 function duplicate(b) {
-  createBasket(`${b.name} 副本`, b.constituents.map((c) => ({ ...c })), { rebalance: b.rebalance });
+  createBasket(t('bk.copyOf', { name: b.name }), b.constituents.map((c) => ({ ...c })), { rebalance: b.rebalance });
 }
 // every stock of a watchlist group (or the whole list) into a new basket
-const groupOptions = computed(() => [['all', `全部觀察名單（${watchlist.items.length}）`], ...watchlist.groups.map((g) => [g, `${g}（${watchlist.items.filter((x) => x.groups.includes(g)).length}）`])]);
+const groupOptions = computed(() => [['all', `${t('bk.wholeWatchlist')} (${watchlist.items.length})`], ...watchlist.groups.map((g) => [g, `${g} (${watchlist.items.filter((x) => x.groups.includes(g)).length})`])]);
 const fromGroup = ref('');
 function createFromGroup() {
   const g = fromGroup.value;
   if (!g) return;
   const items = (g === 'all' ? watchlist.items : watchlist.items.filter((x) => x.groups.includes(g))).filter((x) => x.ticker);
   if (!items.length) return;
-  createBasket(g === 'all' ? '觀察名單' : g, items);
+  createBasket(g === 'all' ? t('nav.watch') : g, items);
   fromGroup.value = '';
 }
 async function addFromSearch(ticker) {
@@ -349,11 +354,11 @@ async function addFromSearch(ticker) {
   if (!current.value) return;
   try {
     const c = await api.company(ticker);
-    const t = c.tickers?.[0];
-    if (!t) throw new Error('這家公司沒有股票代號');
-    addMsg.value = addConstituent(current.value.id, { ticker: t, cik: c.cik, name: c.name }) ? `已加入 ${t}` : `${t} 已在名單中`;
+    const tk = c.tickers?.[0];
+    if (!tk) throw new Error(t('bk.noTicker'));
+    addMsg.value = addConstituent(current.value.id, { ticker: tk, cik: c.cik, name: c.name }) ? t('bk.addedTicker', { t: tk }) : t('bk.alreadyIn', { t: tk });
   } catch (e) {
-    addMsg.value = `找不到：${e.message}`;
+    addMsg.value = t('notFound', { msg: e.message });
   }
 }
 
@@ -430,12 +435,12 @@ const downColor = computed(() => (colors.value === 'us' ? '#dc2626' : '#16a34a')
 const sourceText = computed(() => {
   const q = quotes.value;
   if (!q) return '';
-  if (q.static) return q.bars ? `純前端版：日線是 build 時（${q.builtAt ? new Date(q.builtAt).toLocaleDateString() : '—'}）TradingView 的資料，指數在瀏覽器裡算` : '純前端版：圖表用 TradingView widget（最多 10 檔），沒有自己算的指數與成分股報酬';
+  if (q.static) return q.bars ? t('bk.staticBars', { date: q.builtAt ? new Date(q.builtAt).toLocaleDateString(dateLocale.value) : '—' }) : t('bk.staticWidget');
   const parts = [];
-  parts.push(!q.tv?.enabled ? 'TradingView 已停用' : q.tv.connected ? 'TradingView ✓' : `TradingView（${q.tv.lastError || '尚未連線'}）`);
-  parts.push(!q.ib?.enabled ? 'IBKR 已停用' : q.ib.connected ? `IBKR ✓（${q.ib.host}:${q.ib.port}）` : `IBKR 未連線（${q.ib.host}:${q.ib.port}）`);
+  parts.push(!q.tv?.enabled ? t('bk.tvDisabled') : q.tv.connected ? 'TradingView ✓' : `TradingView (${q.tv.lastError || t('bk.notConnected')})`);
+  parts.push(!q.ib?.enabled ? t('bk.ibDisabled') : q.ib.connected ? `IBKR ✓ (${q.ib.host}:${q.ib.port})` : t('bk.ibNotConnected', { host: q.ib.host, port: q.ib.port }));
   parts.push('Yahoo');
-  return `日線來源，依序：${parts.join(' → ')}`;
+  return t('bk.sources', { list: parts.join(' → ') });
 });
 </script>
 
@@ -443,7 +448,7 @@ const sourceText = computed(() => {
   <div class="basket">
     <div class="layout">
       <aside class="panel side">
-        <div class="side-head">自製 ETF</div>
+        <div class="side-head">{{ t('nav.basket') }}</div>
         <div v-for="b in baskets.items" :key="b.id" class="item" :class="{ active: current?.id === b.id }" @click="baskets.current = b.id">
           <template v-if="sideRename?.id === b.id">
             <input v-model="sideRename.to" type="text" class="rename" @keyup.enter="finishSideRename" @keyup.esc="sideRename = null" @blur="finishSideRename" @click.stop />
@@ -451,26 +456,26 @@ const sourceText = computed(() => {
           <template v-else>
             <span class="bname">{{ b.name }}</span> <span class="muted">{{ b.constituents.length }}</span>
             <span class="tools">
-              <button class="mini icon" title="改名" @click.stop="startSideRename(b)"><Icon name="pencil" :size="13" /></button>
-              <button class="mini icon" title="刪除" @click.stop="remove(b)"><Icon name="x" :size="13" /></button>
+              <button class="mini icon" :title="t('rename')" @click.stop="startSideRename(b)"><Icon name="pencil" :size="13" /></button>
+              <button class="mini icon" :title="t('delete')" @click.stop="remove(b)"><Icon name="x" :size="13" /></button>
             </span>
           </template>
         </div>
-        <p v-if="!baskets.items.length" class="muted small">還沒有自製 ETF。</p>
+        <p v-if="!baskets.items.length" class="muted small">{{ t('bk.none') }}</p>
         <div class="newgroup">
-          <input v-model="newName" type="text" placeholder="新增，例如 AI 供應鏈" @keyup.enter="create" />
-          <button class="mini" @click="create">新增</button>
+          <input v-model="newName" type="text" :placeholder="t('bk.newPlaceholder')" @keyup.enter="create" />
+          <button class="mini" @click="create">{{ t('add') }}</button>
         </div>
         <div v-if="watchlist.items.length" class="fromgroup">
           <select v-model="fromGroup" @change="createFromGroup">
-            <option value="">從觀察名單建立…</option>
+            <option value="">{{ t('bk.fromWatchlist') }}</option>
             <option v-for="[k, label] in groupOptions" :key="k" :value="k">{{ label }}</option>
           </select>
         </div>
-        <p class="muted small">名單存在這個瀏覽器的 localStorage；在「尋找股票」的結果和觀察名單的分類也能直接組成 ETF。</p>
+        <p class="muted small">{{ t('bk.storage') }}</p>
         <p v-if="sourceText" class="muted small src">
           {{ sourceText }}
-          <button v-if="quotes?.ib?.enabled && !quotes.ib.connected" class="mini" @click="reconnect">重試連線</button>
+          <button v-if="quotes?.ib?.enabled && !quotes.ib.connected" class="mini" @click="reconnect">{{ t('bk.reconnect') }}</button>
         </p>
       </aside>
 
@@ -482,33 +487,33 @@ const sourceText = computed(() => {
             </template>
             <template v-else>
               <strong @dblclick="renaming = true">{{ current.name }}</strong>
-              <button class="mini ghost icon" title="改名" @click="renaming = true"><Icon name="pencil" :size="14" /></button>
+              <button class="mini ghost icon" :title="t('rename')" @click="renaming = true"><Icon name="pencil" :size="14" /></button>
             </template>
-            <span class="muted small">{{ current.constituents.length }} 檔</span>
-            <span v-if="result?.start" class="muted small">{{ result.start }} ～ {{ result.end }}，起點 = 100</span>
-            <span v-if="loading" class="muted small">{{ progress ? `抓日線 ${progress.done} / ${progress.total}…` : '計算中…' }}</span>
+            <span class="muted small">{{ t('bk.names', { n: current.constituents.length }) }}</span>
+            <span v-if="result?.start" class="muted small">{{ result.start }} ～ {{ result.end }}{{ t('bk.startIs100') }}</span>
+            <span v-if="loading" class="muted small">{{ progress ? t('bk.fetching', { done: progress.done, total: progress.total }) : t('bk.computing') }}</span>
           </div>
           <div class="options">
             <span class="seg">
-              <button v-for="[k, label] in RANGES" :key="k" class="small" :class="{ active: range === k }" @click="range = k">{{ label }}</button>
+              <button v-for="[k, n] in RANGES" :key="k" class="small" :class="{ active: range === k }" @click="range = k">{{ t('chart.years', { n }) }}</button>
             </span>
-            <select v-model="current.rebalance" class="small" title="買進持有：權重是起點那天的配置，之後隨股價漂移；每日再平衡：每天收盤把權重調回設定值">
-              <option value="none">買進持有</option>
-              <option value="daily">每日再平衡</option>
+            <select v-model="current.rebalance" class="small" :title="t('bk.rebalanceTitle')">
+              <option value="none">{{ t('bk.buyHold') }}</option>
+              <option value="daily">{{ t('bk.dailyRebalance') }}</option>
             </select>
-            <select v-model="benchmark" class="small" title="疊上大盤 ETF 做比較（同樣以起點 = 100）">
-              <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label }}</option>
+            <select v-model="benchmark" class="small" :title="t('bk.benchmarkTitle')">
+              <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label() }}</option>
             </select>
-            <select v-if="!noBars" v-model="chartSource" class="small" title="Advanced Charts：伺服器抓各成分股日線（TradingView，備用 TWS、Yahoo）自己組成指數，檔數不限；TradingView widget：官方嵌入圖，成分股組成價差商品由 TradingView 計算，最多 10 檔">
-              <option value="own">圖：Advanced Charts</option>
-              <option value="widget">圖：TradingView widget</option>
+            <select v-if="!noBars" v-model="chartSource" class="small" :title="t('bk.chartSourceTitle')">
+              <option value="own">{{ t('bk.chartOwn') }}</option>
+              <option value="widget">{{ t('bk.chartWidget') }}</option>
             </select>
-            <select v-model="colors" class="small" title="K 棒顏色">
-              <option value="tw">紅漲綠跌</option>
-              <option value="us">綠漲紅跌</option>
+            <select v-model="colors" class="small" :title="t('bk.candleColors')">
+              <option value="tw">{{ t('chart.tw') }}</option>
+              <option value="us">{{ t('chart.us') }}</option>
             </select>
-            <button class="small" title="複製一份" @click="duplicate(current)">複製</button>
-            <button class="small danger" @click="remove(current)">刪除</button>
+            <button class="small" :title="t('bk.duplicateTitle')" @click="duplicate(current)">{{ t('bk.duplicate') }}</button>
+            <button class="small danger" @click="remove(current)">{{ t('delete') }}</button>
           </div>
         </div>
 
@@ -516,18 +521,18 @@ const sourceText = computed(() => {
         <p v-if="pruned" class="muted small note infobox">{{ pruned }} <button class="mini ghost" @click="pruned = ''">✕</button></p>
         <div v-if="current.source" class="panel srcbar">
           <div class="small">
-            <b>來源</b> {{ sourceLabel(current.source) }}
-            <span v-if="current.sync" class="muted">· {{ current.sync.sourceName }}<template v-if="current.sync.asOf">，資料日 {{ current.sync.asOf }}</template> · 上次同步 {{ new Date(current.sync.at).toLocaleString() }}</span>
-            <span v-if="manualCount" class="muted">· 手動 {{ manualCount }} 檔（同步時保留）</span>
-            <span v-if="current.excluded?.length" class="muted">· 已排除 {{ current.excluded.length }} 檔（見最下方）</span>
+            <b>{{ t('bk.source') }}</b> {{ sourceLabel(current.source) }}
+            <span v-if="current.sync" class="muted">· {{ tr(current.sync.sourceName) }}<template v-if="current.sync.asOf">{{ t('bk.asOf', { date: current.sync.asOf }) }}</template> · {{ t('bk.lastSync', { time: new Date(current.sync.at).toLocaleString(dateLocale.value) }) }}</span>
+            <span v-if="manualCount" class="muted">· {{ t('bk.manualCount', { n: manualCount }) }}</span>
+            <span v-if="current.excluded?.length" class="muted">· {{ t('bk.excludedCount', { n: current.excluded.length }) }}</span>
           </div>
           <div class="options">
-            <span v-if="syncMsg" class="small" :class="{ warn: syncMsg.startsWith('同步失敗') }">{{ syncMsg }}</span>
-            <button v-if="current.source.type === 'screen'" class="small" title="回到尋找股票，帶著這個 ETF 的篩選條件：改完可以更新這個 ETF（手動調整保留），或另外建一個新的" @click="emit('screen', current)">✎ 編輯篩選條件</button>
-            <button class="small" :disabled="syncing" title="重新抓來源的最新成分與權重：新增的加進來、移除的拿掉、權重更新；手動新增和手動改過權重的不受影響" @click="resync">{{ syncing ? '同步中…' : '↻ 重新同步' }}</button>
+            <span v-if="syncMsg" class="small" :class="{ warn: syncFailed }">{{ syncMsg }}</span>
+            <button v-if="current.source.type === 'screen'" class="small" :title="t('bk.editFiltersTitle')" @click="emit('screen', current)">{{ t('bk.editFilters') }}</button>
+            <button class="small" :disabled="syncing" :title="t('bk.resyncTitle')" @click="resync">{{ syncing ? t('bk.syncing') : t('bk.resync') }}</button>
           </div>
         </div>
-        <p v-if="!current.constituents.length" class="empty muted">這個 ETF 還沒有成分股：在下面搜尋加入，或從尋找股票 / 觀察名單組成。</p>
+        <p v-if="!current.constituents.length" class="empty muted">{{ t('bk.empty') }}</p>
 
         <div v-if="loading && !useTv" class="panel progressbox" :class="{ overlay: result?.bars?.length }">
           <div class="pbar" :class="{ indeterminate: !progress }">
@@ -535,75 +540,73 @@ const sourceText = computed(() => {
           </div>
           <div class="ptext small">
             <template v-if="progress">
-              <b>{{ progress.done }} / {{ progress.total }}</b> 檔日線已到<template v-if="progress.done < progress.total">，其餘抓取中（TradingView，備用 TWS、Yahoo；第一次較慢，之後 30 分鐘內有快取）</template><template v-else>，計算指數中</template>…
+              <b>{{ progress.done }} / {{ progress.total }}</b> {{ t('bk.barsArrived') }}<template v-if="progress.done < progress.total">{{ t('bk.barsFetching') }}</template><template v-else>{{ t('bk.barsComputing') }}</template>…
               <span class="chips">
-                <span v-for="m in progress.members" :key="m.symbol" class="chip mono" :class="{ bad: m.error, bench: m.bench }" :title="m.error ? m.error : `${m.source} · ${m.first} ～ ${m.last}（${m.days} 天）`">{{ m.symbol }}</span>
+                <span v-for="m in progress.members" :key="m.symbol" class="chip mono" :class="{ bad: m.error, bench: m.bench }" :title="m.error ? m.error : `${m.source} · ${m.first} ～ ${m.last} (${t('bk.days', { n: m.days })})`">{{ m.symbol }}</span>
               </span>
             </template>
-            <template v-else>連線中…</template>
+            <template v-else>{{ t('bk.connecting') }}</template>
           </div>
         </div>
         <div v-if="useTv || result?.bars?.length" class="panel chart">
           <TvEmbedChart v-if="useTv" :expression="tvExpression" :compare="tvCompare" :range="TV_RANGE[range] || 'ALL'" :colors="colors" />
           <KlineChart v-else :bars="result.bars" :overlay="result.benchmark?.points || []" :overlay-label="result.benchmark?.symbol || ''" :label="current.name" :colors="colors" :advanced="advanced" />
           <div v-if="result?.stats" class="stats">
-            <div><span class="muted small">區間報酬</span><b class="mono" :class="cls(result.stats.total)">{{ pct(result.stats.total) }}</b></div>
-            <div v-if="benchStats"><span class="muted small">{{ result.benchmark.symbol }} 同期</span><b class="mono" :class="cls(benchStats.total)">{{ pct(benchStats.total) }}</b></div>
-            <div><span class="muted small">年化報酬</span><b class="mono" :class="cls(result.stats.cagr)">{{ pct(result.stats.cagr) }}</b></div>
-            <div><span class="muted small">年化波動</span><b class="mono">{{ pct(result.stats.vol, false) }}</b></div>
-            <div :title="`${result.stats.drawdownFrom} 高點 → ${result.stats.drawdownTo}`"><span class="muted small">最大回撤</span><b class="mono down">{{ pct(result.stats.maxDrawdown) }}</b></div>
-            <div :title="result.stats.best?.date"><span class="muted small">最佳單日</span><b class="mono up">{{ pct(result.stats.best?.r) }}</b></div>
-            <div :title="result.stats.worst?.date"><span class="muted small">最差單日</span><b class="mono down">{{ pct(result.stats.worst?.r) }}</b></div>
-            <div><span class="muted small">交易日</span><b class="mono">{{ result.stats.days }}</b></div>
+            <div><span class="muted small">{{ t('bk.periodReturn') }}</span><b class="mono" :class="cls(result.stats.total)">{{ pct(result.stats.total) }}</b></div>
+            <div v-if="benchStats"><span class="muted small">{{ t('bk.samePeriod', { symbol: result.benchmark.symbol }) }}</span><b class="mono" :class="cls(benchStats.total)">{{ pct(benchStats.total) }}</b></div>
+            <div><span class="muted small">{{ t('bk.cagr') }}</span><b class="mono" :class="cls(result.stats.cagr)">{{ pct(result.stats.cagr) }}</b></div>
+            <div><span class="muted small">{{ t('bk.vol') }}</span><b class="mono">{{ pct(result.stats.vol, false) }}</b></div>
+            <div :title="t('bk.drawdownTitle', { from: result.stats.drawdownFrom, to: result.stats.drawdownTo })"><span class="muted small">{{ t('bk.maxDrawdown') }}</span><b class="mono down">{{ pct(result.stats.maxDrawdown) }}</b></div>
+            <div :title="result.stats.best?.date"><span class="muted small">{{ t('bk.bestDay') }}</span><b class="mono up">{{ pct(result.stats.best?.r) }}</b></div>
+            <div :title="result.stats.worst?.date"><span class="muted small">{{ t('bk.worstDay') }}</span><b class="mono down">{{ pct(result.stats.worst?.r) }}</b></div>
+            <div><span class="muted small">{{ t('bk.tradingDays') }}</span><b class="mono">{{ result.stats.days }}</b></div>
           </div>
           <p v-if="useTv" class="muted small note">
-            圖：TradingView widget，成分股組成價差商品 <span class="mono">{{ tvExpression }}</span>{{ tvCompare ? `，比較 ${tvCompare}` : '' }}（係數 = 起點時的持有單位，起點 = 100）；
-            {{ noBars ? '純前端版沒有伺服器算的統計與成分股報酬。' : `統計與下表${result ? `：${result.source}` : '：等 TWS / Yahoo 的日線'}。` }}{{ current.rebalance === 'daily' ? 'TradingView 的價差商品是買進持有，每日再平衡只反映在統計。' : '' }}
+            {{ t('bk.widgetNoteA') }} <span class="mono">{{ tvExpression }}</span>{{ tvCompare ? t('bk.widgetCompare', { c: tvCompare }) : '' }}{{ t('bk.widgetNoteB') }}
+            {{ noBars ? t('bk.widgetStatic') : t('bk.widgetStats', { src: result ? `: ${result.source}` : t('bk.widgetWaiting') }) }}{{ current.rebalance === 'daily' ? t('bk.widgetRebalance') : '' }}
           </p>
-          <p v-for="n in result?.notes || []" :key="n" class="muted small note">※ {{ n }}</p>
+          <p v-for="(n, i) in result?.notes || []" :key="i" class="muted small note">※ {{ t(`bkNote.${n.code}`, n) }}</p>
         </div>
-        <p v-if="chartSource === 'widget' && tvTooMany" class="muted small note warnbox">
-          TradingView widget 的價差商品最多 10 檔，這個 ETF 納入 {{ tvIncluded.length }} 檔，改用 Advanced Charts（資料同樣來自 TradingView）；用眼睛暫時隱藏到 10 檔以內就會切回 widget。
-        </p>
+        <p v-if="chartSource === 'widget' && tvTooMany" class="muted small note warnbox">{{ t('bk.tooMany', { n: tvIncluded.length }) }}</p>
 
         <div v-if="current" class="panel editor">
           <div class="add">
             <CompanySearch @select="addFromSearch" />
-            <span class="muted small">{{ addMsg || '搜尋後加入成分股（新加入的分到 1/n，其餘按比例縮）' }}</span>
-            <button v-if="current.constituents.length" class="mini" title="每檔相同權重" @click="equalWeights(current.id)">等權重</button>
+            <span class="muted small">{{ addMsg || t('bk.addHint') }}</span>
+            <button v-if="current.constituents.length" class="mini" :title="t('bk.equalTitle')" @click="equalWeights(current.id)">{{ t('bk.equal') }}</button>
           </div>
         </div>
 
         <div v-for="g in groups" :key="g.key" class="panel wrap">
-          <div v-if="g.title" class="ghead"><b>{{ g.title }}</b> <span class="muted small">{{ g.rows.length }} 檔 · {{ g.hint }}</span></div>
+          <div v-if="g.title" class="ghead"><b>{{ g.title }}</b> <span class="muted small">{{ t('bk.names', { n: g.rows.length }) }} · {{ g.hint }}</span></div>
           <table>
             <thead>
               <tr>
-                <th class="eye" :class="{ some: hiddenCount }" :title="hiddenCount ? '全部顯示' : '暫時隱藏／顯示成分股，看對 K 線的影響（不改權重、不會儲存）'" @click="hiddenCount && showAll()">
+                <th class="eye" :class="{ some: hiddenCount }" :title="hiddenCount ? t('bk.showAll') : t('bk.eyeTitle')" @click="hiddenCount && showAll()">
                   <Icon :name="hiddenCount ? 'eye-off' : 'eye'" />
                 </th>
-                <th class="sortable" @click="sortBy('ticker')">代號{{ arrow('ticker') }}</th>
-                <th class="sortable" @click="sortBy('name')">公司{{ arrow('name') }}</th>
-                <th class="num sortable" title="可直接改：百分比，設 0 就不納入指數；合計不是 100 時按比例換算" @click="sortBy('weight')">權重 %{{ arrow('weight') }}</th>
-                <th v-if="current.source" class="num" title="來源目前的權重（同步時更新）">來源權重</th>
-                <th class="num">起點收盤</th>
-                <th class="num">最新收盤</th>
-                <th class="num sortable" @click="sortBy('return')">區間報酬{{ arrow('return') }}</th>
-                <th class="num sortable" title="權重 × 報酬（買進持有時各檔貢獻加總 = 區間報酬）" @click="sortBy('contribution')">貢獻{{ arrow('contribution') }}</th>
-                <th>資料</th>
+                <th class="sortable" @click="sortBy('ticker')">{{ t('col.ticker') }}{{ arrow('ticker') }}</th>
+                <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
+                <th class="num sortable" :title="t('bk.weightTitle')" @click="sortBy('weight')">{{ t('bk.weightPct') }}{{ arrow('weight') }}</th>
+                <th v-if="current.source" class="num" :title="t('bk.sourceWeightTitle')">{{ t('bk.sourceWeight') }}</th>
+                <th class="num">{{ t('bk.startClose') }}</th>
+                <th class="num">{{ t('bk.lastClose') }}</th>
+                <th class="num sortable" @click="sortBy('return')">{{ t('bk.periodReturn') }}{{ arrow('return') }}</th>
+                <th class="num sortable" :title="t('bk.contributionTitle')" @click="sortBy('contribution')">{{ t('bk.contribution') }}{{ arrow('contribution') }}</th>
+                <th>{{ t('bk.data') }}</th>
                 <th class="del"></th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="c in g.rows" :key="c.ticker" class="row" :class="{ off: isHidden(c) }" @click="emit('open', c)">
-                <td class="eye" :title="isHidden(c) ? '暫時隱藏中，點一下放回指數' : '暫時從指數拿掉，看 K 線怎麼變'" @click.stop="toggleHidden(c)"><Icon :name="isHidden(c) ? 'eye-off' : 'eye'" /></td>
+                <td class="eye" :title="isHidden(c) ? t('bk.hiddenTitle') : t('bk.hideTitle')" @click.stop="toggleHidden(c)"><Icon :name="isHidden(c) ? 'eye-off' : 'eye'" /></td>
                 <td class="mono"><a :href="`?company=${c.ticker}`" @click.prevent>{{ c.ticker }}</a></td>
                 <td class="name">{{ c.name }}</td>
                 <td class="num weight" @click.stop>
                   <input :value="c.weight" type="number" min="0" max="100" step="1" class="w" :class="{ zero: !(Number(c.weight) > 0), manual: c.manualWeight || c.origin === 'manual' }" @input="onWeightInput(c, $event)" />
-                  <span class="mono small muted" :title="scaled ? '依納入指數的合計換算後的實際權重' : ''">{{ isHidden(c) ? '隱藏' : !(Number(c.weight) > 0) ? '未納入' : scaled ? `→ ${pct(weightPct(c), false)}` : '' }}</span>
-                  <span v-if="c.origin === 'source' && c.manualWeight" class="tag manual" title="你改過的權重：重新同步時保留">手動</span>
-                  <button v-if="c.origin === 'source' && c.manualWeight" class="mini ghost" :title="c.gone ? '來源已無此檔：移除' : `改回來源權重 ${c.sourceWeight}%`" @click="revertWeight(current.id, c.ticker)">↺</button>
+                  <span class="mono small muted" :title="scaled ? t('bk.effectiveWeight') : ''">{{ isHidden(c) ? t('bk.hidden') : !(Number(c.weight) > 0) ? t('bk.notIncluded') : scaled ? `→ ${pct(weightPct(c), false)}` : '' }}</span>
+                  <span v-if="c.origin === 'source' && c.manualWeight" class="tag manual" :title="t('bk.manualTitle')">{{ t('bk.manual') }}</span>
+                  <button v-if="c.origin === 'source' && c.manualWeight" class="mini ghost" :title="c.gone ? t('bk.revertGone') : t('bk.revert', { w: c.sourceWeight })" @click="revertWeight(current.id, c.ticker)">↺</button>
                 </td>
                 <td v-if="current.source" class="num mono small muted">{{ c.origin === 'source' && c.sourceWeight != null && !c.gone ? f1.format(c.sourceWeight) + '%' : '—' }}</td>
                 <td class="num mono">{{ perf[c.ticker]?.startClose != null ? f2.format(perf[c.ticker].startClose) : '—' }}</td>
@@ -612,44 +615,44 @@ const sourceText = computed(() => {
                 <td class="num mono" :class="cls(perf[c.ticker]?.contribution)">{{ pct(perf[c.ticker]?.contribution) }}</td>
                 <td class="small muted">
                   <template v-if="perf[c.ticker]">
-                    <span v-if="perf[c.ticker].illiquid" class="warn" title="成交稀少或股價低於 1 美元：單日跳動可能很大，會扭曲整個指數">⚠ 低流動性</span>
-                    {{ perf[c.ticker].source }} · {{ perf[c.ticker].first }} 起<span v-if="perf[c.ticker].joined && perf[c.ticker].joined !== result.start" class="warn">，{{ perf[c.ticker].joined }} 納入</span><span v-if="perf[c.ticker].delisted" class="warn" title="最近兩週沒有成交資料：下市、被收購或更名，目前買不到">，{{ perf[c.ticker].last }} 後無報價（已下市）</span><span v-else-if="perf[c.ticker].left" class="warn">，{{ perf[c.ticker].left }} 除名</span><span v-else-if="!perf[c.ticker].joined" class="warn">，區間內無資料</span>
+                    <span v-if="perf[c.ticker].illiquid" class="warn" :title="t('bk.illiquidTitle')">{{ t('bk.illiquid') }}</span>
+                    {{ perf[c.ticker].source }} · {{ t('bk.from', { date: perf[c.ticker].first }) }}<span v-if="perf[c.ticker].joined && perf[c.ticker].joined !== result.start" class="warn">{{ t('bk.joinedOn', { date: perf[c.ticker].joined }) }}</span><span v-if="perf[c.ticker].delisted" class="warn" :title="t('bk.delistedTitle')">{{ t('bk.noQuotesAfter', { date: perf[c.ticker].last }) }}</span><span v-else-if="perf[c.ticker].left" class="warn">{{ t('bk.leftOn', { date: perf[c.ticker].left }) }}</span><span v-else-if="!perf[c.ticker].joined" class="warn">{{ t('bk.noDataInRange') }}</span>
                   </template>
-                  <span v-else-if="result?.failed?.find((f) => f.ticker === c.ticker)" class="down">無資料</span>
+                  <span v-else-if="result?.failed?.find((f) => f.ticker === c.ticker)" class="down">{{ t('bk.noData') }}</span>
                   <template v-else>{{ inIndex(c) && !noBars ? '…' : '—' }}</template>
                 </td>
-                <td class="del" :title="`從 ETF 移除 ${c.ticker}（其餘權重按比例補回 100%${c.origin === 'source' ? '；重新同步不會加回來' : ''}）`" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
+                <td class="del" :title="t('bk.removeTitle', { t: c.ticker, src: c.origin === 'source' ? t('bk.removeSourceNote') : '' })" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
               </tr>
             </tbody>
             <tfoot v-if="g.key === groups.at(-1).key">
               <tr>
                 <td colspan="3" class="muted small">
-                  {{ current.constituents.filter(inIndex).length }} 檔納入指數<template v-if="hiddenCount">，暫時隱藏 {{ hiddenCount }} 檔 <button class="mini ghost" @click="showAll">全部顯示</button></template>
-                  <template v-if="delisted.length"> · <span class="warn">{{ delisted.length }} 檔已下市 / 查無報價（見下表）</span></template>
+                  {{ t('bk.included', { n: current.constituents.filter(inIndex).length }) }}<template v-if="hiddenCount">{{ t('bk.hiddenN', { n: hiddenCount }) }} <button class="mini ghost" @click="showAll">{{ t('bk.showAll') }}</button></template>
+                  <template v-if="delisted.length"> · <span class="warn">{{ t('bk.delistedN', { n: delisted.length }) }}</span></template>
                 </td>
                 <td class="num weight">
                   <b class="mono" :class="{ off: totalOff }">{{ f1.format(totalWeight) }}%</b>
-                  <button v-if="totalOff" class="mini" title="按比例把權重換算成合計 100%" @click="normalizeWeights(current.constituents)">湊成 100%</button>
-                  <button v-else class="mini ghost" title="每檔相同權重" @click="equalWeights(current.id)">等權重</button>
+                  <button v-if="totalOff" class="mini" :title="t('bk.normalizeTitle')" @click="normalizeWeights(current.constituents)">{{ t('bk.normalize') }}</button>
+                  <button v-else class="mini ghost" :title="t('bk.equalTitle')" @click="equalWeights(current.id)">{{ t('bk.equal') }}</button>
                 </td>
-                <td :colspan="current.source ? 7 : 6" class="muted small">{{ totalOff ? '合計不是 100%，指數依比例換算（右邊小字是實際權重）' : hiddenCount ? '隱藏的權重由其餘成分股按比例分攤（右邊小字是實際權重）' : '' }}</td>
+                <td :colspan="current.source ? 7 : 6" class="muted small">{{ totalOff ? t('bk.totalOff') : hiddenCount ? t('bk.hiddenShare') : '' }}</td>
               </tr>
             </tfoot>
           </table>
         </div>
         <div v-if="delisted.length" class="panel wrap excluded delisted">
           <div class="ghead">
-            <b class="warn">已下市 / 查無報價（建立後才發生的）</b> <span class="muted small">{{ delisted.length }} 檔 · 目前買不到；指數只算到它最後有報價的那天，之後的部位按比例分給其餘成分股</span>
-            <button class="mini" title="移除這些成分股，其餘權重按比例補回 100%" @click="removeDelisted">全部移除</button>
+            <b class="warn">{{ t('bk.delistedHead') }}</b> <span class="muted small">{{ t('bk.names', { n: delisted.length }) }} · {{ t('bk.delistedHint') }}</span>
+            <button class="mini" :title="t('bk.removeAllTitle')" @click="removeDelisted">{{ t('bk.removeAll') }}</button>
           </div>
           <table>
             <thead>
               <tr>
-                <th>代號</th>
-                <th>公司</th>
-                <th class="num">權重 %</th>
-                <th class="num">最後收盤</th>
-                <th>狀態</th>
+                <th>{{ t('col.ticker') }}</th>
+                <th>{{ t('col.company') }}</th>
+                <th class="num">{{ t('bk.weightPct') }}</th>
+                <th class="num">{{ t('bk.lastCloseCol') }}</th>
+                <th>{{ t('bk.status') }}</th>
                 <th class="del"></th>
               </tr>
             </thead>
@@ -661,25 +664,25 @@ const sourceText = computed(() => {
                 <td class="num mono">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}<span v-if="perf[c.ticker]?.last" class="small muted"> ({{ perf[c.ticker].last }})</span></td>
                 <td class="small warn">
                   {{ delistedWhy(c).text }}
-                  <button v-if="delistedWhy(c).renamed" class="mini" @click.stop="followRename(c, delistedWhy(c).renamed)">改用 {{ delistedWhy(c).renamed }}</button>
+                  <button v-if="delistedWhy(c).renamed" class="mini" @click.stop="followRename(c, delistedWhy(c).renamed)">{{ t('bk.useRenamed', { t: delistedWhy(c).renamed }) }}</button>
                 </td>
-                <td class="del" :title="`從 ETF 移除 ${c.ticker}（其餘權重按比例補回 100%）`" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
+                <td class="del" :title="t('bk.removeTitle', { t: c.ticker, src: '' })" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
               </tr>
             </tbody>
           </table>
         </div>
         <div v-if="current.source && current.excluded?.length" class="panel wrap excluded">
           <div class="ghead">
-            <b>已排除（來源有、你刪掉的）</b> <span class="muted small">{{ current.excluded.length }} 檔 · 重新同步不會加回來；「還原」會加回來並同步</span>
-            <button class="mini" @click="restore()">全部還原</button>
+            <b>{{ t('bk.excludedHead') }}</b> <span class="muted small">{{ t('bk.names', { n: current.excluded.length }) }} · {{ t('bk.excludedHint') }}</span>
+            <button class="mini" @click="restore()">{{ t('bk.restoreAll') }}</button>
           </div>
           <table>
             <thead>
               <tr>
-                <th>代號</th>
-                <th>公司</th>
-                <th class="num" title="來源目前的權重（同步時更新）">來源權重</th>
-                <th>排除時間</th>
+                <th>{{ t('col.ticker') }}</th>
+                <th>{{ t('col.company') }}</th>
+                <th class="num" :title="t('bk.sourceWeightTitle')">{{ t('bk.sourceWeight') }}</th>
+                <th>{{ t('bk.excludedAt') }}</th>
                 <th class="del"></th>
               </tr>
             </thead>
@@ -688,19 +691,16 @@ const sourceText = computed(() => {
                 <td class="mono"><a :href="`?company=${e.ticker}`" @click.prevent>{{ e.ticker }}</a></td>
                 <td class="name">{{ e.name }}</td>
                 <td class="num mono small muted">{{ e.sourceWeight != null ? f1.format(e.sourceWeight) + '%' : '—' }}</td>
-                <td class="small muted">{{ e.at ? new Date(e.at).toLocaleString() : '—' }}</td>
-                <td class="del" @click.stop><button class="mini" :disabled="syncing" title="加回來並重新同步" @click="restore(e.ticker)">還原</button></td>
+                <td class="small muted">{{ e.at ? new Date(e.at).toLocaleString(dateLocale.value) : '—' }}</td>
+                <td class="del" @click.stop><button class="mini" :disabled="syncing" :title="t('bk.restoreTitle')" @click="restore(e.ticker)">{{ t('bk.restore') }}</button></td>
               </tr>
             </tbody>
           </table>
         </div>
-        <p class="muted small note">
-          指數 = 成分股以起點收盤價換算成持有單位後的加權合計（起點 = 100）；K 棒的高低點是各成分股當天高低點的加權和，會略高估真實區間。價格為除權調整後（IBKR TRADES / Yahoo），不含股利。
-          圖表使用 TradingView Lightweight Charts{{ advanced ? '；已偵測到 Advanced Charts 函式庫，改用完整版' : '' }}。
-        </p>
+        <p class="muted small note">{{ t('bk.indexNote', { adv: advanced ? t('bk.indexNoteAdvanced') : '' }) }}</p>
       </main>
       <main v-else>
-        <p class="empty muted">先在左邊新增一個自製 ETF，或從觀察名單的分類建立。</p>
+        <p class="empty muted">{{ t('bk.noCurrent') }}</p>
       </main>
     </div>
   </div>

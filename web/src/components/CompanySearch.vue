@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue';
 import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
+import { t } from '../i18n';
 
 const emit = defineEmits(['select']);
 const query = ref('');
@@ -72,7 +73,7 @@ function onBlur() {
     <input
       v-model="query"
       type="text"
-      placeholder="輸入股票代號或公司名稱，例如 GOOGL、AAPL、TSM，或直接輸入 CIK"
+      :placeholder="t('search.placeholder')"
       @keydown.enter="submit"
       @keydown.esc="close"
       @focus="onFocus"

@@ -1,15 +1,19 @@
 <script setup>
 // Score breakdown of one filing, shown above the indicators table.
 import { computed, ref } from 'vue';
+import { t, tr } from '../i18n';
 
 const props = defineProps({ score: { type: Object, required: true } });
 const open = ref(false);
 const cls = (s) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
 const f1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
 const OP = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
-const fmtVal = (it) => (it.value == null ? '—' : `${f1.format(it.value)}${it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${it.unit}`}`);
-const fmtBench = (it) => `${OP[it.benchmark.op]} ${it.benchmark.value}${it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${it.unit}`}`;
-const gradeText = (g) => (g == null ? '無法計算' : g === 1 ? '達標' : g === 0.5 ? '接近' : '未達');
+const unitOf = (it) => (it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${tr(it.unit)}`);
+const fmtVal = (it) => (it.value == null ? '—' : `${f1.format(it.value)}${unitOf(it)}`);
+const fmtBench = (it) => `${OP[it.benchmark.op]} ${it.benchmark.value}${unitOf(it)}`;
+const gradeText = (g) => t(g == null ? 'sc.gradeNone' : g === 1 ? 'sc.gradeFull' : g === 0.5 ? 'sc.gradeHalf' : 'sc.gradeZero');
+// the basis line from the months the flows cover (the stored note is Chinese only)
+const basisNote = computed(() => (props.score.basis.monthsLen === 12 ? t('sc.basisFull') : t('sc.basisYtd', { months: props.score.basis.monthsLen, factor: (12 / props.score.basis.monthsLen).toFixed(2) })));
 const byCat = computed(() => props.score.categories.map((c) => ({ ...c, items: props.score.items.filter((i) => i.category === c.name) })));
 </script>
 
@@ -22,34 +26,34 @@ const byCat = computed(() => props.score.categories.map((c) => ({ ...c, items: p
       </div>
       <div class="cats">
         <div v-for="c in score.categories" :key="c.name" class="cat">
-          <div class="cat-name">{{ c.name }}</div>
+          <div class="cat-name">{{ tr(c.name) }}</div>
           <div class="bar"><div class="fill" :class="cls(c.score)" :style="{ width: `${c.score ?? 0}%` }"></div></div>
           <div class="cat-val muted">{{ c.earned }} / {{ c.applicable }}</div>
         </div>
       </div>
       <div class="meta muted small">
-        {{ score.form }} {{ score.fiscalYear }} {{ score.fiscalPeriod }} · 期末 {{ score.periodEnd }}<br />
-        {{ score.basis.note }}<br />
-        可計算項目 {{ score.coverage }}/100 分 · <span class="link">{{ open ? '收起明細 ▴' : '看明細 ▾' }}</span>
+        {{ score.form }} {{ score.fiscalYear }} {{ score.fiscalPeriod }} · {{ t('meta.periodEnd') }} {{ score.periodEnd }}<br />
+        {{ basisNote }}<br />
+        {{ t('sc.coverage', { n: score.coverage }) }} · <span class="link">{{ open ? t('sc.hide') : t('sc.show') }}</span>
       </div>
     </div>
     <div v-if="open" class="detail">
       <table>
         <thead>
           <tr>
-            <th>類別</th>
-            <th>指標</th>
-            <th class="num">數值</th>
-            <th>標準</th>
-            <th>結果</th>
-            <th class="num">得分</th>
+            <th>{{ t('it.group') }}</th>
+            <th>{{ t('sc.item') }}</th>
+            <th class="num">{{ t('sc.value') }}</th>
+            <th>{{ t('sc.benchmark') }}</th>
+            <th>{{ t('sc.result') }}</th>
+            <th class="num">{{ t('sc.points') }}</th>
           </tr>
         </thead>
         <tbody>
           <template v-for="c in byCat" :key="c.name">
             <tr v-for="(it, i) in c.items" :key="it.key" :class="{ first: i === 0 }">
-              <td v-if="i === 0" :rowspan="c.items.length" class="catcell">{{ c.name }}</td>
-              <td>{{ it.name }}</td>
+              <td v-if="i === 0" :rowspan="c.items.length" class="catcell">{{ tr(c.name) }}</td>
+              <td>{{ tr(it.name) }}</td>
               <td class="num">{{ fmtVal(it) }}</td>
               <td class="muted">{{ fmtBench(it) }}</td>
               <td :class="it.grade == null ? 'muted' : it.grade === 1 ? 'good-t' : it.grade === 0.5 ? 'mid-t' : 'bad-t'">{{ gradeText(it.grade) }}</td>
@@ -58,7 +62,7 @@ const byCat = computed(() => props.score.categories.map((c) => ({ ...c, items: p
           </template>
         </tbody>
       </table>
-      <p class="muted small">達標得滿分、離標準 20% 以內得一半、其餘 0 分；無法計算的項目不計，總分按剩餘項目換算成 100。分數由這一份申報獨立算出（年初至今數字年化），所以跟上方指標表的「單季 ×4」或「近四季」可能略有不同。</p>
+      <p class="muted small">{{ t('sc.footnote') }}</p>
     </div>
   </div>
 </template>

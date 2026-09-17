@@ -5,6 +5,7 @@ import ScoreBadge from './ScoreBadge.vue';
 import CompanySearch from './CompanySearch.vue';
 import { addGroup, removeGroup, removeWatch, renameGroup, setGroups, toggleWatch, watchlist } from '../watchlist';
 import { createBasket } from '../baskets';
+import { t, tr } from '../i18n';
 
 const emit = defineEmits(['open', 'basket']);
 const scores = ref({});
@@ -88,7 +89,7 @@ function finishRename() {
   renaming.value = null;
 }
 function deleteGroup(g) {
-  if (!confirm(`刪除分類「${g}」？股票會留在名單中，只是不再屬於這個分類。`)) return;
+  if (!confirm(t('wl.confirmDeleteGroup', { g }))) return;
   removeGroup(g);
   if (current.value === g) current.value = 'all';
 }
@@ -97,7 +98,7 @@ function makeBasket() {
   const items = filtered.value.filter((x) => x.ticker);
   if (!items.length) return;
   const group = current.value === '__none' ? null : current.value;
-  createBasket(current.value === 'all' ? '觀察名單' : current.value === '__none' ? '未分類' : current.value, items, { prune: true, source: group ? { type: 'watch', group } : null });
+  createBasket(current.value === 'all' ? t('nav.watch') : current.value === '__none' ? t('wl.ungrouped') : current.value, items, { prune: true, source: group ? { type: 'watch', group } : null });
   emit('basket');
 }
 // add a company straight into the current group from the search box
@@ -107,9 +108,9 @@ async function addFromSearch(ticker) {
     const c = await api.company(ticker);
     const group = current.value !== 'all' && current.value !== '__none' ? current.value : null;
     toggleWatch({ cik: c.cik, ticker: c.tickers?.[0] || null, name: c.name }, group);
-    addMsg.value = `已加入 ${c.tickers?.[0] || c.name}${group ? ` → ${group}` : ''}`;
+    addMsg.value = t('wl.added', { name: c.tickers?.[0] || c.name, group: group ? ` → ${group}` : '' });
   } catch (e) {
-    addMsg.value = `找不到：${e.message}`;
+    addMsg.value = t('notFound', { msg: e.message });
   }
 }
 </script>
@@ -118,8 +119,8 @@ async function addFromSearch(ticker) {
   <div class="watch">
     <div class="layout">
       <aside class="panel side">
-        <div class="side-head">分類</div>
-        <div class="group" :class="{ active: current === 'all' }" @click="current = 'all'">全部 <span class="muted">{{ counts.all }}</span></div>
+        <div class="side-head">{{ t('wl.groups') }}</div>
+        <div class="group" :class="{ active: current === 'all' }" @click="current = 'all'">{{ t('wl.all') }} <span class="muted">{{ counts.all }}</span></div>
         <div v-for="g in watchlist.groups" :key="g" class="group" :class="{ active: current === g }" @click="current = g">
           <template v-if="renaming?.from === g">
             <input v-model="renaming.to" type="text" class="rename" @keyup.enter="finishRename" @keyup.esc="renaming = null" @blur="finishRename" @click.stop />
@@ -127,72 +128,72 @@ async function addFromSearch(ticker) {
           <template v-else>
             <span class="gname">{{ g }}</span> <span class="muted">{{ counts[g] }}</span>
             <span class="tools">
-              <button class="mini" title="改名" @click.stop="startRename(g)">✎</button>
-              <button class="mini" title="刪除分類" @click.stop="deleteGroup(g)">✕</button>
+              <button class="mini" :title="t('rename')" @click.stop="startRename(g)">✎</button>
+              <button class="mini" :title="t('wl.deleteGroup')" @click.stop="deleteGroup(g)">✕</button>
             </span>
           </template>
         </div>
-        <div class="group" :class="{ active: current === '__none' }" @click="current = '__none'">未分類 <span class="muted">{{ counts.__none }}</span></div>
+        <div class="group" :class="{ active: current === '__none' }" @click="current = '__none'">{{ t('wl.ungrouped') }} <span class="muted">{{ counts.__none }}</span></div>
         <div class="newgroup">
-          <input v-model="newGroup" type="text" placeholder="新增分類，例如 航運股" @keyup.enter="createGroup" />
-          <button class="mini" :disabled="!newGroup.trim()" @click="createGroup">新增</button>
+          <input v-model="newGroup" type="text" :placeholder="t('wl.newGroupPlaceholder')" @keyup.enter="createGroup" />
+          <button class="mini" :disabled="!newGroup.trim()" @click="createGroup">{{ t('add') }}</button>
         </div>
-        <div class="side-head">加入股票</div>
+        <div class="side-head">{{ t('wl.addStock') }}</div>
         <CompanySearch @select="addFromSearch" />
-        <p class="muted small">{{ addMsg || (current !== 'all' && current !== '__none' ? `搜尋後直接加入「${current}」` : '搜尋後加入名單（未分類）') }}</p>
-        <p class="muted small">名單與分類存在這個瀏覽器的 localStorage。</p>
+        <p class="muted small">{{ addMsg || (current !== 'all' && current !== '__none' ? t('wl.addToGroup', { g: current }) : t('wl.addUngrouped')) }}</p>
+        <p class="muted small">{{ t('wl.storage') }}</p>
       </aside>
 
       <main>
         <div class="panel meta">
           <div>
-            <strong>{{ current === 'all' ? '觀察名單' : current === '__none' ? '未分類' : current }}</strong>
-            <span class="muted small">{{ rows.length }} 家</span>
+            <strong>{{ current === 'all' ? t('nav.watch') : current === '__none' ? t('wl.ungrouped') : current }}</strong>
+            <span class="muted small">{{ t('companies', { n: rows.length }) }}</span>
           </div>
           <div class="options">
-            <button class="small" :disabled="!rows.length" title="把這個分類的股票組成自製 ETF，畫成 K 線" @click="makeBasket">組成自製 ETF</button>
-            <button class="small" :disabled="loading || !watchlist.items.length" @click="refresh">{{ loading ? '更新中…' : '↻ 更新評分' }}</button>
+            <button class="small" :disabled="!rows.length" :title="t('wl.makeBasketTitle')" @click="makeBasket">{{ t('makeBasket') }}</button>
+            <button class="small" :disabled="loading || !watchlist.items.length" @click="refresh">{{ loading ? t('filings.refreshing') : t('wl.refreshScores') }}</button>
           </div>
         </div>
         <p v-if="!rows.length" class="empty muted">
-          {{ watchlist.items.length ? '這個分類還沒有股票：在列上點「分類」勾選，或在左邊搜尋後直接加入。' : '還沒有加入任何公司。在財報頁公司名稱旁、分類瀏覽、ETF 成分股或尋找股票的表格點 ☆，或在左邊搜尋加入。' }}
+          {{ watchlist.items.length ? t('wl.emptyGroup') : t('wl.emptyAll') }}
         </p>
         <div v-else class="wrap">
           <table>
             <thead>
               <tr>
                 <th></th>
-                <th class="sortable" @click="sortBy('ticker')">代號{{ arrow('ticker') }}</th>
-                <th class="sortable" @click="sortBy('name')">公司{{ arrow('name') }}</th>
-                <th>分類</th>
-                <th class="sortable" title="最新一份已下載財報的評分" @click="sortBy('score')">評分{{ arrow('score') }}</th>
-                <th v-for="c in CATS" :key="c" class="num cat">{{ c }}</th>
-                <th class="sortable" @click="sortBy('periodEnd')">最新財報{{ arrow('periodEnd') }}</th>
-                <th class="sortable" @click="sortBy('filingDate')">申報日{{ arrow('filingDate') }}</th>
-                <th class="sortable" @click="sortBy('addedAt')">加入{{ arrow('addedAt') }}</th>
+                <th class="sortable" @click="sortBy('ticker')">{{ t('col.ticker') }}{{ arrow('ticker') }}</th>
+                <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
+                <th>{{ t('wl.groups') }}</th>
+                <th class="sortable" :title="t('wl.scoreTitle')" @click="sortBy('score')">{{ t('col.score') }}{{ arrow('score') }}</th>
+                <th v-for="c in CATS" :key="c" class="num cat">{{ tr(c) }}</th>
+                <th class="sortable" @click="sortBy('periodEnd')">{{ t('wl.latestFiling') }}{{ arrow('periodEnd') }}</th>
+                <th class="sortable" @click="sortBy('filingDate')">{{ t('meta.filingDate') }}{{ arrow('filingDate') }}</th>
+                <th class="sortable" @click="sortBy('addedAt')">{{ t('wl.addedCol') }}{{ arrow('addedAt') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="x in rows" :key="x.cik" class="row" @click="emit('open', x)">
-                <td class="star" title="從觀察名單移除" @click.stop="removeWatch(x.cik)">★</td>
+                <td class="star" :title="t('watch.remove')" @click.stop="removeWatch(x.cik)">★</td>
                 <td class="mono"><a :href="`?company=${x.ticker || x.cik}`" @click.prevent>{{ x.ticker || `CIK ${x.cik}` }}</a></td>
                 <td class="name">{{ x.name }}</td>
                 <td class="groups" @click.stop>
                   <template v-if="editing === x.cik">
                     <label v-for="g in watchlist.groups" :key="g" class="chip edit"><input type="checkbox" :checked="x.groups.includes(g)" @change="toggleInGroup(x, g)" /> {{ g }}</label>
-                    <span v-if="!watchlist.groups.length" class="muted small">先在左邊新增分類</span>
-                    <button class="mini" @click="editing = null">完成</button>
+                    <span v-if="!watchlist.groups.length" class="muted small">{{ t('wl.noGroups') }}</span>
+                    <button class="mini" @click="editing = null">{{ t('done') }}</button>
                   </template>
                   <template v-else>
                     <span v-for="g in x.groups" :key="g" class="chip">{{ g }}</span>
-                    <button class="mini ghost" @click="editing = x.cik">{{ x.groups.length ? '編輯' : '分類…' }}</button>
+                    <button class="mini ghost" @click="editing = x.cik">{{ x.groups.length ? t('edit') : t('wl.groupsEllipsis') }}</button>
                   </template>
                 </td>
                 <td><ScoreBadge :score="scores[x.cik] ?? null" /></td>
                 <td v-for="(c, i) in CATS" :key="c" class="num small" :class="catCls(scores[x.cik]?.categories?.[i])">{{ scores[x.cik]?.categories?.[i] ?? '—' }}</td>
                 <td class="small">
-                  <template v-if="scores[x.cik]">{{ scores[x.cik].form }} {{ scores[x.cik].fiscalYear }} {{ scores[x.cik].fiscalPeriod }} <span class="muted">期末 {{ scores[x.cik].periodEnd }}</span></template>
-                  <span v-else class="muted">尚未下載</span>
+                  <template v-if="scores[x.cik]">{{ scores[x.cik].form }} {{ scores[x.cik].fiscalYear }} {{ scores[x.cik].fiscalPeriod }} <span class="muted">{{ t('meta.periodEnd') }} {{ scores[x.cik].periodEnd }}</span></template>
+                  <span v-else class="muted">{{ t('wl.notDownloaded') }}</span>
                 </td>
                 <td class="small">{{ scores[x.cik]?.filingDate || '—' }}</td>
                 <td class="small muted">{{ x.addedAt?.slice(0, 10) }}</td>
@@ -200,10 +201,7 @@ async function addFromSearch(ticker) {
             </tbody>
           </table>
         </div>
-        <p class="muted small note">
-          評分 = 最新一份 10-K / 10-Q 依「財務指標」的判斷標準計分（五大類各 20 分；達標得滿分、差 20% 以內得一半），無法計算的項目不計、按剩餘項目換算成 100 分。
-          背景爬蟲下載到新財報後評分會自動更新。金融業多項無法計算，分數僅供參考。
-        </p>
+        <p class="muted small note">{{ t('wl.scoreNote') }}</p>
       </main>
     </div>
   </div>

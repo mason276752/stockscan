@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue';
+import { t, tr } from '../i18n';
 
 const props = defineProps({
   statement: { type: Object, required: true },
@@ -56,8 +57,8 @@ const columns = computed(() =>
       periodLabel: c.period.instant ? c.period.instant : `${c.period.start} ~ ${c.period.end}`,
       derivedQ4: !!c.derived,
       synthetic: !!c.synthetic,
-      periodKind: c.merged ? `期初 ${c.opening || '—'} · 期末 ${c.closing || '—'}` : c.period.instant ? '時點' : '期間',
-      dimLabel: dims.length ? dims.map(humanize).join(' / ') : hasAxes.value ? '合計' : '',
+      periodKind: c.merged ? t('st.merged', { open: c.opening || '—', close: c.closing || '—' }) : c.period.instant ? t('st.instant') : t('st.duration'),
+      dimLabel: dims.length ? dims.map(humanize).join(' / ') : hasAxes.value ? t('st.total') : '',
     };
   }),
 );
@@ -89,9 +90,9 @@ function shown(item, cell) {
 
 // simplified view: which member columns a rolled-up total came from
 function rolledTitle(cell) {
-  return cell?.rolled ? `分欄加總：${cell.rolled.join(' + ')}` : null;
+  return cell?.rolled ? t('st.rolledTitle', { list: cell.rolled.join(' + ') }) : null;
 }
-const hiddenLabel = computed(() => (props.statement.hiddenGroups || []).map((d) => Object.values(d).map(humanize).join(' / ')).join('、'));
+const hiddenLabel = computed(() => (props.statement.hiddenGroups || []).map((d) => Object.values(d).map(humanize).join(' / ')).join(t('sep')));
 
 const recUnit = computed(() => {
   const first = Object.values(props.statement.reconciliation || {})[0];
@@ -122,13 +123,13 @@ function rowClass(item) {
       <thead>
         <tr>
           <th class="label">{{ statement.title }}</th>
-          <th class="unit">單位</th>
+          <th class="unit">{{ t('st.unit') }}</th>
           <th v-for="c in columns" :key="c.id" class="num">
             <div v-if="c.dimLabel" class="dim" :title="Object.values(c.dimensions).join(', ')">{{ c.dimLabel }}</div>
             <div v-if="c.label" class="qlabel">
-              {{ c.label }}<span v-if="c.derivedQ4" class="badge" :title="c.label === 'Q4' ? 'FY − Q1 − Q2 − Q3' : '年初至今 − 上一季年初至今'">推算</span>
+              {{ tr(c.label) }}<span v-if="c.derivedQ4" class="badge" :title="c.label === 'Q4' ? 'FY − Q1 − Q2 − Q3' : t('st.derivedYtd')">{{ t('st.derived') }}</span>
             </div>
-            <div v-if="c.synthetic" class="badge" title="申報書這一期只有分欄，沒有合計欄：全部數字為分欄加總">分欄加總</div>
+            <div v-if="c.synthetic" class="badge" :title="t('st.syntheticTitle')">{{ t('st.synthetic') }}</div>
             <div :class="{ small: c.label }">{{ c.periodLabel }}</div>
             <div class="muted kind">{{ c.periodKind }}</div>
           </th>
@@ -139,7 +140,7 @@ function rowClass(item) {
           <td class="label" @mouseenter="showTip(item, $event)" @mousemove="moveTip" @mouseleave="hideTip">
             <div>
               {{ displayLabel(item) }}
-              <span v-if="lang === 'zh' && !item.labelZh && !item.abstract" class="muted untranslated" title="尚無中文對照">EN</span>
+              <span v-if="lang === 'zh' && !item.labelZh && !item.abstract" class="muted untranslated" :title="t('st.untranslated')">EN</span>
             </div>
             <div v-if="showConcept" class="mono muted">{{ item.concept }}<span v-if="item.negated"> · negated</span></div>
           </td>
@@ -151,30 +152,30 @@ function rowClass(item) {
       </tbody>
       <tfoot v-if="statement.reconciliation && Object.keys(statement.reconciliation).length">
         <tr class="check">
-          <td class="label">驗算：期初 + 本期變動 = 期末</td>
+          <td class="label">{{ t('st.check') }}</td>
           <td class="unit muted">{{ recUnit }}</td>
           <td v-for="c in columns" :key="c.id" class="num">
             <template v-if="statement.reconciliation[c.id]">
               <div class="muted small">{{ money(statement.reconciliation[c.id].opening) }} {{ statement.reconciliation[c.id].movements < 0 ? '−' : '+' }} {{ money(Math.abs(statement.reconciliation[c.id].movements)) }} = {{ money(statement.reconciliation[c.id].computed) }}</div>
               <div :class="statement.reconciliation[c.id].ok ? 'ok' : 'bad'">
-                {{ statement.reconciliation[c.id].ok ? '✓ 與申報期末相符' : `✗ 與申報期末差 ${money(statement.reconciliation[c.id].diff)}` }}
+                {{ statement.reconciliation[c.id].ok ? t('st.checkOk') : t('st.checkDiff', { diff: money(statement.reconciliation[c.id].diff) }) }}
               </div>
-              <div v-if="statement.reconciliation[c.id].method === 'sum+rollup'" class="muted small" title="有些變動只標在更細的維度（例如依股別），本欄空白處以子維度加總計入">含子維度加總</div>
-              <div v-else-if="statement.reconciliation[c.id].method === 'net'" class="muted small">變動 = 本期現金增加（減少）</div>
+              <div v-if="statement.reconciliation[c.id].method === 'sum+rollup'" class="muted small" :title="t('st.rollupTitle')">{{ t('st.rollup') }}</div>
+              <div v-else-if="statement.reconciliation[c.id].method === 'net'" class="muted small">{{ t('st.netMethod') }}</div>
             </template>
           </td>
         </tr>
       </tfoot>
     </table>
     <p v-if="statement.simplified && hiddenLabel" class="muted small simplified-note">
-      簡化檢視：已隱藏分欄（{{ hiddenLabel }}）。合計欄空白而分欄有數字的列，以分欄加總填入並標 <span class="sigma">Σ</span>（滑鼠移上去看加了哪些欄）；取消「簡化」可看完整分欄。
+      {{ t('st.simplifiedA', { hidden: hiddenLabel }) }} <span class="sigma">Σ</span>{{ t('st.simplifiedB') }}
     </p>
     <Teleport to="body">
       <div v-if="tip" class="tip" :style="tipStyle">
         <div class="tip-en">{{ tip.item.label || tip.item.concept }}</div>
         <div v-if="tip.item.labelZh && lang !== 'zh'" class="tip-zh">{{ tip.item.labelZh }}</div>
         <div v-if="tip.item.labelStandard && tip.item.labelStandard !== tip.item.label" class="tip-std">{{ tip.item.labelStandard }}</div>
-        <div class="tip-concept mono">{{ tip.item.concept }}<span v-if="tip.item.negated"> · 報表顯示時反號</span></div>
+        <div class="tip-concept mono">{{ tip.item.concept }}<span v-if="tip.item.negated"> · {{ t('st.negatedTip') }}</span></div>
         <div v-if="tip.item.descriptionZh" class="tip-desc-zh">{{ tip.item.descriptionZh }}</div>
         <div v-if="tip.item.documentation" class="tip-doc">{{ tip.item.documentation }}</div>
       </div>

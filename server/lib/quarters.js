@@ -242,7 +242,7 @@ export async function buildQuarterly(load, company, year) {
     filing: {
       cik: company.cik,
       companyName: company.name,
-      form: 'Q4 推算',
+      form: 'Q4*',
       filingDate: filings.FY.filingDate,
       periodEnd: filings.FY.reportDate,
       fiscalYear: String(year),

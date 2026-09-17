@@ -5,6 +5,8 @@ import ScoreBadge from './ScoreBadge.vue';
 import SicPicker from './SicPicker.vue';
 import { isWatched, toggleWatch } from '../watchlist';
 import { applySource, basketOf, createBasket, setSource } from '../baskets';
+import { bigMoney, dateLocale, isZh, pick, t, tr } from '../i18n';
+import { sicInfo } from '../../../server/lib/sic.js';
 
 // params: the screen as it appears in the URL (see App.vue); `navigate`
 // reports every change so the URL and the browser history follow along
@@ -133,15 +135,15 @@ function stopEditing() {
 function basketLabel() {
   const parts = [];
   if (sicCode.value) parts.push(sicCode.value);
-  else if (division.value) parts.push(meta.value?.divisions?.find((d) => d.id === division.value)?.zh || division.value);
-  const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${(fieldOf(c.key)?.name || c.key).replace(/（.*?）/g, '')}${c.mode === 'chg' ? '較上期' : c.mode === 'yoy' ? '較去年' : ''}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
-  return [...parts, ...cond].join(' ') || '尋找股票';
+  else if (division.value) parts.push(pick(meta.value?.divisions?.find((d) => d.id === division.value), 'zh', 'en') || division.value);
+  const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${shortName(fieldOf(c.key)?.name || c.key)}${c.mode === 'chg' ? t('sr.chgShort') : c.mode === 'yoy' ? t('sr.yoyShort') : ''}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
+  return [...parts, ...cond].join(' ') || t('nav.screen');
 }
 function basketSource(n) {
   const { basket, ...url } = toUrlParams(); // the filters as the URL carries them: what "edit" reopens
   return { type: 'screen', params: { ...params.value }, url, n: n < basketable.value.length ? n : null, label: basketLabel() };
 }
-const now = () => ({ at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）' });
+const now = () => ({ at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）' }); // tr() words it
 function makeBasket() {
   const n = Number(basketN.value) > 0 ? Math.floor(Number(basketN.value)) : basketable.value.length;
   const rows = basketable.value.slice(0, n);
@@ -183,7 +185,7 @@ const sicOptions = computed(() => {
 // change filters compare with earlier filings: market figures have none
 const modesFor = (key) => (fieldOf(key)?.market ? ['now'] : ['now', 'chg', 'yoy']);
 const isPct = (key) => fieldOf(key)?.unit === '百萬' || fieldOf(key)?.unit === '百萬股' || key === 'score'; // changes shown as % growth
-const unitLabel = (f) => (f.unit === '百萬' ? '（百萬）' : f.unit === '%' ? '（%）' : f.unit ? `（${f.unit}）` : '');
+const unitLabel = (f) => (f.unit ? ` (${tr(f.unit)})` : '');
 
 // amounts are entered in millions; percentages / ratios as shown; changes in % or points
 const scale = (c) => (c.mode !== 'now' ? 1 : fieldOf(c.key)?.unit === '百萬' || fieldOf(c.key)?.unit === '百萬股' ? 1e6 : 1);
@@ -308,15 +310,20 @@ function cell(r, col) {
   if (mode === 'now') return { text: fmt(f, cur), neg: (cur ?? 0) < 0 };
   const base = mode === 'chg' ? r.prev : r.yoy;
   const b = !base ? null : f.key === 'score' ? base.score : base.values?.[f.key];
-  if (cur == null || b == null) return { text: '—', neg: false, title: base ? '' : mode === 'chg' ? '沒有上一期財報' : '沒有去年同期財報' };
+  if (cur == null || b == null) return { text: '—', neg: false, title: base ? '' : mode === 'chg' ? t('sr.noPrev') : t('sr.noYoy') };
   const d = isPct(f.key) ? (b === 0 ? null : ((cur - b) / Math.abs(b)) * 100) : cur - b;
   if (d == null) return { text: '—', neg: false };
-  const title = `${base.fiscalYear} ${base.fiscalPeriod}：${fmt(f, b)} → ${fmt(f, cur)}`;
+  const title = `${base.fiscalYear} ${base.fiscalPeriod}: ${fmt(f, b)} → ${fmt(f, cur)}`;
   return { text: `${d > 0 ? '+' : ''}${f1.format(d)}${isPct(f.key) ? '%' : ' pt'}`, neg: d < 0, pos: d > 0, title };
 }
-const colTitle = (col) => `${col.field.name.replace(/（.*?）/g, '').replace(/ [①②]|\s*[①②]\/[①②]|\s*[①②]−[①②]/g, '')}${col.mode === 'chg' ? ' 較上期' : col.mode === 'yoy' ? ' 較去年同期' : ''}`;
-const AFS_ZH = { LAF: '大型加速', ACC: '加速', NON: '非加速' };
-const cap = (v) => (v == null ? '—' : v >= 1e12 ? `${f2.format(v / 1e12)} 兆` : v >= 1e9 ? `${f1.format(v / 1e9)} 十億` : `${f0.format(v / 1e6)} 百萬`);
+// a field name without its parenthetical / circled-number qualifiers, for column heads and basket names
+const shortName = (name) =>
+  tr(name)
+    .replace(/（.*?）|\s*\(.*?\)/g, '')
+    .replace(/ [①②]|\s*[①②]\/[①②]|\s*[①②]−[①②]/g, '');
+const colTitle = (col) => `${shortName(col.field.name)}${col.mode === 'chg' ? ` ${t('sr.chgShort')}` : col.mode === 'yoy' ? ` ${t('sr.yoyLong')}` : ''}`;
+const sicName = (r) => (isZh.value ? r.sicZh || '' : sicInfo(r.sic)?.title || r.sicZh || '');
+const afsShort = (k) => (['LAF', 'ACC', 'NON'].includes(k) ? t(`afs.${k}`) : '');
 
 onMounted(async () => {
   applyUrlParams(props.params || {});
@@ -335,87 +342,84 @@ onMounted(async () => {
   <div class="screen">
     <div class="layout">
       <aside class="panel side">
-        <div class="side-head">篩選條件</div>
+        <div class="side-head">{{ t('sr.filters') }}</div>
         <label class="frow">
-          <span>代號 / 名稱</span>
-          <input v-model="text" type="text" placeholder="例如 NVDA" />
+          <span>{{ t('sr.tickerName') }}</span>
+          <input v-model="text" type="text" :placeholder="t('sr.tickerPlaceholder')" />
         </label>
         <label class="frow">
-          <span>產業大類</span>
+          <span>{{ t('sr.division') }}</span>
           <select v-model="division" @change="sicCode = ''">
-            <option value="">全部</option>
-            <option v-for="d in meta?.divisions || []" :key="d.id" :value="d.id">{{ d.id }} · {{ d.zh }}</option>
+            <option value="">{{ t('wl.all') }}</option>
+            <option v-for="d in meta?.divisions || []" :key="d.id" :value="d.id">{{ d.id }} · {{ pick(d, 'zh', 'en') }}</option>
           </select>
         </label>
         <label class="frow">
-          <span>產業 (SIC)</span>
-          <SicPicker v-model="sicCode" :codes="sicOptions" :divisions="meta?.divisions || []" :count-key="listedOnly ? 'listed' : 'total'" placeholder="全部；輸入代碼或名稱搜尋…" />
+          <span>{{ t('col.sic') }}</span>
+          <SicPicker v-model="sicCode" :codes="sicOptions" :divisions="meta?.divisions || []" :count-key="listedOnly ? 'listed' : 'total'" :placeholder="t('sr.sicPlaceholder')" />
         </label>
         <label class="frow">
-          <span>申報身分</span>
+          <span>{{ t('col.afs') }}</span>
           <select v-model="afs">
-            <option value="">全部</option>
-            <option v-for="(v, k) in meta?.filer || {}" :key="k" :value="k">{{ v.zh }}</option>
+            <option value="">{{ t('wl.all') }}</option>
+            <option v-for="(v, k) in meta?.filer || {}" :key="k" :value="k">{{ pick(v, 'zh', 'label') }}</option>
           </select>
         </label>
-        <label class="frow check"><input v-model="listedOnly" type="checkbox" /> 只列有股票代號的公司</label>
+        <label class="frow check"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
 
-        <div class="side-head">排除產業</div>
+        <div class="side-head">{{ t('sr.exclude') }}</div>
         <div class="chips">
-          <button v-for="d in meta?.divisions || []" :key="d.id" class="chip" :class="{ on: exDivisions.includes(d.id) }" :title="`排除 ${d.id} ${d.zh}`" @click="toggleExDivision(d.id)">{{ d.zh }}</button>
+          <button v-for="d in meta?.divisions || []" :key="d.id" class="chip" :class="{ on: exDivisions.includes(d.id) }" :title="t('sr.excludeTitle', { d: `${d.id} ${pick(d, 'zh', 'en')}` })" @click="toggleExDivision(d.id)">{{ pick(d, 'zh', 'en') }}</button>
         </div>
         <div v-for="(code, i) in exSics" :key="i" class="exrow">
-          <SicPicker v-model="exSics[i]" :codes="allSicOptions" :divisions="meta?.divisions || []" :count-key="listedOnly ? 'listed' : 'total'" placeholder="要排除的產業：輸入代碼或名稱搜尋…" />
-          <button class="mini" title="移除" @click="removeExSic(i)">✕</button>
+          <SicPicker v-model="exSics[i]" :codes="allSicOptions" :divisions="meta?.divisions || []" :count-key="listedOnly ? 'listed' : 'total'" :placeholder="t('sr.exSicPlaceholder')" />
+          <button class="mini" :title="t('remove')" @click="removeExSic(i)">✕</button>
         </div>
         <div class="actions">
-          <button class="mini" @click="addExSic">＋ 排除產業 (SIC)</button>
+          <button class="mini" @click="addExSic">{{ t('sr.addExSic') }}</button>
         </div>
 
-        <div class="side-head">條件（最新財報 / 現在市場）</div>
+        <div class="side-head">{{ t('sr.conditions') }}</div>
         <div v-for="(c, i) in conditions" :key="i" class="cond">
           <div class="cond-head">
             <select v-model="c.key" @change="modesFor(c.key).includes(c.mode) || (c.mode = 'now')">
-              <optgroup v-for="g in fieldGroups" :key="g.name" :label="g.name">
-                <option v-for="f in g.fields" :key="f.key" :value="f.key">{{ f.name }}{{ unitLabel(f) }}</option>
+              <optgroup v-for="g in fieldGroups" :key="g.name" :label="tr(g.name)">
+                <option v-for="f in g.fields" :key="f.key" :value="f.key">{{ tr(f.name) }}{{ unitLabel(f) }}</option>
               </optgroup>
             </select>
-            <select v-model="c.mode" class="mode" :disabled="modesFor(c.key).length === 1" :title="c.mode === 'now' ? '最新一份財報的數值' : c.mode === 'chg' ? '與上一份財報相比的變化（比率：百分點；金額、評分：成長 %）' : '與去年同期財報相比的變化（比率：百分點；金額、評分：成長 %）'">
-              <option value="now">目前</option>
-              <option value="chg" :disabled="!modesFor(c.key).includes('chg')">較上期</option>
-              <option value="yoy" :disabled="!modesFor(c.key).includes('yoy')">較去年同期</option>
+            <select v-model="c.mode" class="mode" :disabled="modesFor(c.key).length === 1" :title="c.mode === 'now' ? t('sr.modeNowTitle') : c.mode === 'chg' ? t('sr.modeChgTitle') : t('sr.modeYoyTitle')">
+              <option value="now">{{ t('sr.modeNow') }}</option>
+              <option value="chg" :disabled="!modesFor(c.key).includes('chg')">{{ t('sr.chgShort') }}</option>
+              <option value="yoy" :disabled="!modesFor(c.key).includes('yoy')">{{ t('sr.yoyLong') }}</option>
             </select>
           </div>
           <div class="range">
             <input v-model="c.min" type="text" inputmode="decimal" :placeholder="c.mode === 'now' ? '≥' : isPct(c.key) ? '≥ %' : '≥ pt'" />
             <span class="muted">～</span>
             <input v-model="c.max" type="text" inputmode="decimal" :placeholder="c.mode === 'now' ? '≤' : isPct(c.key) ? '≤ %' : '≤ pt'" />
-            <button class="mini" title="移除條件" @click="removeCondition(i)">✕</button>
+            <button class="mini" :title="t('sr.removeCondition')" @click="removeCondition(i)">✕</button>
           </div>
         </div>
         <div class="actions">
-          <button class="mini" @click="addCondition">＋ 加條件</button>
-          <button class="mini" @click="reset">重設</button>
+          <button class="mini" @click="addCondition">{{ t('sr.addCondition') }}</button>
+          <button class="mini" @click="reset">{{ t('reset') }}</button>
         </div>
-        <p class="muted small">
-          財報數字取自每家公司最新一份已下載的 10-K / 10-Q（年初至今、年化，與評分相同），金額以百萬為單位、幣別為財報幣別；「較上期」「較去年同期」用背景抓下來的前幾期財報比較。
-          股價、市值、估值倍數來自 TradingView 的市場快照{{ meta?.market?.updatedAt ? `（${new Date(meta.market.updatedAt).toLocaleString()}）` : '' }}，每半小時更新；市值以百萬美元輸入。
-        </p>
+        <p class="muted small">{{ t('sr.note', { snapshot: meta?.market?.updatedAt ? ` (${new Date(meta.market.updatedAt).toLocaleString(dateLocale)})` : '' }) }}</p>
       </aside>
 
       <main>
         <div class="panel meta">
           <div>
-            <strong>尋找股票</strong>
-            <span v-if="result" class="muted small">符合 {{ result.total.toLocaleString() }} 家（已有財報 {{ result.scored.toLocaleString() }} 家），顯示前 {{ result.count }}</span>
+            <strong>{{ t('nav.screen') }}</strong>
+            <span v-if="result" class="muted small">{{ t('sr.matches', { total: result.total.toLocaleString(), scored: result.scored.toLocaleString(), count: result.count }) }}</span>
           </div>
           <div class="options">
-            <span v-if="loading" class="muted small">搜尋中…</span>
-            <span class="copy" :title="editing ? `這裡改完條件後：更新「${editing.name}」的來源並重新同步（手動加的、手動改權重的、已排除的都保留），或另外建一個新的` : '把目前排序的結果組成自製 ETF（等權重），畫成 K 線；留空 = 全部'">
-              <span v-if="editing" class="editing">編輯「{{ editing.name }}」的條件 <button class="mini ghost" title="不更新，回到一般搜尋" @click="stopEditing">✕</button></span>
-              前 <input v-model="basketN" type="number" min="1" class="n" :placeholder="String(basketable.length)" /> 家
-              <button v-if="editing" class="small primary" :disabled="!basketable.length" @click="updateBasket">更新這個 ETF</button>
-              <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ Number(basketN) > 0 ? `前 ${Math.min(Number(basketN), basketable.length)} 家` : `全部 ${basketable.length} 家` }}{{ editing ? '建立新 ETF' : '組成自製 ETF' }}</button>
+            <span v-if="loading" class="muted small">{{ t('sr.searching') }}</span>
+            <span class="copy" :title="editing ? t('sr.updateTitle', { name: editing.name }) : t('sr.makeBasketTitle')">
+              <span v-if="editing" class="editing">{{ t('sr.editing', { name: editing.name }) }} <button class="mini ghost" :title="t('sr.stopEditing')" @click="stopEditing">✕</button></span>
+              {{ t('top') }} <input v-model="basketN" type="number" min="1" class="n" :placeholder="String(basketable.length)" /> {{ t('sr.companiesUnit') }}
+              <button v-if="editing" class="small primary" :disabled="!basketable.length" @click="updateBasket">{{ t('sr.updateBasket') }}</button>
+              <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ t(editing ? 'sr.newBasket' : 'sr.makeBasket', { which: Number(basketN) > 0 ? t('sr.topN', { n: Math.min(Number(basketN), basketable.length) }) : t('sr.allN', { n: basketable.length }) }) }}</button>
             </span>
             <a v-if="!api.isStatic" :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
           </div>
@@ -426,29 +430,29 @@ onMounted(async () => {
             <thead>
               <tr>
                 <th class="star"></th>
-                <th class="sortable" @click="sortBy('ticker')">代號{{ arrow('ticker') }}</th>
-                <th class="sortable" @click="sortBy('name')">公司{{ arrow('name') }}</th>
-                <th>產業</th>
-                <th class="sortable" @click="sortBy('score')">評分{{ arrow('score') }}</th>
-                <th v-for="col in columns" :key="col.id" class="num sortable" :class="{ chg: col.mode !== 'now' }" :title="col.field.name + (col.mode === 'chg' ? '（較上一期財報）' : col.mode === 'yoy' ? '（較去年同期財報）' : '')" @click="sortBy(col.field.key, col.mode)">
-                  {{ colTitle(col) }}<span v-if="col.mode === 'now' && (col.field.unit === '百萬' || col.field.unit === '百萬股')" class="muted"> 百萬</span>{{ arrow(col.field.key, col.mode) }}
+                <th class="sortable" @click="sortBy('ticker')">{{ t('col.ticker') }}{{ arrow('ticker') }}</th>
+                <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
+                <th>{{ t('sr.industry') }}</th>
+                <th class="sortable" @click="sortBy('score')">{{ t('col.score') }}{{ arrow('score') }}</th>
+                <th v-for="col in columns" :key="col.id" class="num sortable" :class="{ chg: col.mode !== 'now' }" :title="tr(col.field.name) + (col.mode === 'chg' ? t('sr.chgParen') : col.mode === 'yoy' ? t('sr.yoyParen') : '')" @click="sortBy(col.field.key, col.mode)">
+                  {{ colTitle(col) }}<span v-if="col.mode === 'now' && (col.field.unit === '百萬' || col.field.unit === '百萬股')" class="muted"> {{ tr('百萬') }}</span>{{ arrow(col.field.key, col.mode) }}
                 </th>
-                <th class="sortable num" @click="sortBy('float')">公眾流通市值{{ arrow('float') }}</th>
+                <th class="sortable num" @click="sortBy('float')">{{ t('col.float') }}{{ arrow('float') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="r in result.rows" :key="r.cik" class="row" @click="emit('open', r)">
                 <td class="star" @click.stop="toggleWatch(r)"><span :class="{ on: isWatched(r.cik) }">{{ isWatched(r.cik) ? '★' : '☆' }}</span></td>
                 <td class="mono"><a :href="`?company=${r.ticker || r.cik}`" @click.prevent>{{ r.ticker || `CIK ${r.cik}` }}</a></td>
-                <td class="name">{{ r.name }}<span class="muted small afs"> {{ AFS_ZH[r.afs] || '' }}</span></td>
-                <td class="small">{{ r.sic }} {{ r.sicZh || '' }}</td>
+                <td class="name">{{ r.name }}<span class="muted small afs"> {{ afsShort(r.afs) }}</span></td>
+                <td class="small">{{ r.sic }} {{ sicName(r) }}</td>
                 <td><ScoreBadge :score="r.score" /></td>
                 <td v-for="col in columns" :key="col.id" class="num" :class="{ neg: cell(r, col).neg, pos: cell(r, col).pos, chg: col.mode !== 'now' }" :title="cell(r, col).title || ''">{{ cell(r, col).text }}</td>
-                <td class="num small">{{ r.float == null ? '—' : r.float >= 1e12 ? `${f2.format(r.float / 1e12)} 兆` : `${f0.format(r.float / 1e8)} 億` }}</td>
+                <td class="num small">{{ bigMoney(r.float) }}</td>
               </tr>
             </tbody>
           </table>
-          <p v-if="!result.rows.length" class="empty muted">沒有符合條件的公司，放寬一點試試。</p>
+          <p v-if="!result.rows.length" class="empty muted">{{ t('sr.noMatch') }}</p>
         </div>
       </main>
     </div>

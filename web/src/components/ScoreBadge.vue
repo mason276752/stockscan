@@ -1,14 +1,15 @@
 <script setup>
 // Small coloured pill for a company's latest-filing score.
+import { t, tr } from '../i18n';
 const props = defineProps({
   score: { type: Object, default: null }, // { score, coverage, form, fiscalYear, fiscalPeriod, categories[] } or null
 });
 const CATS = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
 const cls = (s) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
 const title = () => {
-  if (!props.score) return '尚未下載最新財報（背景爬蟲會補上）';
-  const c = props.score.categories.map((v, i) => `${CATS[i]} ${v == null ? '—' : v}`).join('、');
-  return `${props.score.form} ${props.score.fiscalYear} ${props.score.fiscalPeriod}（期末 ${props.score.periodEnd}）\n${c}\n評分涵蓋 ${props.score.coverage}/100 分的項目`;
+  if (!props.score) return t('sb.none');
+  const c = props.score.categories.map((v, i) => `${tr(CATS[i])} ${v == null ? '—' : v}`).join(t('sep'));
+  return `${props.score.form} ${props.score.fiscalYear} ${props.score.fiscalPeriod} (${t('meta.periodEnd')} ${props.score.periodEnd})\n${c}\n${t('sb.coverage', { n: props.score.coverage })}`;
 };
 </script>
 

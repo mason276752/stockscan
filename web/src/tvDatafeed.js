@@ -8,7 +8,7 @@ const toMs = (d) => Date.parse(`${d}T00:00:00Z`);
 export function makeDatafeed({ name, bars, overlayName = '', overlay = () => [] }) {
   const symbols = () => {
     const out = [{ name, description: name, get: bars, kind: 'ohlc' }];
-    if (overlayName) out.push({ name: overlayName, description: `${overlayName}（起點 = 100）`, get: overlay, kind: 'line' });
+    if (overlayName) out.push({ name: overlayName, description: `${overlayName} (start = 100)`, get: overlay, kind: 'line' });
     return out;
   };
   const info = (s) => ({

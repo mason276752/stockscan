@@ -53,7 +53,7 @@ const clean = (b) => {
   if (constituents.length && constituents.every((c) => c.weight === 1)) normalizeWeights(constituents);
   return {
     id: String(b.id || newId()),
-    name: String(b.name || '自製 ETF'),
+    name: String(b.name || 'ETF'),
     createdAt: b.createdAt || new Date().toISOString(),
     rebalance: b.rebalance === 'daily' ? 'daily' : 'none',
     prune: !!b.prune,

@@ -286,6 +286,7 @@ export function currentView(data, filing, prev) {
   const form = (filing.form || data.filing.form || '').toUpperCase();
   const isQuarterly = form.startsWith('10-Q');
   const len = isQuarterly ? 3 : 12;
+  // notes: what was derived, as { code, ...params } for the UI to word
   const notes = [];
 
   const convert = (stmt) => {
@@ -305,11 +306,11 @@ export function currentView(data, filing, prev) {
     if (!ytdIsLonger) return finish(stmt, orderColumns(cols));
     const prevStmt = prev?.data?.allStatements.find((s) => s.role === stmt.role) || prev?.data?.allStatements.find((s) => s.type === stmt.type && !s.parenthetical);
     if (prevStmt && prev.filing.reportDate) {
-      notes.push(`${stmt.title}：申報書只有年初至今欄，本期 = 年初至今 − 上一季（${prev.filing.form} ${prev.filing.fiscalYear} ${prev.filing.fiscalPeriod}）年初至今；期初餘額取自上一季期末。`);
+      notes.push({ code: 'derived', title: stmt.title, form: prev.filing.form, fiscalYear: prev.filing.fiscalYear, fiscalPeriod: prev.filing.fiscalPeriod });
       return deriveFromYtd(stmt, prevStmt, end, prev.filing.reportDate, filing.accession, prev.filing.accession);
     }
     // no previous filing available: show YTD and say so
-    notes.push(`${stmt.title}：申報書只有年初至今欄，且找不到上一季申報，顯示年初至今（${ytd.period.start} ~ ${ytd.period.end}）。`);
+    notes.push({ code: 'ytdOnly', title: stmt.title, start: ytd.period.start, end: ytd.period.end });
     const ytdCols = stmt.columns.filter((c) => (c.period.instant && (near(c.period.instant, end) || near(c.period.instant, prevDay(ytd.period.start)))) || (c.period.end && near(c.period.end, end) && !c.period.instant));
     return finish(
       stmt,

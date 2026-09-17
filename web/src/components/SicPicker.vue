@@ -2,12 +2,13 @@
 // A searchable SIC picker: type a code, a Chinese name or the SEC English
 // title, pick from the matches. v-model is the 4-digit code ('' = none).
 import { computed, ref, watch } from 'vue';
+import { isZh, t } from '../i18n';
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
   codes: { type: Array, default: () => [] }, // [{ code, zh, title, division, listed, total }]
   divisions: { type: Array, default: () => [] }, // [{ id, zh }]
-  placeholder: { type: String, default: '輸入代碼或名稱搜尋…' },
+  placeholder: { type: String, default: '' },
   countKey: { type: String, default: 'listed' },
 });
 const emit = defineEmits(['update:modelValue']);
@@ -15,7 +16,8 @@ const emit = defineEmits(['update:modelValue']);
 const query = ref('');
 const open = ref(false);
 const active = ref(0);
-const label = (c) => `${c.code} ${c.zh || c.title}`;
+const nameOf = (c) => (isZh.value ? c.zh || c.title : c.title || c.zh);
+const label = (c) => `${c.code} ${nameOf(c)}`;
 const chosen = computed(() => props.codes.find((c) => c.code === props.modelValue) || null);
 watch(chosen, (c) => (query.value = c ? label(c) : ''), { immediate: true });
 
@@ -36,7 +38,10 @@ const matches = computed(() => {
   rows.sort((a, b) => Number((b.zh || '').toLowerCase().includes(q) || b.code.startsWith(q)) - Number((a.zh || '').toLowerCase().includes(q) || a.code.startsWith(q)));
   return rows.slice(0, 40);
 });
-const divisionZh = (id) => props.divisions.find((d) => d.id === id)?.zh || id;
+const divisionName = (id) => {
+  const d = props.divisions.find((x) => x.id === id);
+  return (d && (isZh.value ? d.zh : d.en || d.zh)) || id;
+};
 
 function choose(c) {
   emit('update:modelValue', c.code);
@@ -73,13 +78,13 @@ function onBlur() {
 
 <template>
   <div class="picker">
-    <input v-model="query" type="text" :placeholder="placeholder" @input="onInput" @focus="open = true" @keydown="onKey" @blur="onBlur" />
-    <button v-if="modelValue" class="clear" title="清除" @mousedown.prevent="clear">✕</button>
+    <input v-model="query" type="text" :placeholder="placeholder || t('sic.placeholder')" @input="onInput" @focus="open = true" @keydown="onKey" @blur="onBlur" />
+    <button v-if="modelValue" class="clear" :title="t('clear')" @mousedown.prevent="clear">✕</button>
     <ul v-if="open && matches.length" class="suggest">
       <li v-for="(c, i) in matches" :key="c.code" :class="{ active: i === active }" @mousedown.prevent="choose(c)">
         <span class="mono">{{ c.code }}</span>
-        <span class="name">{{ c.zh || c.title }}<span v-if="c.zh && c.title" class="muted en"> {{ c.title }}</span></span>
-        <span class="muted small">{{ divisionZh(c.division) }} · {{ c[countKey] ?? c.listed }}</span>
+        <span class="name">{{ nameOf(c) }}<span v-if="isZh && c.zh && c.title" class="muted en"> {{ c.title }}</span></span>
+        <span class="muted small">{{ divisionName(c.division) }} · {{ c[countKey] ?? c.listed }}</span>
       </li>
     </ul>
   </div>
