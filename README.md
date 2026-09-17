@@ -59,6 +59,9 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 
 ```bash
 npm run build:static        # -> web/dist-static/（網頁 + data/store + data/bars + index/，約 550 MB）
+# 慢的部分（複製 900 MB 的 store、解開 6 萬個財報／評分檔取表頭、索引 zstd -19）交給 Rust 寫的
+# tools/stockscan-static 平行處理：有 cargo 時第一次會自己 build；沒有就走純 Node（結果相同、慢約 3 倍）。
+# STOCKSCAN_STATIC_NATIVE=0 強制純 Node；--link 用 hard link 代替複製（CI 用）。
 # 放到任何靜態主機；手動推 GitHub Pages 的話：npx gh-pages -d web/dist-static -t
 ```
 
@@ -474,6 +477,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、高/低優先權（預抓讓路） |
 | `server/lib/filings.js`、`statementTypes.js`、`storeFormat.js`、`scoreModel.js`、`screen.js`、`marketFields.js`、`sic.js` | 純計算 / 純資料模組（無 Node I/O），伺服器與純前端版共用：申報清單工具、報表分類、存檔格式還原、評分模型、尋找股票與分類瀏覽的篩選排序、市場欄位、SIC 表 |
 | `server/tools/build-static.mjs`、`fetch-new.mjs` | 產生純前端版（`npm run build:static`）；一次性抓最近幾天的新申報（`npm run fetch:new`，排程用） |
+| `tools/stockscan-static/` | Rust：靜態版 build 的重活（`copy` 平行複製／hard link、`decode` 平行解開 store 取每份財報表頭與評分、`compress` 多執行緒 zstd）；索引的內容仍由 build-static.mjs 決定，兩條路輸出相同 |
 | `web/src/api.js`、`api.http.js`、`api.static.js`、`staticData.js` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（讀靜態檔 + 瀏覽器內計算、WASM zstd） |
 | `server/lib/barStore.js` | 日線快取：一檔一個 brotli 檔、記憶體 LRU、增量接續（`mergeDays` 核對重疊段）、一個月未用清除；舊 kv 裡的日線第一次啟動會搬過來 |
 | `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |

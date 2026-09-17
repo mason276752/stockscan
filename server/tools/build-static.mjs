@@ -9,6 +9,13 @@
 // --link hard-links the store files instead of copying them (same disk).
 // Everything comes from the local store and caches; with SEC_USER_AGENT set
 // the ETF list / holdings that are not cached yet are fetched from EDGAR.
+//
+// The slow parts - copying 900 MB of store, decoding 60,000 filing / score
+// files for their headers, zstd-19 of the indexes - are done by the Rust
+// helper tools/stockscan-static when its binary is there (built here with
+// cargo when it is not; STOCKSCAN_STATIC_NATIVE=0 forces the pure-Node
+// path, which produces the same output, only slower). What goes into the
+// indexes is decided in this file either way.
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -25,6 +32,24 @@ const OUT = path.resolve(REPO, opt('--out', path.join('web', 'dist-static')));
 const LINK = args.includes('--link');
 const t0 = Date.now();
 
+// ---- the native helper (tools/stockscan-static) ----
+const NATIVE = (() => {
+  if (/^(0|false|no|off)$/i.test(process.env.STOCKSCAN_STATIC_NATIVE || '')) return null;
+  const bin = process.env.STOCKSCAN_STATIC_BIN || path.join(REPO, 'tools', 'stockscan-static', 'target', 'release', 'stockscan-static');
+  if (!fs.existsSync(bin)) {
+    try {
+      console.log('build-static: building tools/stockscan-static (cargo build --release) …');
+      execFileSync('cargo', ['build', '--release', '--quiet'], { cwd: path.join(REPO, 'tools', 'stockscan-static'), stdio: 'inherit' });
+    } catch (err) {
+      console.warn(`build-static: no native helper (${err.message.split('\n')[0]}) - the slower Node path is used`);
+      return null;
+    }
+  }
+  return fs.existsSync(bin) ? bin : null;
+})();
+const native = (...cmd) => execFileSync(NATIVE, cmd, { stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 1 << 30 });
+console.log(`build-static: ${NATIVE ? `native helper ${path.relative(REPO, NATIVE)}` : 'pure Node'}`);
+
 // ---- 1. the app ----
 console.log(`build-static: web app -> ${OUT}`);
 execFileSync('npx', ['vite', 'build', '--outDir', OUT, '--emptyOutDir'], { cwd: path.join(REPO, 'web'), stdio: 'inherit', env: { ...process.env, VITE_STATIC: '1' } });
@@ -40,6 +65,7 @@ const { lookupFiler, sicInfo } = await import('../lib/universe.js');
 const { POPULAR_ETFS } = await import('../lib/etf.js');
 
 function copyTree(from, to) {
+  if (NATIVE) return native('copy', from, to, ...(LINK ? ['--link'] : []));
   fs.rmSync(to, { recursive: true, force: true });
   fs.cpSync(from, to, { recursive: true, filter: (src) => !src.endsWith('.tmp'), ...(LINK ? { mode: fs.constants.COPYFILE_FICLONE } : {}) });
 }
@@ -77,12 +103,35 @@ fs.mkdirSync(idx, { recursive: true });
 // what it serves and the browser has zstd-wasm anyway (the filings need it).
 // screen.json is 27 MB raw, 4 MB so - 36 ms to inflate. meta.json stays
 // plain: it is the first fetch and carries the build id the rest is cached by.
+// with the native helper the raw JSON is written now and all of them are
+// compressed together (in parallel) at the end
+const toCompress = [];
 const write = (name, obj, { compress = true } = {}) => {
   const json = Buffer.from(JSON.stringify(obj));
+  if (compress && NATIVE) {
+    const raw = path.join(idx, name);
+    fs.writeFileSync(raw, json);
+    toCompress.push(raw);
+    return;
+  }
   const file = path.join(idx, compress ? `${name}.zst` : name);
   fs.writeFileSync(file, compress ? zlib.zstdCompressSync(json, { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } }) : json);
   console.log(`build-static: ${path.basename(file)} ${(fs.statSync(file).size / 1048576).toFixed(1)} MB${compress ? ` (${(json.length / 1048576).toFixed(1)} MB raw)` : ''}`);
 };
+
+// the headers of every filing and every score, decoded once by the helper;
+// the store then answers filingHeader / scoreJson from these instead of
+// reading and inflating each file on demand
+if (NATIVE) {
+  const t = Date.now();
+  const decoded = JSON.parse(native('decode', store.file, path.join(REPO, 'server', 'data', 'zdict')).toString('utf8'));
+  const headers = decoded.filings;
+  const scoreJson = decoded.scores;
+  store.filingHeader = (accession) => (store.hasFiling(accession) ? headers[accession] ?? null : null);
+  const scoreVersion = new Map(store.allScores().map((s) => [s.accession, s.version]));
+  store.scoreJson = (accession) => (scoreVersion.has(accession) ? scoreJson[accession] ?? null : null);
+  console.log(`build-static: decoded ${Object.keys(headers).length} headers, ${Object.keys(scoreJson).length} scores in ${((Date.now() - t) / 1000).toFixed(1)} s`);
+}
 
 // the ticker table, the SIC / filer universe and the market snapshot: from
 // the caches when fresh, else fetched (SEC needs SEC_USER_AGENT; a CI runner
@@ -215,6 +264,8 @@ write(
   },
   { compress: false },
 );
+
+if (toCompress.length) native('compress', '19', ...toCompress);
 
 // GitHub Pages: no Jekyll processing (paths with __ would otherwise be skipped)
 fs.writeFileSync(path.join(OUT, '.nojekyll'), '');

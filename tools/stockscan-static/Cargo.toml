@@ -1,0 +1,18 @@
+[package]
+name = "stockscan-static"
+version = "0.1.0"
+edition = "2021"
+description = "The heavy lifting of the static-site build (server/tools/build-static.mjs): copying the store, decoding every filing header and score, zstd-compressing the indexes - in parallel"
+publish = false
+
+[dependencies]
+zstd = { version = "0.13", features = ["zstdmt"] }
+brotli-decompressor = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+rayon = "1"
+walkdir = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
