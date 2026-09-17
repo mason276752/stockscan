@@ -19,8 +19,10 @@ import { marketSnapshot, marketStatus } from './lib/market.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 import { liveHoldings } from './lib/liveHoldings.js';
-import { RANGES, basketSeries, dailyBars, rebased } from './lib/bars.js';
+import { dailyBars } from './lib/bars.js';
+import { basketRequest, runBasket as runBasketWith } from './lib/basket.js';
 import { barStore, openBarStore } from './lib/barStore.js';
+import { createBarCrawler } from './lib/barCrawler.js';
 import { ibConnect, ibStatus } from './lib/ib.js';
 import { tvStatus } from './lib/tvws.js';
 
@@ -37,6 +39,8 @@ openBarStore();
 const prefetcher = createPrefetcher(client);
 // Background crawl of every ticker company's latest filing (STOCKSCAN_CRAWL=0 turns it off).
 const crawler = createCrawler(client, { prefetcher, enabled: !/^(0|false|no|off)$/i.test(process.env.STOCKSCAN_CRAWL || '1') });
+// Background crawl of every ticker's daily bars from TradingView, once a day after the close (STOCKSCAN_BARS_CRAWL=0 turns it off).
+const barCrawler = createBarCrawler(client, { enabled: !/^(0|false|no|off)$/i.test(process.env.STOCKSCAN_BARS_CRAWL || '1') });
 
 // Ticker table: refresh in the background at startup and daily; the saved
 // copy serves searches meanwhile. Each refresh also drops the filings of
@@ -57,6 +61,7 @@ setTimeout(() => {
   if (universeStale()) refreshUniverse(client, 'low').catch((e) => console.warn(`universe build failed: ${e.message}`));
 }, 5000);
 setTimeout(() => crawler.start(), 15_000);
+setTimeout(() => barCrawler.start(), 20_000);
 // market snapshot (price, market cap, multiples) for the screener: fetch at startup, refresh every half hour
 setTimeout(() => marketSnapshot().catch(() => {}), 3000);
 setInterval(() => marketSnapshot().catch(() => {}), 30 * 60 * 1000).unref();
@@ -422,98 +427,10 @@ app.get(
   }),
 );
 
-// The custom-ETF index: fetch every constituent's daily bars (a few at a
-// time: IB paces historical requests, Yahoo rate-limits), build the index.
-// `emit` sees each constituent as its bars land and interim results every
-// second or so, so the page can draw the chart while the rest is fetched.
-function basketRequest(body) {
-  const seen = new Set();
-  const wanted = (Array.isArray(body.constituents) ? body.constituents : [])
-    .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), cik: Number(c?.cik) || null, weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
-    .filter((c) => c.ticker && !seen.has(c.ticker) && seen.add(c.ticker));
-  if (!wanted.length) throw Object.assign(new Error('constituents is empty'), { status: 400 });
-  return {
-    wanted,
-    range: RANGES[body.range] ? body.range : '5y',
-    rebalance: body.rebalance === 'daily' ? 'daily' : 'none',
-    benchmark: body.benchmark ? String(body.benchmark).trim().toUpperCase() : null,
-  };
-}
-
-function basketResult({ wanted, range, rebalance }, out, { partial = false, done = 0, total = 0 } = {}) {
-  const members = out.filter((m) => m && !m.bench);
-  const bench = out.find((m) => m && m.bench) || null;
-  const series = basketSeries(members, { range, rebalance });
-  // EDGAR's ticker table is the other delisting signal: a name whose prices
-  // still come in but that left the table (taken private, deregistered,
-  // renamed) is flagged too, with the new ticker when the company lives on
-  for (const c of series.constituents) {
-    const l = listingOf(c.symbol, wanted.find((w) => w.ticker === c.symbol)?.cik);
-    if (!l) continue;
-    c.listed = l.listed;
-    if (l.renamed) c.renamed = l.renamed;
-    if (!l.listed) c.delisted = true;
-  }
-  const failed = members.filter((m) => m.error).map((m) => ({ ticker: m.ticker, error: m.error, ...(listingOf(m.ticker, m.cik) || {}) }));
-  for (const f of failed) series.notes.push(`${f.ticker} 沒有價格資料，已排除（${f.error}）`);
-  const sources = [...new Set(members.filter((m) => !m.error).map((m) => m.source))];
-  return {
-    range,
-    rebalance,
-    partial,
-    done,
-    total,
-    source: sources.join(' + ') || null,
-    ib: ibStatus().connected,
-    tv: tvStatus().connected,
-    ...series,
-    failed,
-    benchmark: bench && !bench.error && series.start ? { symbol: bench.symbol, source: bench.source, startClose: bench.days.find((d) => d.date >= series.start)?.close ?? null, points: rebased(bench, series.start, series.end) } : null,
-  };
-}
-
-// interim: also emit an index of the members landed so far every `interim`
-// ms (0 = off - the weights renormalise among whoever has arrived, so the
-// interim chart jumps around; the page only asks for progress).
-async function runBasket(req, { emit = null, interim = 0, signal = null } = {}) {
-  const { wanted, benchmark } = req;
-  const jobs = [...wanted.map((c) => ({ ...c, bench: false })), ...(benchmark ? [{ ticker: benchmark, weight: 0, bench: true }] : [])];
-  const out = new Array(jobs.length);
-  const total = jobs.length;
-  let next = 0;
-  let done = 0;
-  let lastInterim = Date.now();
-  let dirty = false;
-  emit?.({ type: 'start', total, range: req.range, rebalance: req.rebalance });
-  const worker = async () => {
-    while (next < jobs.length && !signal?.aborted) {
-      const i = next++;
-      const j = jobs[i];
-      try {
-        const h = await dedupe(`bars:${j.ticker}`, () => dailyBars(j.ticker));
-        out[i] = { ...j, symbol: j.ticker, source: h.source, currency: h.currency, days: h.days };
-      } catch (err) {
-        out[i] = { ...j, symbol: j.ticker, error: err.message, days: [] };
-      }
-      done++;
-      if (!emit) continue;
-      const m = out[i];
-      emit({ type: 'member', symbol: m.symbol, bench: m.bench, source: m.source || null, first: m.days[0]?.date || null, last: m.days.at(-1)?.date || null, days: m.days.length, error: m.error || null, done, total });
-      dirty = true;
-      // an interim index of what has landed so far, at most every `interim` ms
-      if (interim > 0 && done < total && Date.now() - lastInterim >= interim && out.some((x) => x && !x.bench && !x.error)) {
-        lastInterim = Date.now();
-        dirty = false;
-        emit({ type: 'series', ...basketResult(req, out, { partial: true, done, total }) });
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(8, jobs.length) }, worker));
-  if (signal?.aborted) return null;
-  const result = basketResult(req, out, { partial: false, done, total });
-  emit?.({ type: 'series', ...result });
-  return result;
-}
+// The custom-ETF index (basket.js): every constituent's daily bars, a few at
+// a time, then the index; with `emit` the page draws while the rest lands.
+const basketEnv = () => ({ listingOf, extra: { ib: ibStatus().connected, tv: tvStatus().connected } });
+const runBasket = (req, opts = {}) => runBasketWith(req, (ticker) => dedupe(`bars:${ticker}`, () => dailyBars(ticker)), { ...opts, ...basketEnv() });
 
 // POST /api/basket { constituents: [{ ticker, cik, weight }], range, rebalance, benchmark }
 //  -> index bars (base 100), stats, per-constituent returns, benchmark overlay
@@ -551,7 +468,7 @@ app.post(
 
 // GET /api/status -> local store and prefetch queue
 app.get('/api/status', (_req, res) => {
-  res.json({ store: { file: store.file, ...store.size(), bars: barStore.stats() }, prefetch: prefetcher.status(), crawler: crawler.status(), clientIdle: client.idle, tv: tvStatus(), ib: ibStatus() });
+  res.json({ store: { file: store.file, ...store.size(), bars: barStore.stats() }, prefetch: prefetcher.status(), crawler: crawler.status(), barCrawler: barCrawler.status(), clientIdle: client.idle, tv: tvStatus(), ib: ibStatus() });
 });
 
 // Serve the built Vue app when it exists (npm run build:web). The build uses
@@ -583,5 +500,6 @@ root.listen(PORT, () => {
   console.log(`stockscan server listening on http://localhost:${PORT}${BASE}/`);
   console.log(`store: ${store.file} (${store.filingCount()} filings saved)`);
   if (crawler.status().enabled) console.log('background crawl of latest filings enabled (STOCKSCAN_CRAWL=0 to disable)');
+  if (barCrawler.status().enabled) console.log('background crawl of daily bars enabled (STOCKSCAN_BARS_CRAWL=0 to disable)');
   if (!fs.existsSync(dist)) console.log('web/dist not found - run "npm run build:web" or use the Vite dev server (npm --prefix web run dev)');
 });

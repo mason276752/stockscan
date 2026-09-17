@@ -31,8 +31,11 @@ const colors = ref(localStorage.getItem('stockscan.kcolors') || 'tw');
 // chart: 'own'    = Advanced Charts / Lightweight Charts on the bars the server fetched
 //                   (TradingView websocket, else TWS, else Yahoo) - any number of stocks
 //        'widget' = TradingView's embeddable widget on a spread symbol (its own data, at most 10 stocks)
-// the pure-frontend build has no server to fetch bars: TradingView's widget only
+// the pure-frontend build computes the index from the bars the build shipped
+// (data/bars, TradingView's to the build's day); a build without them has
+// TradingView's widget only
 const isStatic = api.isStatic;
+const noBars = ref(isStatic); // settled by quotesStatus()
 const chartSource = ref(isStatic || localStorage.getItem('stockscan.basket.chart') === 'widget' ? 'widget' : 'own');
 watch(chartSource, (v) => localStorage.setItem('stockscan.basket.chart', v));
 watch(range, (v) => localStorage.setItem('stockscan.basket.range', v));
@@ -175,6 +178,10 @@ watch(
 async function loadQuotes() {
   try {
     quotes.value = await api.quotesStatus();
+    if (isStatic) {
+      noBars.value = !quotes.value.bars;
+      if (!noBars.value && localStorage.getItem('stockscan.basket.chart') !== 'widget') chartSource.value = 'own';
+    }
     if (quotes.value.tvLibrary && !window.TradingView?.widget) await loadTvLibrary();
     advanced.value = !!window.TradingView?.widget;
   } catch {
@@ -221,7 +228,7 @@ async function run(force = false) {
   const key = JSON.stringify(body);
   if (!force && key === lastKey) return;
   lastKey = key;
-  if (isStatic) {
+  if (noBars.value) {
     result.value = null;
     error.value = null;
     return;
@@ -415,7 +422,7 @@ const tvCompare = computed(() => {
   return p ? `${sig(100 / p)}*${tvSymbol(benchmark.value)}` : tvSymbol(benchmark.value);
 });
 // wait for the first stats result so the coefficients are right from the start (or for its failure: then plain weights)
-const useTv = computed(() => chartSource.value === 'widget' && tvIncluded.value.length > 0 && !tvTooMany.value && (result.value || error.value || isStatic));
+const useTv = computed(() => chartSource.value === 'widget' && tvIncluded.value.length > 0 && !tvTooMany.value && (result.value || error.value || noBars.value));
 
 const upColor = computed(() => (colors.value === 'us' ? '#16a34a' : '#dc2626'));
 const downColor = computed(() => (colors.value === 'us' ? '#dc2626' : '#16a34a'));
@@ -423,7 +430,7 @@ const downColor = computed(() => (colors.value === 'us' ? '#dc2626' : '#16a34a')
 const sourceText = computed(() => {
   const q = quotes.value;
   if (!q) return '';
-  if (q.static) return '純前端版：圖表用 TradingView widget（最多 10 檔），沒有自己算的指數與成分股報酬';
+  if (q.static) return q.bars ? `純前端版：日線是 build 時（${q.builtAt ? new Date(q.builtAt).toLocaleDateString() : '—'}）TradingView 的資料，指數在瀏覽器裡算` : '純前端版：圖表用 TradingView widget（最多 10 檔），沒有自己算的指數與成分股報酬';
   const parts = [];
   parts.push(!q.tv?.enabled ? 'TradingView 已停用' : q.tv.connected ? 'TradingView ✓' : `TradingView（${q.tv.lastError || '尚未連線'}）`);
   parts.push(!q.ib?.enabled ? 'IBKR 已停用' : q.ib.connected ? `IBKR ✓（${q.ib.host}:${q.ib.port}）` : `IBKR 未連線（${q.ib.host}:${q.ib.port}）`);
@@ -492,7 +499,7 @@ const sourceText = computed(() => {
             <select v-model="benchmark" class="small" title="疊上大盤 ETF 做比較（同樣以起點 = 100）">
               <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label }}</option>
             </select>
-            <select v-if="!isStatic" v-model="chartSource" class="small" title="Advanced Charts：伺服器抓各成分股日線（TradingView，備用 TWS、Yahoo）自己組成指數，檔數不限；TradingView widget：官方嵌入圖，成分股組成價差商品由 TradingView 計算，最多 10 檔">
+            <select v-if="!noBars" v-model="chartSource" class="small" title="Advanced Charts：伺服器抓各成分股日線（TradingView，備用 TWS、Yahoo）自己組成指數，檔數不限；TradingView widget：官方嵌入圖，成分股組成價差商品由 TradingView 計算，最多 10 檔">
               <option value="own">圖：Advanced Charts</option>
               <option value="widget">圖：TradingView widget</option>
             </select>
@@ -551,7 +558,7 @@ const sourceText = computed(() => {
           </div>
           <p v-if="useTv" class="muted small note">
             圖：TradingView widget，成分股組成價差商品 <span class="mono">{{ tvExpression }}</span>{{ tvCompare ? `，比較 ${tvCompare}` : '' }}（係數 = 起點時的持有單位，起點 = 100）；
-            {{ isStatic ? '純前端版沒有伺服器算的統計與成分股報酬。' : `統計與下表${result ? `：${result.source}` : '：等 TWS / Yahoo 的日線'}。` }}{{ current.rebalance === 'daily' ? 'TradingView 的價差商品是買進持有，每日再平衡只反映在統計。' : '' }}
+            {{ noBars ? '純前端版沒有伺服器算的統計與成分股報酬。' : `統計與下表${result ? `：${result.source}` : '：等 TWS / Yahoo 的日線'}。` }}{{ current.rebalance === 'daily' ? 'TradingView 的價差商品是買進持有，每日再平衡只反映在統計。' : '' }}
           </p>
           <p v-for="n in result?.notes || []" :key="n" class="muted small note">※ {{ n }}</p>
         </div>
@@ -609,7 +616,7 @@ const sourceText = computed(() => {
                     {{ perf[c.ticker].source }} · {{ perf[c.ticker].first }} 起<span v-if="perf[c.ticker].joined && perf[c.ticker].joined !== result.start" class="warn">，{{ perf[c.ticker].joined }} 納入</span><span v-if="perf[c.ticker].delisted" class="warn" title="最近兩週沒有成交資料：下市、被收購或更名，目前買不到">，{{ perf[c.ticker].last }} 後無報價（已下市）</span><span v-else-if="perf[c.ticker].left" class="warn">，{{ perf[c.ticker].left }} 除名</span><span v-else-if="!perf[c.ticker].joined" class="warn">，區間內無資料</span>
                   </template>
                   <span v-else-if="result?.failed?.find((f) => f.ticker === c.ticker)" class="down">無資料</span>
-                  <template v-else>{{ inIndex(c) && !isStatic ? '…' : '—' }}</template>
+                  <template v-else>{{ inIndex(c) && !noBars ? '…' : '—' }}</template>
                 </td>
                 <td class="del" :title="`從 ETF 移除 ${c.ticker}（其餘權重按比例補回 100%${c.origin === 'source' ? '；重新同步不會加回來' : ''}）`" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
               </tr>

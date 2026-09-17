@@ -47,6 +47,27 @@ fs.mkdirSync(dataOut, { recursive: true });
 console.log('build-static: copying data/store …');
 copyTree(store.file, path.join(dataOut, 'store'));
 copyTree(path.join(REPO, 'server', 'data', 'zdict'), path.join(dataOut, 'zdict'));
+// the daily bars (data/bars/<source>/<SYMBOL>/{<year>.zst, head.zst, meta.json}): the
+// custom-ETF page computes its index in the browser from them. head.zst (this
+// year) is not in git - the workflow fetches it before building (npm run fetch:bars)
+const barsDir = process.env.STOCKSCAN_BARS || path.join(REPO, 'data', 'bars');
+let bars = { symbols: 0, heads: 0, bytes: 0 };
+if (fs.existsSync(barsDir)) {
+  console.log('build-static: copying data/bars …');
+  copyTree(barsDir, path.join(dataOut, 'bars'));
+  for (const src of fs.readdirSync(barsDir, { withFileTypes: true })) {
+    if (!src.isDirectory()) continue;
+    for (const sym of fs.readdirSync(path.join(barsDir, src.name), { withFileTypes: true })) {
+      if (!sym.isDirectory()) continue;
+      const d = path.join(barsDir, src.name, sym.name);
+      if (!fs.existsSync(path.join(d, 'meta.json'))) continue;
+      bars.symbols++;
+      if (fs.existsSync(path.join(d, 'head.zst'))) bars.heads++;
+      for (const f of fs.readdirSync(d)) bars.bytes += fs.statSync(path.join(d, f)).size;
+    }
+  }
+  console.log(`build-static: bars ${bars.symbols} symbols (${bars.heads} with this year), ${(bars.bytes / 1048576).toFixed(0)} MB`);
+}
 
 // ---- 3. indexes ----
 const idx = path.join(OUT, 'index');
@@ -181,6 +202,7 @@ write('meta.json', {
   scrapeVersion: SCRAPE_VERSION,
   scoreVersion: SCORE_VERSION,
   market: { count: market?.count ?? 0, updatedAt: market?.updatedAt ?? null, refreshing: false },
+  bars: bars.symbols ? { symbols: bars.symbols, heads: bars.heads, sources: ['tv2'] } : null,
 });
 
 // GitHub Pages: no Jekyll processing (paths with __ would otherwise be skipped)

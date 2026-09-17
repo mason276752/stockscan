@@ -14,6 +14,8 @@ import { filingUrls, pickFiling } from '../../server/lib/filings.js';
 import { ITEMS, SCORE_VERSION, scoreFiling } from '../../server/lib/scoreModel.js';
 import { SCREEN_FIELDS, browseCompanies, filerCounts, scoreBadge, screenQuery, searchRows, sicCounts } from '../../server/lib/screen.js';
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
+import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
+import { basketRequest, runBasket } from '../../server/lib/basket.js';
 import * as data from './staticData';
 
 const unavailable = (what) => Promise.reject(new Error(`純前端版沒有${what}（需要伺服器版）`));
@@ -163,17 +165,58 @@ export const api = {
       fetchedAt: null,
     };
   },
-  // custom ETF charts: only TradingView's own widget works without a server
-  quotesStatus: async () => ({ static: true, tv: { enabled: false, connected: false }, ib: { enabled: false, connected: false }, source: 'TradingView widget', tvLibrary: false }),
+  // custom ETF charts: the bars the build shipped (data/bars, TradingView's
+  // to the build's day), else only TradingView's own widget
+  async quotesStatus() {
+    const m = await data.meta();
+    return { static: true, bars: m.bars || null, builtAt: m.builtAt, tv: { enabled: false, connected: false }, ib: { enabled: false, connected: false }, source: m.bars ? 'TradingView（build 時的日線）' : 'TradingView widget', tvLibrary: false };
+  },
   async tvSymbol(ticker) {
     const t = String(ticker).toUpperCase().replace(/\./g, '-');
     const m = (await data.tvSymbols())[t];
     return m ? { ticker: t, ...m, known: true } : { ticker: t, symbol: t.replace(/-/g, '.'), exchange: null, known: false };
   },
   ibConnect: () => unavailable('TWS 連線'),
-  bars: () => unavailable('日線'),
-  basket: () => unavailable('自己算的 ETF 指數：只能用 TradingView widget 模式（最多 10 檔）'),
-  basketStream: () => unavailable('自己算的 ETF 指數：只能用 TradingView widget 模式（最多 10 檔）'),
+  // ten years of daily bars from the files the build shipped: the finished
+  // years (immutable, cached for good) plus this year's head, split
+  // adjustments applied - the same series the server hands out
+  async bars(symbol) {
+    const m = await data.meta();
+    if (!m.bars) return unavailable('日線');
+    const s = String(symbol).toUpperCase().replace(/[^A-Z0-9.\-=^]/gi, '_');
+    const dir = `/data/bars/tv2/${s}`;
+    let meta;
+    try {
+      meta = await data.readBarsMeta(`${dir}/meta.json`);
+    } catch (err) {
+      throw new Error(err.status === 404 ? `這份靜態資料裡沒有 ${s} 的日線` : err.message);
+    }
+    const [years, head] = await Promise.all([
+      Promise.all((meta.years || []).map((y) => data.readBarsZst(`${dir}/${y}.zst`, { immutable: true }))),
+      data.readBarsZst(`${dir}/head.zst`).catch(() => null),
+    ]);
+    const raw = years.flatMap(decodeBars).concat(head ? decodeBars(head) : []);
+    if (!raw.length) throw new Error(`${s} 沒有日線資料`);
+    return { symbol: s, source: meta.source || 'TradingView', currency: meta.currency || 'USD', resolved: meta.resolved || null, fetchedAt: head?.fetchedAt || null, days: adjusted(raw, meta.adjust || []) };
+  },
+  // the custom-ETF index, computed here from those bars
+  async basket(body) {
+    return this.basketStream(body, null);
+  },
+  async basketStream(body, onEvent, signal) {
+    const req = basketRequest(body || {});
+    const rows = await data.tickers();
+    const byTicker = new Map(rows.map((r) => [r.ticker, r]));
+    const byCik = new Map(rows.map((r) => [r.cik, r]));
+    const listingOf = (ticker, cik) => {
+      const t = String(ticker).toUpperCase().replace(/\./g, '-');
+      if (byTicker.has(t)) return { listed: true };
+      const same = cik ? byCik.get(Number(cik)) : null;
+      return same ? { listed: false, renamed: same.ticker } : { listed: false };
+    };
+    const m = await data.meta();
+    return runBasket(req, (t) => api.bars(t), { emit: onEvent, interim: body?.interim ? 1200 : 0, signal, listingOf, extra: { static: true, ib: false, tv: false, asOf: m.builtAt } });
+  },
 };
 
 export { scoreBadge };

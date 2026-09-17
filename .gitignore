@@ -9,4 +9,6 @@ data/*
 !data/bars/
 data/store/**/*.tmp
 data/bars/**/*.tmp
+# 今年還在長的日線檔：每天都變，不進 git（Pages 的 workflow 自己抓，本機 server 自己補）
+data/bars/**/head.zst
 web/dist-static/

@@ -1,7 +1,7 @@
 // Static-build data access: the prebuilt indexes (index/*.json) and the
 // saved filings / scores (data/store/**/*.json.zst, zstd with the same
 // dictionaries the server writes with), all fetched as plain files.
-import { init, createDCtx, decompressUsingDict } from '@bokuweb/zstd-wasm';
+import { init, createDCtx, decompress, decompressUsingDict } from '@bokuweb/zstd-wasm';
 // a relative path: the package's "exports" map does not expose the wasm file
 import wasmUrl from '../node_modules/@bokuweb/zstd-wasm/dist/web/zstd.wasm?url';
 import { url } from './base';
@@ -123,4 +123,21 @@ export function readZst(kind, path) {
     files.get(path).catch(() => files.delete(path));
   }
   return files.get(path);
+}
+
+// ---- daily bars (data/bars/<source>/<SYMBOL>/…, plain zstd, no dictionary) ----
+// a finished year never changes (immutable); meta.json and head.zst change
+// with the build (versioned like the indexes)
+export async function readBarsZst(path, { immutable = false } = {}) {
+  build ??= meta().then((m) => m.builtAt || '');
+  const [res] = await Promise.all([immutable ? fetchImmutable(path) : fetchVersioned(path, await build), zstd()]);
+  if (!res.ok) throw Object.assign(new Error(`${path}: ${res.status} ${res.statusText}`), { status: res.status });
+  const buf = new Uint8Array(await res.arrayBuffer());
+  return JSON.parse(utf8.decode(decompress(buf, { defaultHeapSize: 2 * 1024 * 1024 })));
+}
+export async function readBarsMeta(path) {
+  build ??= meta().then((m) => m.builtAt || '');
+  const res = await fetchVersioned(path, await build);
+  if (!res.ok) throw Object.assign(new Error(`${path}: ${res.status} ${res.statusText}`), { status: res.status });
+  return res.json();
 }

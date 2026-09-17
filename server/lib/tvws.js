@@ -137,7 +137,17 @@ function fail(id, err) {
 }
 
 // TradingView spells share classes with a dot (BRK.B); EDGAR uses a dash.
-export const tvSymbol = (ticker) => String(ticker).toUpperCase().replace(/-/g, '.');
+// EDGAR's ticker table spells share classes and other securities with a
+// dash; TradingView's names differ: BRK-B -> BRK.B, preferred ABR-PD ->
+// ABR/PD, warrant AAC-WT -> AAC/W, SPAC unit AAC-UN -> AAC.U. (Rights, -RI,
+// have no TradingView symbol that resolves.)
+export const tvSymbol = (ticker) =>
+  String(ticker)
+    .toUpperCase()
+    .replace(/-(P[A-Z]?)$/, '/$1')
+    .replace(/-WT$/, '/W')
+    .replace(/-UN$/, '.U')
+    .replace(/-/g, '.');
 
 // A bare ticker may resolve to another country's listing (COCO -> IDX:COCO,
 // Indonesia, instead of NASDAQ:COCO): EDGAR tickers are US listings, so a
@@ -145,14 +155,23 @@ export const tvSymbol = (ticker) => String(ticker).toUpperCase().replace(/-/g, '
 const US_EXCHANGES = ['NASDAQ', 'NYSE', 'AMEX', 'OTC', 'CBOE', 'BATS', 'ARCA'];
 const isUS = (r) => !r.resolved || US_EXCHANGES.includes(String(r.resolved).split(':')[0]);
 const isSpread = (symbol) => /[*+\/-]/.test(String(symbol).replace(/-/g, ''));
+// "ABR/PD" that TradingView does not know is parsed as the spread ABR ÷ PD
+// (two exchange prefixes in the answer): not our symbol
+const twoLegs = (r) => /:[^/]+\/[^/]+:/.test(String(r.resolved || ''));
+async function tvSecurity(symbol, opts) {
+  const r = await tvRequest(symbol, opts);
+  if (twoLegs(r)) throw Object.assign(new Error(`TradingView: unknown symbol ${symbol}`), { status: 404 });
+  return r;
+}
 
 export async function tvDailyBars(symbol, opts = {}) {
-  const r = await tvRequest(symbol, opts);
-  if (isSpread(symbol) || isUS(r)) return r;
+  if (isSpread(symbol)) return tvRequest(symbol, opts);
+  const r = await tvSecurity(symbol, opts);
+  if (isUS(r)) return r;
   let lastErr = null;
   for (const ex of US_EXCHANGES.slice(0, 4)) {
     try {
-      return await tvRequest(`${ex}:${tvSymbol(symbol)}`, opts);
+      return await tvSecurity(`${ex}:${tvSymbol(symbol)}`, opts);
     } catch (err) {
       lastErr = err;
     }

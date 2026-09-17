@@ -40,7 +40,7 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 repo 的 `data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `data/cache.sqlite`）、`STOCKSCAN_BARS`（日線目錄，預設 `data/bars`；這些預設都相對於 repo，不是執行時的工作目錄）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景爬蟲）；
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 repo 的 `data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `data/cache.sqlite`）、`STOCKSCAN_BARS`（日線目錄，預設 `data/bars`；這些預設都相對於 repo，不是執行時的工作目錄）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景財報爬蟲）、`STOCKSCAN_BARS_CRAWL=0`（關閉每日收盤後全市場日線的背景抓取）；
 自製 ETF 的日線：`TV_ENABLED=0`（不用 TradingView websocket）、`IB_HOST`（預設 127.0.0.1）、`IB_PORT`（預設 7496；TWS 模擬帳戶 7497、IB Gateway 4001 / 4002）、`IB_CLIENT_ID`（預設 100 + PORT 的後三位，兩個 server 才不會互踢）、`IB_ENABLED=0`（不連 TWS，改用 Yahoo）。
 
 ### 純前端版（沒有伺服器也能跑）
@@ -66,6 +66,8 @@ repo 的 Settings → Pages → Source 選 **GitHub Actions**；`SEC_USER_AGENT`
 Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報、申報清單、以及 SEC 抓不到時的代號表與產業宇宙，直接用 repo 裡的 `data/store`。代號表或產業宇宙完全拿不到時 build 會失敗（exit 1），不會把搜尋不到東西的網站部署出去。
 除了 push，也**定時**在財報最常出現的時段跑（美東 08:30、17:45、19:45、22:30，週一到週五）：先 `npm run fetch:new` 從 EDGAR 每日索引把最近幾天新的 10-K / 10-Q 抓下來、解析、評分，
 commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workflow），再用新資料重建網站。`fetch:new` 在本機也能跑，等於爬蟲「監看新申報」那一步跑一次就結束。
+日線則不碰 `main`：repo 裡只有已結束年份的 `data/bars/**/<年>.zst`，每次 build 前 `npm run fetch:bars` 從 TradingView 把今年的 `head.zst` 補到最新（8 條並發約 12 分鐘；`actions/cache` 在兩次 run 之間留住 head，之後每次只接最後幾根），
+放進站台但不 commit。TradingView 抓不到（例如 runner 的 IP 被擋）也不會讓 build 失敗，只是自製 ETF 頁的日線停在去年底。
 
 - 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json` 以 build 時間為版本，換一次 build 才重抓。
 
@@ -83,8 +85,9 @@ data/store/scores/<cik>/<accession>__<期末>__v<評分版本>.json.zst         
 data/store/documentation.json                                             標準科目的 SEC 定義，全站一份（不再每份財報重複存）
 data/store/tickers.json                                                   EDGAR 代號表的副本（快取沒有時用：新 clone、CI runner）
 data/store/companies/<CIK 10 碼>.json                                      每家公司的 EDGAR 申報清單（裁剪過的 submissions）：財報頁左側清單、爬蟲比對用
-data/bars/<來源>/<SYMBOL>/<年>.zst                                        自製 ETF 的日線，一個代號一年一檔（欄式 zstd，約 2.5 KB）；過去的年份寫完就不再動
-data/bars/<來源>/<SYMBOL>/meta.json                                       代號、來源、幣別、抓取時間、分割調整（adjust）
+data/bars/<來源>/<SYMBOL>/<年>.zst                                        日線，一個代號一年一檔（欄式 zstd，約 2.5 KB）：已結束的年份，寫完就不再動
+data/bars/<來源>/<SYMBOL>/meta.json                                       代號、來源、幣別、有哪些年份、分割調整（adjust）；只在封年或分割時才變
+data/bars/<來源>/<SYMBOL>/head.zst                                        今年的日線 + 抓取時間：唯一每天在長的檔（.gitignore，Pages 的 workflow 自己抓）
 data/cache.sqlite                                                         快取：代號表、申報清單、市場快照…（.gitignore）
 ```
 
@@ -422,11 +425,14 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
   （`@stoqey/ib`，`reqHistoricalData` 日線、TRADES；只讀歷史資料、不碰帳戶；TWS 要開 API，10 分鐘 60 次限制）→ ③ Yahoo Finance。
   每檔獨立走這條鏈：前一個來源查不到或逾時就換下一個，表格會標各檔實際來源。裸代號在 TradingView 可能對到別國掛牌（COCO → 印尼），
   所以非美國交易所的結果會改以 NASDAQ / NYSE / AMEX / OTC 前綴重查。
-  日線存在 `data/bars/<來源>/<SYMBOL>/<年>.zst`（[barStore.js](server/lib/barStore.js)），一年一檔：日期存成日差、價格存成相對前一收盤的定點整數再 zstd，是原本 row JSON + brotli 的一半；
-  過去的年份寫完就不再動，平常只有當年的檔在長（進 git 時每次 commit 只有幾 KB 的差異）。盤中 30 分鐘內視為新鮮；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路；
+  日線存在 `data/bars/<來源>/<SYMBOL>/`（[barStore.js](server/lib/barStore.js)，格式在 [barFormat.js](server/lib/barFormat.js)），一年一檔：日期存成日差、價格存成相對前一收盤的定點整數再 zstd，是原本 row JSON + brotli 的一半；
+  已結束的年份（`<年>.zst`）和 `meta.json` 進 git、寫完就不再動；今年的 bars 在 `head.zst`，每次更新都重寫，所以不進 git——新 clone 有到去年底的十年，今年的部分由 server 的背景抓取或 Pages 的 workflow 補。跨年時第一次寫入會把 head 封成 `<年>.zst`（meta 的 `years` 多一年），那時才需要 commit 一次。盤中 30 分鐘內視為新鮮；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路；
   最近讀過的 400 檔解碼後留在記憶體，同一個籃子連開是 0 ms。過期時**只抓最後一根之後的幾天**（往前多抓 7 天核對）接上去，不重抓整段 10 年——三個來源都支援（TradingView 指定根數、TWS 指定天數、Yahoo 指定起日）；
   盤中停機存下的最後一根還沒收完，重開時允許它跟核對段不同（只重寫那一年）。核對段對不上（期間發生分割）才整段重抓，但重抓回來**不改歷史檔**：整段差一個固定倍數就在 `meta.json` 的 `adjust` 記一筆 `{ date, price, volume }`，讀的時候把該日之前的價量乘上去；
-  只有對不成一個倍數的資料修訂才重寫牽涉到的那幾年。一個月沒人讀的檔啟動時清掉。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
+  只有對不成一個倍數的資料修訂才重寫牽涉到的那幾年。一個月沒人讀的檔啟動時清掉。
+  另有背景抓取（[barCrawler.js](server/lib/barCrawler.js)）：每個交易日紐約收盤後半小時，把代號表上每一檔的 TradingView 日線補到最新——第一次看到的代號抓十年（約 30 KB），之後每天只抓最後一根之後的幾根；
+  6 條並發約每秒 11 檔，一萬多檔一輪約 16 分鐘。TradingView 查不到的代號（多是 OTC 的外國股）連續三次失敗後隔一週再試。`/api/status` 的 `barCrawler` 看進度；`npm run fetch:bars` 手動跑一輪就結束（workflow 用這個）。
+  純前端版（GitHub Pages）也有日線：build 把 `data/bars` 一起放進站台，自製 ETF 頁在瀏覽器裡解 zstd、套分割調整、算指數（[basket.js](server/lib/basket.js) 前後端共用），資料到 build 當天。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
 - **K 線圖（預設：Advanced Charts）**：伺服器把各成分股日線組成指數後餵給 TradingView 授權版 **Advanced Charts**
   （`charting_library` 放在 `web/assets/tradingview/`，後端以 `/tradingview/` 提供、Vite 開發模式代理過去；資料由 `web/src/tvDatafeed.js`
   以 Datafeed API 餵入，大盤 ETF 以 Overlay 指標疊同一價格軸，週／月線由函式庫從日線合成），沒有這個資料夾時用開源的

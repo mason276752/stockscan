@@ -11,7 +11,8 @@
     "build:web": "npm --prefix web run build",
     "postinstall": "npm --prefix web install",
     "build:static": "node server/tools/build-static.mjs",
-    "fetch:new": "node server/tools/fetch-new.mjs"
+    "fetch:new": "node server/tools/fetch-new.mjs",
+    "fetch:bars": "node server/tools/fetch-bars.mjs"
   },
   "engines": {
     "node": ">=20"

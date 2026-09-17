@@ -5,6 +5,10 @@
 #     main, then the site is rebuilt with them (a push made by the workflow's
 #     own token does not trigger the workflow again, so no loop)
 #   - by hand (Actions → Run workflow)
+#   - the daily bars: git holds the finished years (data/bars/**/<year>.zst);
+#     this year's bars (head.zst, not in git) are fetched from TradingView here
+#     before the build and kept between runs in the Actions cache, so nothing
+#     about bars is ever pushed to main
 # Needs: Settings → Pages → Source = "GitHub Actions". SEC_USER_AGENT ("Name
 # email") comes from the repository secret of that name, else the default
 # below - the build fetches the ticker table, the SIC / filer universe and ETF
@@ -70,6 +74,24 @@ jobs:
             git pull --rebase --autostash origin main
             git push origin HEAD:main
           fi
+
+      # this year's bars (head.zst of every symbol): restored from the last
+      # run's cache, topped up from TradingView, saved for the next run. A
+      # cache key is immutable, so it carries the run id; restore-keys picks
+      # the newest previous one.
+      - name: Restore this year's bars
+        uses: actions/cache@v4
+        with:
+          path: data/bars/**/head.zst
+          key: bars-head-${{ github.run_id }}
+          restore-keys: bars-head-
+      - name: Fetch this year's bars from TradingView
+        run: npm run fetch:bars
+        continue-on-error: true
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT || 'Mason mason276752@gmail.com' }}
+          STOCKSCAN_BARS_CRAWL_PARALLEL: '8'
+          IB_ENABLED: '0'
 
       - name: Build the static site
         run: npm run build:static
