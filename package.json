@@ -11,6 +11,7 @@
     "build:web": "npm --prefix web run build",
     "postinstall": "npm --prefix web install",
     "build:static": "node server/tools/build-static.mjs",
+    "data:pull": "sh scripts/pull-data.sh",
     "fetch:new": "node server/tools/fetch-new.mjs",
     "fetch:bars": "node server/tools/fetch-bars.mjs"
   },

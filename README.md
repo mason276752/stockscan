@@ -8,10 +8,10 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
   加上同資料夾的 extension taxonomy（`.xsd` / `_pre.xml` / `_lab.xml`），用來決定報表分類、行順序與標籤。
 - 數值為 XBRL 原值（已套用 `scale` 與 `sign`，未依 `negatedLabel` 翻轉），並保留顯示文字 `raw`。
 - 公司的申報清單每 10 分鐘重新向 SEC 抓一次，所以永遠看得到最新一份；已申報的文件不會變，
-  解析結果存在本機 `data/store/`（一份財報一個 brotli 壓縮的 JSON 小檔，可以直接 commit 進 git，見「資料存放」），重啟不用重抓。
+  解析結果存在本機 `data/store/`（一份財報一個 zstd 壓縮的 JSON 小檔，放在 repo 的 `refs/data/main`，見「資料存放」），重啟不用重抓。
 - 一份申報的 Inline XBRL 可能拆成多個檔（10-K 的財報放在 `xxx_d2.htm`），依 FilingSummary.xml 的 InputFiles 全部解析後合併；
   同一個命名空間宣告兩個前綴（`xmlns:i` 與 `xmlns:xbrli`）或 linkbase 同時有預設命名空間與前綴的申報也能解析。存檔裡報表沒有任何欄位的會在讀取時重新解析。
-- 公司代號表存在本機快取（`data/cache.sqlite`）並留一份在 `data/store/tickers.json`（進 git，沒有快取時用），申報清單存在 `data/store/companies/`；啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
+- 公司代號表存在本機快取（`data/cache.sqlite`）並留一份在 `data/store/tickers.json`（在 data ref 裡，沒有快取時用），申報清單存在 `data/store/companies/`；啟動時先用存檔回應搜尋，背景再向 SEC 更新（之後每天一次）。每次更新成功後，**已不在代號表的公司（已下市、下櫃、被收購、撤銷登記）的財報與評分會從資料庫移除**，爬蟲也不再抓它們（只在代號表完整下載、筆數合理時才清，避免下載不全誤刪）。
 - 閒置時背景預抓：看某一份申報時，會在沒有使用者請求 3 秒後，悄悄下載前後一期、去年/明年同一季、以及同年度其他申報
   （讓 Q4 推算即時）。預抓請求一律讓路給使用者操作。`GET /api/status` 可看存檔數與預抓佇列。
 - 啟動後背景爬蟲：把每家有股票代號的公司（約 6,300 家，公眾流通市值大的先）最近 5 期 10-K / 10-Q / 20-F 存到本機
@@ -64,13 +64,14 @@ npm run build:static        # -> web/dist-static/（網頁 + data/store + data/b
 
 **GitHub Actions 自動部署**（[.github/workflows/pages.yml](.github/workflows/pages.yml)）：push 到 `main` 就 build 並發佈到 GitHub Pages。要先做兩件事：
 repo 的 Settings → Pages → Source 選 **GitHub Actions**；`SEC_USER_AGENT`（`名字 email`）用 Settings → Secrets 的同名 secret，沒設就用 workflow 檔裡寫的預設值。
-Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報、申報清單、以及 SEC 抓不到時的代號表與產業宇宙，直接用 repo 裡的 `data/store`。代號表或產業宇宙完全拿不到時 build 會失敗（exit 1），不會把搜尋不到東西的網站部署出去。
+**資料在 `refs/data/main`，不在 `main`**（見「資料存放」）：workflow checkout `main`（程式），再把 `refs/data/main`（`data/store`、`data/bars`）fetch 到 `data-repo/`，用 `STOCKSCAN_STORE` / `STOCKSCAN_BARS` 指過去；push 程式碼因此只帶程式的 diff，不再拖著十幾萬個資料檔。
+Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報、申報清單、以及 SEC 抓不到時的代號表與產業宇宙，直接用 data ref 裡的 `data/store`。代號表或產業宇宙完全拿不到時 build 會失敗（exit 1），不會把搜尋不到東西的網站部署出去。
 除了 push，也**定時**跑（cron 是 UTC，美東夏令 UTC-4、冬令 UTC-5，每個時間以其中一種寫、另一種會差一小時）：財報在最常出現的時段——美東 08:30、17:45、22:30（夏令）；
 日線則要在當天的 K 棒收完之後——16:00 收盤那根在 17:45 那次就有了，但 12 月起美股改成 23 小時交易（美東 20:00 到隔天 19:00，19:00–20:00 休市），整天的 K 棒只在那一小時是定案的，所以另外排 23:30 UTC（夏令 19:30）和 00:30 UTC（冬令 19:30）各一次，兩種時制總有一次落在休市那小時。
 每次都先 `npm run fetch:new` 從 EDGAR 每日索引把最近幾天新的 10-K / 10-Q 抓下來、解析、評分，
-commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workflow），再用新資料重建網站。`fetch:new` 在本機也能跑，等於爬蟲「監看新申報」那一步跑一次就結束。
-日線則不碰 `main`：repo 裡只有已結束年份的 `data/bars/**/<年>.zst`，每次 build 前 `npm run fetch:bars` 從 TradingView 把今年的 `head.zst` 補到最新（8 條並發約 12 分鐘；`actions/cache` 在兩次 run 之間留住 head，之後每次只接最後幾根），
-放進站台但不 commit。TradingView 抓不到（例如 runner 的 IP 被擋）也不會讓 build 失敗，只是自製 ETF 頁的日線停在去年底。
+在 `refs/data/main` 上**多 commit 一個並 push**（推這個 ref 不會觸發 workflow，`main` 完全不動；一定要接在前一個 commit 後面——git 只送父 commit 沒有的物件，孤兒 commit 或改寫過的 ref 每次都會重送整個 600 MB），再用新資料重建網站。`fetch:new` 在本機也能跑，等於爬蟲「監看新申報」那一步跑一次就結束。
+日線：data ref 裡只有已結束年份的 `data/bars/**/<年>.zst`，每次 build 前 `npm run fetch:bars` 從 TradingView 把今年的 `head.zst` 補到最新（8 條並發約 12 分鐘；`actions/cache` 在兩次 run 之間留住 head，之後每次只接最後幾根），
+放進站台但不 commit（data ref 的 `.gitignore` 排除 head.zst）；跨年封成 `<年>.zst` 時會跟著那次 push 進去。TradingView 抓不到（例如 runner 的 IP 被擋）也不會讓 build 失敗，只是自製 ETF 頁的日線停在去年底。
 
 - 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json.zst` 以 build 時間為版本，換一次 build 才重抓。
   另有 service worker（[web/public/sw.js](web/public/sw.js)，只在純前端版註冊）：app shell（`index.html` 與 `assets/` 的 hash 檔）走快取、離線也能開，`index.html` 本身 network-first 所以新部署下次開就生效、舊 assets 會照新頁面引用的清單清掉；
@@ -86,7 +87,17 @@ commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workf
 - 用相對路徑，放在子路徑（`https://user.github.io/stockscan/`）也不用改設定。
 - 頁首會標「純前端版 · N 份財報 · 資料更新至 <build 日期>」（tooltip 說明資料來源與唯一的外連）；不支援的功能會直接說明。
 
-### 資料存放（可進 git）
+### 資料存放（`refs/data/main`）
+
+資料不在 `main`，也不在任何 branch：`data/store` 與 `data/bars` 放在同一個 repo 的 ref **`refs/data/main`**（獨立的歷史，跟 `main` 沒有共同祖先；Pages 的 workflow 抓到新申報就在上面多 commit 一個）。
+放在 `refs/heads/` 之外是為了 **`git clone` 不會抓它**——clone 只有程式（幾 MB），GitHub 也不會把它列成 branch；`main` 的 `.gitignore` 整個忽略 `data/`。
+本機要跑伺服器版或 `npm run build:static`，把資料取回工作目錄（之後 server 的爬蟲會在同一個目錄繼續補）：
+
+```bash
+npm run data:pull      # = scripts/pull-data.sh：只抓 data ref 的 tip（--depth=1），git restore 到工作目錄，不 merge、不 rebase、不切 branch
+```
+
+之後想更新成 workflow 最新抓到的，再跑一次即可。不要把它 merge 進 `main`。
 
 ```
 data/store/filings/<cik>/<accession>__<期末>__<表別>__v<解析版本>.json.zst  一份財報一檔（zstd JSON，約 10 KB）
@@ -96,12 +107,12 @@ data/store/tickers.json                                                   EDGAR 
 data/store/companies/<CIK 10 碼>.json                                      每家公司的 EDGAR 申報清單（裁剪過的 submissions）：財報頁左側清單、爬蟲比對用
 data/bars/<來源>/<SYMBOL>/<年>.zst                                        日線，一個代號一年一檔（欄式 zstd，約 2.5 KB）：已結束的年份，寫完就不再動
 data/bars/<來源>/<SYMBOL>/meta.json                                       代號、來源、幣別、有哪些年份、分割調整（adjust）；只在封年或分割時才變
-data/bars/<來源>/<SYMBOL>/head.zst                                        今年的日線 + 抓取時間：唯一每天在長的檔（.gitignore，Pages 的 workflow 自己抓）
+data/bars/<來源>/<SYMBOL>/head.zst                                        今年的日線 + 抓取時間：唯一每天在長的檔（不進 data ref，Pages 的 workflow 自己抓）
 data/cache.sqlite                                                         快取：代號表、申報清單、市場快照…（.gitignore）
 ```
 
 - 財報一旦申報就不會變，所以每個檔寫一次就不動；解析或評分版本升級時舊檔刪掉重建。檔名就是索引（啟動時掃目錄，約 0.6 秒），沒有另外的索引檔會不同步。
-- 這樣設計是為了 **直接 `git add data/store` commit & push 到 GitHub**：全是小檔（沒有任何檔接近 100 MB 上限）、不需要 Git LFS；目前約 9,900 份財報 ≈ 110 MB，每月成長約 15 MB。`.gitignore` 已設成只收 `data/store/`，快取與舊 SQLite 不進。
+- 這樣設計是為了能**直接放進 git**：全是小檔（沒有任何檔接近 100 MB 上限）、不需要 Git LFS；目前約 30,000 份財報加十年日線約 940 MB，每月成長約 15 MB。放在 `refs/data/main` 而不是 `main`，push 程式碼才不用每次都處理十幾萬個檔的 tree，clone 也不會拿到它。
 - 儲存時把重複的四大報表引用（`statements` 只是 `allStatements` 的子集）拿掉、標準科目的 SEC 定義集中到 `documentation.json`，
   再用 **zstd + 字典**壓（`server/data/zdict/`，字典以 1,500 份財報 / 評分訓練，`node server/tools/train-zdict.mjs` 可重新訓練，但用過的字典不能改）：
   財報比 brotli 再小 36%、評分小 70%，解壓 0.2 ms；壓一份要 ~0.08 秒，只在爬蟲存檔時付。舊的 `.json.br` 照樣能讀，啟動 20 秒後在背景逐檔轉成 `.zst`。
@@ -123,7 +134,7 @@ docker compose up -d --build # http://localhost:3000（或 BASE_URL 下）
 ```
 
 - `Dockerfile` 兩階段：先 build 前端（含 `web/assets/tradingview/` 的授權版 Advanced Charts，有放才會複製），再以 Node 24 alpine 跑 server（僅 production 依賴，非 root）。
-- `./data` 掛進容器的 `/app/data`：`data/store/`（財報、評分，也是 git 裡的那份）與 `data/cache.sqlite` 在重建映像後保留；映像本身不含資料。
+- `./data` 掛進容器的 `/app/data`：`data/store/`（財報、評分，`npm run data:pull` 取回的那份）與 `data/cache.sqlite` 在重建映像後保留；映像本身不含資料。
 - 連主機上的 TWS / IB Gateway：`IB_HOST` 預設 `host.docker.internal`（Linux 由 compose 的 `extra_hosts` 提供）；TWS 的 API 設定要關掉「只允許 localhost 連線」並信任 Docker 網段的 IP，否則自製 ETF 的日線走 TradingView / Yahoo。
 - 健康檢查打 `/api/status`（含前綴）。
 
@@ -438,7 +449,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
   每檔獨立走這條鏈：前一個來源查不到或逾時就換下一個，表格會標各檔實際來源。裸代號在 TradingView 可能對到別國掛牌（COCO → 印尼），
   所以非美國交易所的結果會改以 NASDAQ / NYSE / AMEX / OTC 前綴重查。
   日線存在 `data/bars/<來源>/<SYMBOL>/`（[barStore.js](server/lib/barStore.js)，格式在 [barFormat.js](server/lib/barFormat.js)），一年一檔：日期存成日差、價格存成相對前一收盤的定點整數再 zstd，是原本 row JSON + brotli 的一半；
-  已結束的年份（`<年>.zst`）和 `meta.json` 進 git、寫完就不再動；今年的 bars 在 `head.zst`，每次更新都重寫，所以不進 git——新 clone 有到去年底的十年，今年的部分由 server 的背景抓取或 Pages 的 workflow 補。跨年時第一次寫入會把 head 封成 `<年>.zst`（meta 的 `years` 多一年），那時才需要 commit 一次。盤中 30 分鐘內視為新鮮；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路；
+  已結束的年份（`<年>.zst`）和 `meta.json` 進 data ref、寫完就不再動；今年的 bars 在 `head.zst`，每次更新都重寫，所以不進 git——取回 data ref 有到去年底的十年，今年的部分由 server 的背景抓取或 Pages 的 workflow 補。跨年時第一次寫入會把 head 封成 `<年>.zst`（meta 的 `years` 多一年），workflow 下一次 push data ref 就會帶上。盤中 30 分鐘內視為新鮮；收盤後抓的一直有效到下一個交易日開盤（日線在收盤後不會變），所以晚上、週末重開同一個 ETF 完全不打網路；
   最近讀過的 400 檔解碼後留在記憶體，同一個籃子連開是 0 ms。過期時**只抓最後一根之後的幾天**（往前多抓 7 天核對）接上去，不重抓整段 10 年——三個來源都支援（TradingView 指定根數、TWS 指定天數、Yahoo 指定起日）；
   盤中停機存下的最後一根還沒收完，重開時允許它跟核對段不同（只重寫那一年）。核對段對不上（期間發生分割）才整段重抓，但重抓回來**不改歷史檔**：整段差一個固定倍數就在 `meta.json` 的 `adjust` 記一筆 `{ date, price, volume }`，讀的時候把該日之前的價量乘上去；
   只有對不成一個倍數的資料修訂才重寫牽涉到的那幾年。一個月沒人讀的檔啟動時清掉。

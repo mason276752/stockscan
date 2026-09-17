@@ -1,14 +1,20 @@
 # Publish the pure-frontend build (web/dist-static) to GitHub Pages:
-#   - on every push to main (the data you committed, as is)
+#   - on every push to main (code only: the data comes from the data ref)
 #   - on a schedule around the hours filings land on EDGAR: first the day's new
-#     10-K / 10-Q / 20-F / 40-F are fetched, parsed, scored and committed to
-#     main, then the site is rebuilt with them (a push made by the workflow's
-#     own token does not trigger the workflow again, so no loop)
+#     10-K / 10-Q / 20-F / 40-F are fetched, parsed, scored and pushed to the
+#     data ref, then the site is rebuilt with them
 #   - by hand (Actions → Run workflow)
-#   - the daily bars: git holds the finished years (data/bars/**/<year>.zst);
-#     this year's bars (head.zst, not in git) are fetched from TradingView here
-#     before the build and kept between runs in the Actions cache, so nothing
-#     about bars is ever pushed to main
+# Data lives on the ref refs/data/main, never on main: data/store (filings,
+# scores, filing lists) and data/bars (the finished years of daily bars).
+# Outside refs/heads/ so that a plain `git clone` does not download it
+# (600 MB) - only `git fetch origin refs/data/main` does (scripts/
+# pull-data.sh). Here it is fetched into data-repo/ and the tools are
+# pointed at it with STOCKSCAN_STORE / STOCKSCAN_BARS. After a scheduled
+# fetch the new files go up as one more commit on that ref. (A commit's
+# parent is what makes the push small: git only sends what the parent
+# lacks. An orphan commit, or a rewritten ref, would resend all 600 MB.)
+# This year's bars (head.zst, not in git) are fetched from TradingView here
+# before the build and kept between runs in the Actions cache.
 # Needs: Settings → Pages → Source = "GitHub Actions". SEC_USER_AGENT ("Name
 # email") comes from the repository secret of that name, else the default
 # below - the build fetches the ticker table, the SIC / filer universe and ETF
@@ -49,8 +55,25 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT || 'Mason mason276752@gmail.com' }}
+      STOCKSCAN_STORE: ${{ github.workspace }}/data-repo/data/store
+      STOCKSCAN_BARS: ${{ github.workspace }}/data-repo/data/bars
+      STOCKSCAN_CRAWL: '0'
+      IB_ENABLED: '0'
+      TV_ENABLED: '0'
     steps:
       - uses: actions/checkout@v4
+      # the data ref, beside the code (tip only; the token lets the step
+      # further down push a new commit to it)
+      - name: Fetch the data ref
+        run: |
+          git init -q data-repo
+          cd data-repo
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git fetch -q --depth=1 --no-tags origin refs/data/main
+          git checkout -q FETCH_HEAD
+          echo "data ref $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -61,27 +84,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm --prefix web ci
 
-      # scheduled / manual runs: top the store up with the newest filings and commit them
+      # scheduled / manual runs: top the store up with the newest filings
       - name: Fetch new filings from EDGAR
         if: github.event_name != 'push'
         run: npm run fetch:new
-        env:
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT || 'Mason mason276752@gmail.com' }}
-          IB_ENABLED: '0'
-          TV_ENABLED: '0'
-      - name: Commit new filings
-        if: github.event_name != 'push'
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add -A data/store
-          if git diff --cached --quiet; then
-            echo "no new filings"
-          else
-            git commit -m "data: 新申報 $(date -u +%Y-%m-%d) [ci]"
-            git pull --rebase --autostash origin main
-            git push origin HEAD:main
-          fi
 
       # this year's bars (head.zst of every symbol): restored from the last
       # run's cache, topped up from TradingView on scheduled / manual runs
@@ -93,7 +99,7 @@ jobs:
       - name: Restore this year's bars
         uses: actions/cache@v4
         with:
-          path: data/bars/**/head.zst
+          path: data-repo/data/bars/**/head.zst
           key: bars-head-${{ github.run_id }}
           restore-keys: bars-head-
       - name: Fetch this year's bars from TradingView
@@ -101,17 +107,29 @@ jobs:
         run: npm run fetch:bars
         continue-on-error: true
         env:
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT || 'Mason mason276752@gmail.com' }}
           STOCKSCAN_BARS_CRAWL_PARALLEL: '8'
-          IB_ENABLED: '0'
+
+      # the store as it is now, as one more commit on the data ref
+      # (head.zst and .tmp files are ignored by the ref's .gitignore).
+      # Nothing changed: nothing pushed. A crossing of a year boundary (a
+      # new <year>.zst) lands here the same way.
+      - name: Push the data ref
+        if: github.event_name != 'push'
+        working-directory: data-repo
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no data changes"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git commit -q -m "data: $(date -u +%Y-%m-%d) [ci]"
+            git push -q origin HEAD:refs/data/main
+            echo "pushed $(git rev-parse --short HEAD)"
+          fi
 
       - name: Build the static site
         run: npm run build:static
-        env:
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT || 'Mason mason276752@gmail.com' }}
-          STOCKSCAN_CRAWL: '0'
-          IB_ENABLED: '0'
-          TV_ENABLED: '0'
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

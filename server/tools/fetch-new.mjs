@@ -1,7 +1,7 @@
 // Fetch the filings EDGAR's daily index lists for the last few days that are
 // not in the store yet (10-K / 10-Q / 20-F / 40-F of companies with a
 // ticker), parse, save and score them - one pass, then exit. The scheduled
-// GitHub Actions job runs this and commits data/store before publishing the
+// GitHub Actions job runs this and pushes data/store to the data ref (refs/data/main) before publishing the
 // static site; it is also handy by hand: SEC_USER_AGENT=… npm run fetch:new
 import { SecClient } from '../lib/secClient.js';
 import { openStore, requireVersion, store } from '../lib/store.js';

@@ -2,13 +2,8 @@ node_modules/
 web/dist/
 *.log
 .env
-# data/store (財報與評分) 與 data/bars (日線) 進 git；cache.sqlite 與舊的 SQLite 不進
-# （git 不能 re-include 被排除目錄底下的檔案，所以要寫 data/* 而不是 data/）
-data/*
-!data/store/
-!data/bars/
-data/store/**/*.tmp
-data/bars/**/*.tmp
-# 今年還在長的日線檔：每天都變，不進 git（Pages 的 workflow 自己抓，本機 server 自己補）
-data/bars/**/head.zst
+# 資料不進 main：data/store（財報與評分）與 data/bars（已結束年份的日線）在 `data` branch，
+# 由 Pages 的 workflow 更新；本機用 `git restore --source=FETCH_HEAD -- data/store data/bars` 取回。
+# cache.sqlite、今年的 head.zst 等其他 data/ 底下的東西本來就不進 git。
+data/
 web/dist-static/
