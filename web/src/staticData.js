@@ -1,6 +1,8 @@
 // Static-build data access: the prebuilt indexes (index/*.json) and the
 // saved filings / scores (data/store/**/*.json.zst, zstd with the same
-// dictionaries the server writes with), all fetched as plain files.
+// dictionaries the server writes with), all fetched as plain files. Runs in
+// the data-layer worker (api.static.worker.js), so the inflating and parsing
+// here never block the page; the parsed indexes stay there.
 import { init, createDCtx, decompress, decompressUsingDict } from '@bokuweb/zstd-wasm';
 // a relative path: the package's "exports" map does not expose the wasm file
 import wasmUrl from '../node_modules/@bokuweb/zstd-wasm/dist/web/zstd.wasm?url';

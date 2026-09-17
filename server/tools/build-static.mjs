@@ -63,7 +63,7 @@ const { openStore, store } = await import('../lib/store.js');
 openStore();
 const { SCRAPE_VERSION } = await import('../lib/scrape.js');
 const { SCORE_VERSION, latestScores } = await import('../lib/score.js');
-const { screenRows, scoreBadge } = await import('../lib/screen.js');
+const { screenColumns, screenRows, scoreBadge } = await import('../lib/screen.js');
 const { fiscalLabel, DEFAULT_FORMS } = await import('../lib/filings.js');
 const { lookupFiler, sicInfo } = await import('../lib/universe.js');
 const { POPULAR_ETFS } = await import('../lib/etf.js');
@@ -105,7 +105,7 @@ const idx = path.join(OUT, 'index');
 fs.mkdirSync(idx, { recursive: true });
 // Index files go out zstd'd (<name>.zst): a static host may not compress
 // what it serves and the browser has zstd-wasm anyway (the filings need it).
-// screen.json is 27 MB raw, 4 MB so - 36 ms to inflate. meta.json stays
+// screen.json is 11 MB raw, 3.4 MB so - 30 ms to inflate. meta.json stays
 // plain: it is the first fetch and carries the build id the rest is cached by.
 // with the native helper the raw JSON is written now and all of them are
 // compressed together (in parallel) at the end
@@ -229,7 +229,9 @@ write('tickers.json', tickers.map((t) => ({ cik: t.cik, ticker: t.ticker, name: 
 
 const scores = latestScores();
 write('scores-min.json', Object.fromEntries(scores.map((s) => [s.cik, scoreBadge(s)])));
-write('screen.json', screenRows(scores, byCik, market?.byTicker || null));
+// the screener rows as columns (one array per field): a quarter of the
+// JSON of the rows, parsed by the browser's worker in a third of the time
+write('screen.json', screenColumns(screenRows(scores, byCik, market?.byTicker || null)));
 write('universe.json', { updatedAt: universe.updatedAt, datasets: universe.datasets, companies: universe.companies });
 write('tvsymbols.json', Object.fromEntries(Object.entries(market?.byTicker || {}).map(([t, r]) => [t, { symbol: r.tv, exchange: r.exchange || null }])));
 

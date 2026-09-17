@@ -84,7 +84,9 @@ Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、�
 - 閒置預抓（[web/src/prefetch.js](web/src/prefetch.js)，兩種版本都有）：瀏覽器閒置、且沒有使用者要的東西在載入時，一次一件把「接下來很可能會點的」先抓好——
   開了一家公司後依序抓這份申報的評分、目前設定的財務指標、TradingView 代號、申報表裡接下來三份申報；伺服器版停留 8 秒後再抓股價估值（伺服器要去抓股價，不為路過的公司抓）。
   純前端版啟動時先把搜尋 / 公司 / 評分 / 科目說明索引抓好，再抓尋找股票與分類瀏覽用的大索引。結果進同一個 memo（[memo.js](web/src/memo.js)）／Cache Storage，之後點到就直接用；換公司時還沒跑的會丟掉，`navigator.connection.saveData` 開著就完全不預抓。
-  索引全部 zstd 壓過再放上去（靜態主機不一定會壓，瀏覽器反正已經為了財報載了 zstd-wasm）：尋找股票的 `screen.json` 27 MB → 4 MB、公司清單 12 MB → 0.7 MB，解壓最大的那個約 40 ms；只有 `meta.json` 是明文（第一個抓、帶 build 時間）。
+  索引全部 zstd 壓過再放上去（靜態主機不一定會壓，瀏覽器反正已經為了財報載了 zstd-wasm）：尋找股票的 `screen.json` 11 MB → 3.4 MB、公司清單 12 MB → 0.7 MB，解壓最大的那個約 30 ms；只有 `meta.json` 是明文（第一個抓、帶 build 時間）。
+  `screen.json` 是欄位式（一個欄位一個陣列，`screen.js` 的 `screenColumns`）：比一列一個物件少四分之三的 JSON、parse 快一倍多，`screenQuery` 直接在欄位上篩選排序（數值欄是 `Float64Array`），只把回傳的那幾百列組回物件——伺服器那邊仍是每次請求現組的列物件，同一個 `screenQuery` 兩種都吃。
+- 純前端版的資料層跑在 Web Worker（[api.static.worker.js](web/src/api.static.worker.js)；頁面上的 [api.static.js](web/src/api.static.js) 只是把每個呼叫轉過去的 proxy）：抓檔、zstd 解壓、JSON parse、解財報算指標、算自製 ETF 指數全在 worker 裡，索引也留在 worker 不搬回頁面，只有結果過線——主執行緒沒有任何 long task（之前載尋找股票索引會卡 ~130 ms）。錯誤訊息要用的語言隨每個請求帶過去（[locales/translate.js](web/src/locales/translate.js)，無 Vue 的 `t()`）。
 
 - 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、
   `index/*.json.zst`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。
@@ -480,7 +482,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/filings.js`、`statementTypes.js`、`storeFormat.js`、`scoreModel.js`、`screen.js`、`marketFields.js`、`sic.js` | 純計算 / 純資料模組（無 Node I/O），伺服器與純前端版共用：申報清單工具、報表分類、存檔格式還原、評分模型、尋找股票與分類瀏覽的篩選排序、市場欄位、SIC 表 |
 | `server/tools/build-static.mjs`、`fetch-new.mjs` | 產生純前端版（`npm run build:static`）；一次性抓最近幾天的新申報（`npm run fetch:new`，排程用） |
 | `tools/stockscan-static/` | Rust：靜態版 build 的重活（`copy` 平行複製／hard link、`decode` 平行解開 store 取每份財報表頭與評分、`compress` 多執行緒 zstd）；索引的內容仍由 build-static.mjs 決定，兩條路輸出相同 |
-| `web/src/api.js`、`api.http.js`、`api.static.js`、`staticData.js` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（讀靜態檔 + 瀏覽器內計算、WASM zstd） |
+| `web/src/api.js`、`api.http.js`、`api.static.js`、`api.static.worker.js`、`staticData.js` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（頁面上的 proxy 與做事的 Web Worker：讀靜態檔 + 瀏覽器內計算、WASM zstd） |
 | `server/lib/barStore.js` | 日線快取：一檔一個 brotli 檔、記憶體 LRU、增量接續（`mergeDays` 核對重疊段）、一個月未用清除；舊 kv 裡的日線第一次啟動會搬過來 |
 | `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |
 | `server/lib/prefetch.js` | 閒置時背景預抓相鄰申報 |

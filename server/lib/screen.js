@@ -54,24 +54,136 @@ export function screenRows(scores, companiesByCik, marketByTicker = null) {
   return rows;
 }
 
+// ---- the screener table ----
+// screenQuery reads the rows through a small accessor object, so the two
+// layouts share one implementation: the server hands it the row objects
+// screenRows builds per request (rowTable: nothing to convert), the static
+// build ships the same rows as columns (screenColumns: one array per field
+// - zstd packs those six times smaller than the rows, 4 MB -> 0.7 MB, and
+// the browser parses them in a third of the time) and the browser's worker
+// reads those (columnTable: the value columns as Float64Array, NaN for
+// null). Only the rows a query returns are materialised as objects.
+const SCORE_KEYS = ['score', 'coverage', 'accession', 'form', 'fiscalYear', 'fiscalPeriod', 'periodEnd', 'filingDate', 'categories'];
+const BASE_KEYS = ['fiscalYear', 'fiscalPeriod', 'periodEnd', 'score']; // prev / yoy, plus values
+const ROW_KEYS = ['cik', 'ticker', 'tickers', 'name', 'sic', 'sicZh', 'afs', 'float', 'history'];
+
+// rows -> columns (what index/screen.json holds)
+export function screenColumns(rows) {
+  const n = rows.length;
+  const col = (get) => {
+    const a = new Array(n);
+    for (let i = 0; i < n; i++) a[i] = get(rows[i]) ?? null;
+    return a;
+  };
+  const cols = (keys, sel) => Object.fromEntries(keys.map((k) => [k, col((r) => sel(r)?.[k])]));
+  const union = (sel) => {
+    const keys = new Set();
+    for (const r of rows) for (const k of Object.keys(sel(r) || {})) keys.add(k);
+    return [...keys];
+  };
+  const valueKeys = [...new Set([...union((r) => r.values), ...union((r) => r.prev?.values), ...union((r) => r.yoy?.values)])];
+  const base = (sel) => ({ has: col((r) => (sel(r) ? 1 : 0)), ...cols(BASE_KEYS, sel), values: cols(valueKeys, (r) => sel(r)?.values) });
+  return {
+    n,
+    ...cols(ROW_KEYS, (r) => r),
+    score: cols(SCORE_KEYS, (r) => r.score),
+    values: cols(valueKeys, (r) => r.values),
+    prev: base((r) => r.prev),
+    yoy: base((r) => r.yoy),
+    market: { has: col((r) => (r.market ? 1 : 0)), ...cols(union((r) => r.market), (r) => r.market) },
+  };
+}
+
+const rowTable = (rows) => ({
+  length: rows.length,
+  ticker: (i) => rows[i].ticker,
+  tickers: (i) => rows[i].tickers,
+  name: (i) => rows[i].name,
+  sic: (i) => rows[i].sic,
+  afs: (i) => rows[i].afs,
+  float: (i) => rows[i].float,
+  score: (i) => rows[i].score.score,
+  value: (i, key) => rows[i].values[key] ?? null,
+  baseScore: (i, mode) => (mode === 'chg' ? rows[i].prev : rows[i].yoy)?.score ?? null,
+  baseValue: (i, key, mode) => (mode === 'chg' ? rows[i].prev : rows[i].yoy)?.values?.[key] ?? null,
+  market: (i, key) => rows[i].market?.[key] ?? null,
+  row: (i) => rows[i],
+});
+
+function columnTable(c) {
+  const typed = (cols) =>
+    Object.fromEntries(
+      Object.entries(cols).map(([k, a]) => {
+        const f = new Float64Array(a.length);
+        for (let i = 0; i < a.length; i++) f[i] = a[i] == null ? NaN : a[i];
+        return [k, f];
+      }),
+    );
+  const values = typed(c.values);
+  const bases = { chg: { ...c.prev, values: typed(c.prev.values) }, yoy: { ...c.yoy, values: typed(c.yoy.values) } };
+  const num = (a, i) => (a && !Number.isNaN(a[i]) ? a[i] : null);
+  const pick = (cols, keys, i) => {
+    const o = {};
+    for (const k of keys) o[k] = cols[k]?.[i] ?? null;
+    return o;
+  };
+  const valueKeys = Object.keys(c.values);
+  const valuesAt = (cols, i) => {
+    const o = {};
+    for (const k of valueKeys) o[k] = num(cols[k], i);
+    return o;
+  };
+  const baseAt = (mode, i) => (bases[mode].has[i] ? { ...pick(bases[mode], BASE_KEYS, i), values: valuesAt(bases[mode].values, i) } : null);
+  const marketKeys = Object.keys(c.market).filter((k) => k !== 'has');
+  return {
+    length: c.n,
+    ticker: (i) => c.ticker[i],
+    tickers: (i) => c.tickers[i],
+    name: (i) => c.name[i],
+    sic: (i) => c.sic[i],
+    afs: (i) => c.afs[i],
+    float: (i) => c.float[i],
+    score: (i) => c.score.score[i],
+    value: (i, key) => num(values[key], i),
+    baseScore: (i, mode) => (bases[mode].has[i] ? bases[mode].score[i] : null),
+    baseValue: (i, key, mode) => (bases[mode].has[i] ? num(bases[mode].values[key], i) : null),
+    market: (i, key) => (c.market.has[i] ? (c.market[key]?.[i] ?? null) : null),
+    // the row object screenRow would have built
+    row: (i) => ({
+      ...pick(c, ROW_KEYS.slice(0, -1), i),
+      score: pick(c.score, SCORE_KEYS, i),
+      values: valuesAt(values, i),
+      prev: baseAt('chg', i),
+      yoy: baseAt('yoy', i),
+      history: c.history[i],
+      market: c.market.has[i] ? pick(c.market, marketKeys, i) : null,
+    }),
+  };
+}
+
+// rows (screenRows) or columns (screenColumns) -> the table screenQuery reads
+export const screenTable = (x) => (Array.isArray(x) ? rowTable(x) : typeof x.length === 'number' && typeof x.row === 'function' ? x : columnTable(x));
+
 // change since the previous filing (chg) or the same period a year earlier
 // (yoy): percentage points for ratios, % growth for amounts and the score
-function changeOf(r, key, mode) {
-  const base = mode === 'chg' ? r.prev : r.yoy;
-  const a = key === 'score' ? r.score.score : (r.values[key] ?? null);
-  const b = !base ? null : key === 'score' ? base.score : (base.values?.[key] ?? null);
+function changeOf(t, i, key, mode) {
+  const a = key === 'score' ? t.score(i) : t.value(i, key);
+  const b = key === 'score' ? t.baseScore(i, mode) : t.baseValue(i, key, mode);
   if (a == null || b == null) return null;
   return pctField(key) ? (b === 0 ? null : ((a - b) / Math.abs(b)) * 100) : a - b;
 }
-const valueOf = (r, key, mode = 'now') => {
-  if (MARKET_KEYS.has(key)) return mode === 'now' ? (r.market?.[key] ?? null) : null;
-  if (mode !== 'now') return changeOf(r, key, mode);
-  return key === 'score' ? r.score.score : (r.values[key] ?? null);
+const valueOf = (t, i, key, mode = 'now') => {
+  if (MARKET_KEYS.has(key)) return mode === 'now' ? t.market(i, key) : null;
+  if (mode !== 'now') return changeOf(t, i, key, mode);
+  return key === 'score' ? t.score(i) : t.value(i, key);
 };
 
-// The query of GET /api/screen applied to rows: sic / division / afs /
-// exclusions / text, <key>[_chg|_yoy]_min|max ranges, sort, limit.
+// The query of GET /api/screen applied to the rows (an array of screenRow
+// objects, the columns of screenColumns, or a screenTable of either): sic /
+// division / afs / exclusions / text, <key>[_chg|_yoy]_min|max ranges,
+// sort, limit.
 export function screenQuery(rows, q) {
+  const t = screenTable(rows);
   const sic = q.sic ? String(q.sic).padStart(4, '0') : null;
   const sic2 = q.sic2 ? String(q.sic2).padStart(2, '0') : null;
   const division = q.division ? SIC.divisions.find((d) => d.id === String(q.division).toUpperCase()) : null;
@@ -98,40 +210,42 @@ export function screenQuery(rows, q) {
     ranges.push({ key: m[1], mode: m[2] || 'now', op: m[3], value: Number(v) });
   }
   const out = [];
-  for (const r of rows) {
-    if (listedOnly && !r.ticker) continue;
-    const code = r.sic || '0000';
+  for (let i = 0; i < t.length; i++) {
+    if (listedOnly && !t.ticker(i)) continue;
+    const code = t.sic(i) || '0000';
     if (sic && code !== sic) continue;
     if (sic2 && !code.startsWith(sic2)) continue;
     if (division && !(code.slice(0, 2) >= division.from && code.slice(0, 2) <= division.to)) continue;
     if (exDiv.some((d) => code.slice(0, 2) >= d.from && code.slice(0, 2) <= d.to)) continue;
     if (exSic.some((x) => code.startsWith(x))) continue;
-    if (afs && (r.afs || 'UNKNOWN') !== afs) continue;
-    if (text && !(r.name.toUpperCase().includes(text) || (r.tickers || []).some((t) => t.startsWith(text)))) continue;
+    if (afs && (t.afs(i) || 'UNKNOWN') !== afs) continue;
+    if (text && !(t.name(i).toUpperCase().includes(text) || (t.tickers(i) || []).some((x) => x.startsWith(text)))) continue;
     let ok = true;
     for (const x of ranges) {
-      const v = valueOf(r, x.key, x.mode);
+      const v = valueOf(t, i, x.key, x.mode);
       if (v == null || (x.op === 'min' ? v < x.value : v > x.value)) {
         ok = false;
         break;
       }
     }
-    if (ok) out.push(r);
+    if (ok) out.push(i);
   }
   const sortKey = String(q.sort || 'score');
   const sortMode = ['chg', 'yoy'].includes(String(q.sortmode || '')) ? String(q.sortmode) : 'now';
   const dir = q.dir === 'asc' ? 1 : -1;
-  const sv = (r) => (sortMode !== 'now' ? changeOf(r, sortKey, sortMode) : MARKET_KEYS.has(sortKey) ? (r.market?.[sortKey] ?? null) : sortKey === 'score' ? r.score.score : sortKey === 'float' ? r.float : sortKey === 'name' ? r.name : sortKey === 'ticker' ? r.ticker : (r.values[sortKey] ?? null));
-  out.sort((a, b) => {
-    const x = sv(a);
-    const y = sv(b);
+  const sv = (i) => (sortMode !== 'now' ? changeOf(t, i, sortKey, sortMode) : MARKET_KEYS.has(sortKey) ? t.market(i, sortKey) : sortKey === 'score' ? t.score(i) : sortKey === 'float' ? t.float(i) : sortKey === 'name' ? t.name(i) : sortKey === 'ticker' ? t.ticker(i) : t.value(i, sortKey));
+  const keys = out.map(sv);
+  const order = out.map((_, k) => k);
+  order.sort((a, b) => {
+    const x = keys[a];
+    const y = keys[b];
     if (x == null && y == null) return 0;
     if (x == null) return 1;
     if (y == null) return -1;
     return (x < y ? -1 : x > y ? 1 : 0) * dir;
   });
   const limit = Math.min(2000, Math.max(1, Number(q.limit) || 300));
-  return { total: out.length, count: Math.min(out.length, limit), rows: out.slice(0, limit) };
+  return { total: out.length, count: Math.min(out.length, limit), rows: order.slice(0, limit).map((k) => t.row(out[k])) };
 }
 
 // does a query need the market snapshot (so the server may wait for it)?

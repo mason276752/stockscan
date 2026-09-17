@@ -8,10 +8,9 @@
 //                    lookup table, itself when there is none or in zh
 //   pick(obj, ...)   the field of a bilingual record for the current locale
 import { computed, ref, watch } from 'vue';
-import zh from './locales/zh.js';
 import en from './locales/en.js';
+import { MESSAGES, translate } from './locales/translate.js';
 
-const MESSAGES = { zh, en };
 export const LOCALES = [
   ['zh', '中文'],
   ['en', 'English'],
@@ -39,20 +38,7 @@ watch(
   { immediate: true },
 );
 
-export function t(key, params) {
-  const m = MESSAGES[locale.value];
-  let s = m[key] ?? MESSAGES.zh[key];
-  if (s == null) return key;
-  if (typeof s === 'function') return s(params || {});
-  if (params) {
-    if (typeof params.n === 'number' && s.includes('|')) {
-      const [one, many] = s.split('|');
-      s = params.n === 1 ? one : many;
-    }
-    s = s.replace(/\{(\w+)\}/g, (_, k) => (params[k] == null ? '' : String(params[k])));
-  }
-  return s;
-}
+export const t = (key, params) => translate(locale.value, key, params);
 
 // Chinese text from the shared computation modules (server/lib) -> English
 export function tr(s) {
