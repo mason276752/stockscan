@@ -94,6 +94,20 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     while (!client.idle || prefetcher?.status().queued || prefetcher?.status().current) await sleep(1000);
   }
 
+  // score saved filings (a quarter's score needs the quarter before it, so
+  // this runs once a company's batch is on disk; one scored without a
+  // neighbour earlier is redone now that more may be saved)
+  async function scoreSaved(filings) {
+    for (const f of filings) {
+      if (!store.hasFiling(f.accession)) continue;
+      try {
+        await scoreAccession(f.accession, { redoPartial: true });
+      } catch (err) {
+        console.warn(`score ${f.accession}: ${err.message}`);
+      }
+    }
+  }
+
   async function saveLatest(company, filing) {
     if (!filing || store.hasFiling(filing.accession)) return false;
     if ((fails[filing.accession] || 0) >= MAX_FAILS) return false;
@@ -103,11 +117,6 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     try {
       await ensureStored(low, filing, company);
       state.saved++;
-      try {
-        scoreAccession(filing.accession);
-      } catch (err) {
-        console.warn(`score ${filing.accession}: ${err.message}`);
-      }
       return true;
     } catch (err) {
       state.failed++;
@@ -166,6 +175,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
             else if (await saveLatest(company, filing)) had++;
             else state.skipped++;
           }
+          await scoreSaved(wanted);
           if (!wanted.length || had === wanted.length) state.done++;
         } catch (err) {
           state.failed++;
@@ -222,6 +232,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
           const company = await getCompany(low, String(r.cik), { refresh: true });
           const filing = company.filings.find((f) => f.accession === r.accession);
           if (filing && (await saveLatest(company, filing))) {
+            await scoreSaved([filing]);
             state.watched++;
             state.watchLog.unshift({ at: new Date().toISOString(), day, ticker: company.tickers?.[0] || null, cik: company.cik, form: filing.form, fiscalYear: filing.fiscalYear, fiscalPeriod: filing.fiscalPeriod, filingDate: filing.filingDate });
             state.watchLog.length = Math.min(state.watchLog.length, 50);

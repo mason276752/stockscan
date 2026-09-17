@@ -17,7 +17,7 @@ import { currentView } from '../../server/lib/current.js';
 import { buildQuarterly } from '../../server/lib/quarters.js';
 import { buildIndicators } from '../../server/lib/indicators.js';
 import { filingFile, filingUrls, pickFiling, scoreFile } from '../../server/lib/filings.js';
-import { ITEMS, SCORE_VERSION, scoreFiling } from '../../server/lib/scoreModel.js';
+import { ITEMS, SCORE_VERSION, scoreFilingOf } from '../../server/lib/scoreModel.js';
 import { SCREEN_FIELDS, browseCompanies, screenQuery, screenTable, searchRows, wantsHistory } from '../../server/lib/screen.js';
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
 import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
@@ -165,7 +165,7 @@ const api = {
     const f = c.filings.find((x) => x.accession === accession);
     if (!f) throw new Error(`Filing ${accession} not found`);
     if (f.scoreFile) return (await data.readZst('scores', `/data/store/${f.scoreFile}`)).score;
-    const s = scoreFiling(await loadFiling(f));
+    const s = await scoreFilingOf(loadFiling, c, f);
     if (!s) throw new Error('Cannot score this filing');
     return s;
   },

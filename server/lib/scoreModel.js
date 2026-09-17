@@ -10,16 +10,21 @@
 // within 20% of the threshold, none otherwise; items the filing cannot
 // answer are left out and the score is rescaled over what remains.
 //
-// Everything is taken from the one filing so the background crawl can score
-// every company: balances at the period end (average with the comparative
-// column), flows from the year-to-date column annualised (×12/months);
-// cash-flow adequacy uses the same annualised year-to-date figures instead of
-// five years.
+// The numbers are the ones the indicator table shows for that filing's
+// column: a quarterly filer's quarter has its flows ×4 and its balances
+// averaged with the quarter before (Q4 = 10-K full year − nine months), so
+// scoring a filing needs its neighbours (scoreFilingOf); an annual filer's
+// year is the filing alone, flows as they are and the comparative column as
+// the opening balances (scoreFiling). Cash-flow adequacy is that one period
+// rather than the table's five years. A quarterly filing whose neighbours
+// are not saved (the oldest one saved of a company) is scored alone from
+// its year-to-date column (×12/months) and marked partial, to be redone
+// once they are.
 
-import { C, ROWS, first, ratios } from './indicators.js';
+import { C, ROWS, adequacyOver, first, loadPoints, quarterInputs, quarterKeys, ratios } from './indicators.js';
 import { balancesAt, costOfRevenueFromHeading, factsAt, months, noCostOfRevenue, statementOf } from './quarters.js';
 
-export const SCORE_VERSION = 16;
+export const SCORE_VERSION = 17;
 
 const CATEGORY_OF = { debtRatio: '財務結構', ltCapToPpe: '財務結構', currentRatio: '償債能力', quickRatio: '償債能力', dso: '經營能力', dio: '經營能力', cycle: '經營能力', assetTurnover: '經營能力', grossMargin: '獲利能力', opMargin: '獲利能力', netMargin: '獲利能力', eps: '獲利能力', roe: '獲利能力', cfRatio: '現金流量', cfAdequacy: '現金流量', cfReinvest: '現金流量', cashPct: '現金流量' };
 export const CATEGORIES = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
@@ -145,7 +150,46 @@ export const AMOUNT_FIELDS = [
   { key: 'stockIssuedAnn', name: '發行新股所得（年化）', group: '現金流量與權益' },
 ].map((f) => ({ unit: '百萬', ...f }));
 
-export function scoreFiling(data) {
+// The score from ratios() inputs `g` (see indicators.js), for the filing
+// `header` (accession, form, fiscal labels …). `basis` says what the flows
+// cover: kind 'quarter' (one quarter ×4), 'annual' (a full year) or 'ytd'
+// (a 10-Q's year-to-date column ×12/months - the fallback), with monthsLen;
+// `partial` marks a fallback that should be redone once the neighbouring
+// filing is saved.
+function scoreInputs(g, header, basis, { sharesDiluted } = {}) {
+  const { values } = ratios(g);
+  // statement lines as amounts, for the screener: balances at the period end,
+  // flows annualised like the ratios
+  for (const [key, ckey] of Object.entries(BALANCE_AMOUNTS)) values[key] = g.bal(ckey);
+  values.equity = values.equity ?? (g.bal('liabilitiesAndEquity') != null && g.bal('totalLiabilities') != null ? g.bal('liabilitiesAndEquity') - g.bal('totalLiabilities') : null);
+  for (const [key, ckey] of Object.entries(FLOW_AMOUNTS)) values[key] = g.flowA(ckey);
+  values.grossProfitAnn = values.grossProfitAnn ?? (values.grossMargin != null && values.revenueAnn != null ? (values.grossMargin / 100) * values.revenueAnn : null);
+  values.operatingIncomeAnn = values.operatingIncomeAnn ?? (values.opMargin != null && values.revenueAnn != null ? (values.opMargin / 100) * values.revenueAnn : null);
+  values.sharesDiluted = sharesDiluted ?? g.flow('sharesDiluted');
+  const s = scoreValues(values);
+  // every ratio (rounded) is kept so the screener can filter on it
+  const rounded = {};
+  for (const [k, v] of Object.entries(values)) rounded[k] = typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null;
+  const { monthsLen } = basis;
+  const note = basis.kind === 'quarter' ? '單季流量 ×4 年化，平均餘額用本季末與上季末（同財務指標表）；現金流量允當比率以這一季計算而非五年' : monthsLen === 12 ? '全年數字' : `年初至今 ${monthsLen} 個月，流量 ×${(12 / monthsLen).toFixed(2)} 年化；現金流量允當比率以同一期間計算而非五年`;
+  return {
+    values: rounded,
+    version: SCORE_VERSION,
+    accession: header.accession,
+    cik: header.cik,
+    form: header.form,
+    fiscalYear: header.fiscalYear,
+    fiscalPeriod: header.fiscalPeriod,
+    periodEnd: header.periodEnd,
+    filingDate: header.filingDate,
+    basis: { ...basis, annualized: monthsLen !== 12, note: basis.partial ? `缺上一季的申報，先以這份申報單獨計算：${note}` : note },
+    ...s,
+  };
+}
+
+// Score from one filing alone: an annual filer's year, or the fallback for a
+// quarterly filing whose neighbours are not saved (`partial`).
+export function scoreFiling(data, { partial = false } = {}) {
   const inp = singleFilingInputs(data);
   if (!inp) return null;
   const { balances, balancesPrev, flows, flowsA, monthsLen } = inp;
@@ -166,31 +210,31 @@ export function scoreFiling(data) {
       return { ocf, out: capex + invInc + (flow('dividends') ?? 0), periods: 1 };
     },
   };
-  const { values } = ratios(g);
-  // statement lines as amounts, for the screener: balances at the period end,
-  // flows annualised like the ratios (a 10-Q's nine months ×12/9)
-  for (const [key, ckey] of Object.entries(BALANCE_AMOUNTS)) values[key] = g.bal(ckey);
-  values.equity = values.equity ?? (g.bal('liabilitiesAndEquity') != null && g.bal('totalLiabilities') != null ? g.bal('liabilitiesAndEquity') - g.bal('totalLiabilities') : null);
-  for (const [key, ckey] of Object.entries(FLOW_AMOUNTS)) values[key] = g.flowA(ckey);
-  values.grossProfitAnn = values.grossProfitAnn ?? (values.grossMargin != null && values.revenueAnn != null ? (values.grossMargin / 100) * values.revenueAnn : null);
-  values.operatingIncomeAnn = values.operatingIncomeAnn ?? (values.opMargin != null && values.revenueAnn != null ? (values.opMargin / 100) * values.revenueAnn : null);
-  values.sharesDiluted = g.flow('sharesDiluted');
-  const s = scoreValues(values);
-  // every ratio (rounded) is kept so the screener can filter on it
-  const rounded = {};
-  for (const [k, v] of Object.entries(values)) rounded[k] = typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null;
-  return {
-    values: rounded,
-    version: SCORE_VERSION,
-    accession: data.filing.accession,
-    cik: data.filing.cik,
-    form: data.filing.form,
-    fiscalYear: data.filing.fiscalYear,
-    fiscalPeriod: data.filing.fiscalPeriod,
-    periodEnd: data.filing.periodEnd,
-    filingDate: data.filing.filingDate,
-    basis: { monthsLen, annualized: monthsLen !== 12, note: monthsLen === 12 ? '全年數字' : `年初至今 ${monthsLen} 個月，流量 ×${(12 / monthsLen).toFixed(2)} 年化；現金流量允當比率以同一期間計算而非五年` },
-    ...s,
-  };
+  return scoreInputs(g, data.filing, { kind: monthsLen === 12 ? 'annual' : monthsLen === 3 ? 'quarter' : 'ytd', monthsLen, ...(partial ? { partial: true } : {}) });
+}
+
+// Score of `filing` (an entry of company.filings) the way the indicator
+// table computes its column. `load(filing)` fetches a saved filing; a
+// quarterly filer's quarter needs the one before (opening balances) and,
+// for Q4, the year's 10-Qs (Q4 flows = full year − nine months). When those
+// are not there the filing is scored alone and marked partial.
+export async function scoreFilingOf(load, company, filing) {
+  const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
+  const year = Number(filing.fiscalYear);
+  const q = filing.fiscalPeriod === 'FY' ? 4 : Number(String(filing.fiscalPeriod || '').slice(1));
+  if (!quarterly || !year || !(q >= 1 && q <= 4)) return scoreFiling(await load(filing));
+  const keys = quarterKeys(year, q, 2);
+  const byKey = await loadPoints(load, company, keys, true);
+  const points = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { missing: true, flows: {}, balances: {} });
+  const [prev, cur] = points;
+  const hasFlows = Object.values(cur.flows).some((x) => x != null);
+  if (cur.missing || !hasFlows || !cur.sources?.includes(filing.accession)) return scoreFiling(await load(filing), { partial: true });
+  // a first quarter without the 10-K before it: the 10-Q's own comparative
+  // column is that quarter end, and its three-month column the quarter
+  if (prev.missing) return scoreFiling(await load(filing), { partial: q !== 1 });
+  const g = quarterInputs(points, 1, () => adequacyOver(points, 1, 1, 1));
+  const header = { accession: filing.accession, cik: company.cik, form: filing.form, fiscalYear: String(year), fiscalPeriod: filing.fiscalPeriod, periodEnd: cur.periodEnd || filing.reportDate, filingDate: filing.filingDate };
+  // Q4's weighted shares cannot be full year − nine months: the 10-K's own
+  return scoreInputs(g, header, { kind: 'quarter', monthsLen: 3, quarter: `${year} Q${q}` }, { sharesDiluted: q === 4 ? first(cur.fy, C.sharesDiluted) : undefined });
 }
 

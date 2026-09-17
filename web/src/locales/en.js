@@ -153,6 +153,8 @@ export default {
   'sc.gradeFull': 'met',
   'sc.gradeHalf': 'close',
   'sc.gradeZero': 'missed',
+  'sc.basisQuarter': 'One quarter, flows annualised ×4, balances averaged with the previous quarter end (as in the table); cash flow adequacy over this quarter instead of five years',
+  'sc.basisPartial': 'The previous filing is not saved, so this filing is scored alone: {note}',
   'sc.basisFull': 'Full-year figures',
   'sc.basisYtd': 'Year-to-date {months} months, flows annualised ×{factor}; cash flow adequacy over the same period instead of five years',
   'sc.coverage': 'Computable items {n}/100 points',
@@ -163,7 +165,7 @@ export default {
   'sc.benchmark': 'Benchmark',
   'sc.result': 'Result',
   'sc.points': 'Points',
-  'sc.footnote': 'Full points when the benchmark is met, half within 20% of it, none otherwise; items that cannot be computed are left out and the total is rescaled to 100. The score is computed from this one filing (year-to-date figures annualised), so it can differ slightly from the "quarter ×4" or "trailing four quarters" figures in the table above.',
+  'sc.footnote': 'Full points when the benchmark is met, half within 20% of it, none otherwise; items that cannot be computed are left out and the total is rescaled to 100. The score uses the figures of this filing\'s "quarter ×4" column in the table above (Q4 = 10-K full year − first three quarters); with "trailing four quarters" selected the table\'s flow ratios differ.',
   // ScoreBadge
   'sb.none': 'Latest filing not downloaded yet (the background crawl will add it)',
   'sb.noneStatic': 'No filing of this company in this data set',

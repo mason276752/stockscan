@@ -357,7 +357,7 @@ export function ratios(g) {
 }
 
 // Cash-flow adequacy inputs over the trailing `span` points ending at index i.
-function adequacyOver(points, i, span, minPeriods) {
+export function adequacyOver(points, i, span, minPeriods) {
   let ocf = 0;
   let out = 0;
   let periods = 0;
@@ -373,6 +373,23 @@ function adequacyOver(points, i, span, minPeriods) {
     periods++;
   }
   return periods >= minPeriods ? { ocf, out, periods } : null;
+}
+
+// Inputs for ratios() at points[i] the way the quarter view computes a
+// column: the quarter's flows ×4, balances averaged with the quarter before.
+// The filing score uses the same so its numbers match the table.
+export function quarterInputs(points, i, adequacy) {
+  const flowAt = (key) => first(points[i]?.flows, C[key]);
+  return {
+    flow: flowAt,
+    flowA: (key) => {
+      const x = flowAt(key);
+      return x == null ? null : x * 4;
+    },
+    bal: (key) => first(points[i]?.balances, C[key]),
+    balPrev: (key) => first(points[i - 1]?.balances, C[key]),
+    adequacy,
+  };
 }
 
 export async function buildIndicators(load, company, { year, period, n = 20, basis = 'x4', mode = 'quarter' }) {
@@ -448,18 +465,8 @@ export async function buildIndicators(load, company, { year, period, n = 20, bas
     }
   } else {
     for (let i = 1; i < points.length; i++) {
-      const flowA = (key) => {
-        if (basis === 'ttm') return i < 3 ? null : sumFlows(i, 4, key);
-        const x = flowAt(i, key);
-        return x == null ? null : x * 4;
-      };
-      const g = {
-        flow: (key) => flowAt(i, key),
-        flowA,
-        bal: (key) => balAt(i, key),
-        balPrev: (key) => balAt(i - 1, key),
-        adequacy: () => adequacyOver(points, i, 20, 4),
-      };
+      const g = quarterInputs(points, i, () => adequacyOver(points, i, 20, 4));
+      if (basis === 'ttm') g.flowA = (key) => (i < 3 ? null : sumFlows(i, 4, key));
       const p = points[i];
       // same-quarter view: the first four points only feed opening balances / trailing sums
       if (sameMode && (p.period !== `Q${endQ}` || i < points.length - n * 4)) continue;

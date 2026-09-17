@@ -12,8 +12,14 @@ const unitOf = (it) => (it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${tr(
 const fmtVal = (it) => (it.value == null ? '—' : `${f1.format(it.value)}${unitOf(it)}`);
 const fmtBench = (it) => `${OP[it.benchmark.op]} ${it.benchmark.value}${unitOf(it)}`;
 const gradeText = (g) => t(g == null ? 'sc.gradeNone' : g === 1 ? 'sc.gradeFull' : g === 0.5 ? 'sc.gradeHalf' : 'sc.gradeZero');
-// the basis line from the months the flows cover (the stored note is Chinese only)
-const basisNote = computed(() => (props.score.basis.monthsLen === 12 ? t('sc.basisFull') : t('sc.basisYtd', { months: props.score.basis.monthsLen, factor: (12 / props.score.basis.monthsLen).toFixed(2) })));
+// the basis line from what the flows cover (the stored note is Chinese only):
+// one quarter ×4 like the table, a full year, or - a quarterly filing scored
+// alone because a neighbouring filing is not saved - its year-to-date column
+const basisNote = computed(() => {
+  const b = props.score.basis;
+  const note = b.kind === 'quarter' ? t('sc.basisQuarter') : b.monthsLen === 12 ? t('sc.basisFull') : t('sc.basisYtd', { months: b.monthsLen, factor: (12 / b.monthsLen).toFixed(2) });
+  return b.partial ? t('sc.basisPartial', { note }) : note;
+});
 const byCat = computed(() => props.score.categories.map((c) => ({ ...c, items: props.score.items.filter((i) => i.category === c.name) })));
 </script>
 

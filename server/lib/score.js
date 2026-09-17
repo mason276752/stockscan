@@ -4,19 +4,80 @@
 
 import { store } from './store.js';
 import { reclassify } from './statementTypes.js';
-import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling } from './scoreModel.js';
+import { fiscalLabel } from './filings.js';
+import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.js';
 
-export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling };
+export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf };
 
-// Score of a saved filing, cached in SQLite by accession.
-export function scoreAccession(accession) {
+// A company's saved filings around `reportDate` as scoreFilingOf wants them
+// (the fiscal labels come from the saved headers, relabelled from the
+// company's fiscal year end when its submissions record is on disk - as the
+// static build does), from the store alone so scoring never waits on SEC.
+// Scoring one filing needs at most the year's 10-Qs and the quarter before.
+const WINDOW_DAYS = 480;
+function savedCompany(cik, reportDate) {
+  const fye = store.getDoc(`companies/${String(cik).padStart(10, '0')}.json`)?.value?.fiscalYearEnd || null;
+  const from = new Date(new Date(reportDate).getTime() - WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+  const filings = [];
+  for (const r of store.filingIndex(cik)) {
+    if (!r.report_date || r.report_date < from || r.report_date > reportDate) continue;
+    const h = store.filingHeader(r.accession);
+    if (!h) continue;
+    const form = h.form || r.form || '';
+    const end = h.periodEnd || r.report_date;
+    const label = fye ? fiscalLabel(form, end, fye) : { fiscalYear: h.fiscalYear ? Number(h.fiscalYear) : null, fiscalPeriod: h.fiscalPeriod || null };
+    filings.push({ accession: r.accession, cik: Number(cik), form, filingDate: h.filingDate || null, reportDate: end, ...label });
+  }
+  filings.sort((a, b) => (a.filingDate < b.filingDate ? 1 : a.filingDate > b.filingDate ? -1 : 0));
+  return { cik: Number(cik), filings };
+}
+
+const loadSaved = (f) => {
+  const data = store.getFiling(f.accession);
+  if (!data) throw new Error(`${f.accession} not saved`);
+  return reclassify(data);
+};
+
+// Score of a saved filing, cached by accession. A score that had to do
+// without a neighbouring filing (`basis.partial`: typically the oldest one
+// saved of a company) is cached like any other - the screener still wants
+// it as the year-earlier comparison - and recomputed when the crawler asks
+// (`redoPartial`) after saving more of the company's filings.
+export async function scoreAccession(accession, { redoPartial = false } = {}) {
   const hit = store.getScore(accession, SCORE_VERSION);
-  if (hit) return hit;
-  const data = store.getFiling(accession);
-  if (!data) return null;
-  const s = scoreFiling(reclassify(data));
-  if (s) store.putScore(accession, data.filing.cik, data.filing.periodEnd, SCORE_VERSION, s);
+  if (hit && !(redoPartial && hit.basis?.partial)) return hit;
+  const h = store.filingHeader(accession);
+  if (!h) return null;
+  const company = savedCompany(h.cik, h.periodEnd);
+  const filing = company.filings.find((f) => f.accession === accession);
+  const s = filing ? await scoreFilingOf(loadSaved, company, filing) : scoreFiling(loadSaved({ accession }));
+  if (s) store.putScore(accession, h.cik, h.periodEnd, SCORE_VERSION, s);
   return s;
+}
+
+// Score every saved filing without a current score (a new version, or
+// filings saved before scoring existed), `budgetMs` at a time between yields
+// so a server stays responsive.
+export async function scoreUnscored({ budgetMs = 50, log = () => {} } = {}) {
+  const todo = store.unscoredAccessions(SCORE_VERSION);
+  if (!todo.length) return 0;
+  log(`scoring ${todo.length} saved filings`);
+  let t0 = Date.now();
+  let partial = 0;
+  for (const acc of todo) {
+    try {
+      const s = await scoreAccession(acc);
+      if (s?.basis.partial) partial++;
+    } catch (err) {
+      console.warn(`score ${acc}: ${err.message}`);
+    }
+    if (Date.now() - t0 > budgetMs) {
+      await new Promise((r) => setTimeout(r, 20));
+      t0 = Date.now();
+    }
+  }
+  log(`scoring done${partial ? ` (${partial} scored alone: a neighbouring filing is not saved)` : ''}`);
+  return todo.length;
 }
 
 // Latest score of every company (for the screener), each with the previous
@@ -61,7 +122,7 @@ export function latestScores() {
 }
 
 // Latest saved filing of a company and its score (null when nothing is saved yet).
-export function latestScore(cik) {
+export async function latestScore(cik) {
   const rows = store.filingIndex(cik).filter((r) => r.report_date && !/\/A$/i.test(r.form || ''));
   if (!rows.length) return null;
   rows.sort((a, b) => (a.report_date < b.report_date ? 1 : a.report_date > b.report_date ? -1 : 0));

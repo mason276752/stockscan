@@ -146,6 +146,12 @@ jobs:
             echo "pushed $(git rev-parse --short HEAD)"
           fi
 
+      # scores the store lacks for the current SCORE_VERSION (a bump in the
+      # commit being built): every build, so the site never goes out without
+      # scores; a scheduled run has already pushed them with the data ref
+      - name: Score filings the store has not scored yet
+        run: npm run rescore
+
       # the heavy parts run in the committed Linux binary of tools/stockscan-static
       # (bin/stockscan-static-x86_64-linux, rebuilt with build-linux.sh - nothing
       # is compiled here); --link: the store goes into the site as hard links
