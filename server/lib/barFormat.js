@@ -10,7 +10,8 @@
 //
 // A split at the source shifts every earlier bar. The saved files are not
 // rewritten: meta.adjust = [{ date, price, volume }] and the bars before
-// `date` are multiplied by the factors when read (`adjusted`).
+// `date` are multiplied by the factors when read (`adjusted`); volume null
+// means 1 / price.
 
 const DAY = 86_400_000;
 export const TOL = 0.005; // closes within half a percent are the same bar
@@ -73,7 +74,7 @@ export function adjusted(days, adjust) {
     for (const a of adjust) {
       if (b.date < a.date) {
         price *= a.price;
-        volume *= a.volume;
+        volume *= a.volume ?? 1 / a.price;
       }
     }
     return price === 1 ? b : { date: b.date, open: round(b.open * price), high: round(b.high * price), low: round(b.low * price), close: round(b.close * price), volume: Math.round(b.volume * volume) };
@@ -86,7 +87,7 @@ export function unadjust(b, adjust) {
   for (const a of adjust) {
     if (b.date < a.date) {
       price /= a.price;
-      volume /= a.volume;
+      volume /= a.volume ?? 1 / a.price;
     }
   }
   return price === 1 ? b : { date: b.date, open: round(b.open * price), high: round(b.high * price), low: round(b.low * price), close: round(b.close * price), volume: Math.round(b.volume * volume) };
@@ -127,11 +128,15 @@ export function diffSeries(view, incoming, unsettled = null) {
   const ratio = changed[Math.floor(changed.length / 2)].ratio;
   const oneFactor = changed.every((c) => same(c.ratio, ratio));
   if (prefix && oneFactor && !same(ratio, 1) && changed.length >= 2) {
+    // a split scales volume by the inverse of the price factor: recorded as
+    // null (1 / price, computed exactly when applied) unless the source's
+    // volumes say otherwise (some do not restate them)
     const volumes = changed.map((c) => c.volume).filter((x) => x);
-    const volume = volumes.length ? volumes[Math.floor(volumes.length / 2)] : 1 / ratio;
+    const vm = volumes.length ? volumes[Math.floor(volumes.length / 2)] : 1 / ratio;
+    const volume = Math.abs(vm * ratio - 1) < 0.01 ? null : round(vm);
     // the first bar of the new basis: the first unchanged one, else the day after the last changed one
     const date = firstUnchanged?.date || new Date(Date.parse(changed.at(-1).date) + DAY).toISOString().slice(0, 10);
-    return { split: { date, price: round(ratio), volume: round(volume) }, dates };
+    return { split: { date, price: round(ratio), volume }, dates };
   }
   return { split: null, dates: [...dates, ...changed.map((c) => c.date)] };
 }
