@@ -20,13 +20,21 @@ on:
   push:
     branches: [main]
   schedule:
-    # cron is UTC. EDGAR accepts filings 06:00–22:00 US Eastern; most 10-Q /
-    # 10-K arrive right after the market close (16:00–17:30 ET) and in the
-    # morning before the open. Times below straddle daylight-saving time.
+    # cron is UTC. New York is UTC-4 in summer (EDT, second Sunday of March to
+    # the first Sunday of November) and UTC-5 in winter (EST), so each time
+    # below is written for one clock and drifts an hour under the other.
+    #
+    # Filings - EDGAR accepts them 06:00-22:00 ET; most 10-Q / 10-K arrive
+    # right after the 16:00 close and in the morning before the open:
     - cron: '30 12 * * 1-5' # 08:30 EDT / 07:30 EST - the morning's filings
-    - cron: '45 21 * * 1-5' # 17:45 EDT / 16:45 EST - right after the close
-    - cron: '45 23 * * 1-5' # 19:45 EDT / 18:45 EST - the late-afternoon batch
-    - cron: '30 2 * * 2-6'  # 22:30 EDT / 21:30 EST - the end of EDGAR's day (UTC next day)
+    - cron: '45 21 * * 1-5' # 17:45 EDT / 16:45 EST - right after the 16:00 close (and the day's bars: the 16:00 bar is final)
+    - cron: '30 2 * * 2-6'  # 22:30 EDT / 21:30 EST - the end of EDGAR's day (UTC: the next day)
+    #
+    # Daily bars - from December the US session runs 23 hours (20:00 ET to
+    # 19:00 ET the next day, closed 19:00-20:00). The day's bar is final only
+    # in that hour, so a run must land in it whichever clock is in force:
+    - cron: '30 23 * * 1-5' # 19:30 EDT - in the pause (18:30 EST: too early, the next one covers winter)
+    - cron: '30 0 * * 2-6'  # 19:30 EST - in the pause (20:30 EDT: the next session has opened; yesterday's bar is final anyway)
   workflow_dispatch:
 
 permissions:

@@ -64,7 +64,9 @@ npm run build:static        # -> web/dist-static/（約 210 MB：網頁 + data/s
 **GitHub Actions 自動部署**（[.github/workflows/pages.yml](.github/workflows/pages.yml)）：push 到 `main` 就 build 並發佈到 GitHub Pages。要先做兩件事：
 repo 的 Settings → Pages → Source 選 **GitHub Actions**；`SEC_USER_AGENT`（`名字 email`）用 Settings → Secrets 的同名 secret，沒設就用 workflow 檔裡寫的預設值。
 Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報、申報清單、以及 SEC 抓不到時的代號表與產業宇宙，直接用 repo 裡的 `data/store`。代號表或產業宇宙完全拿不到時 build 會失敗（exit 1），不會把搜尋不到東西的網站部署出去。
-除了 push，也**定時**在財報最常出現的時段跑（美東 08:30、17:45、19:45、22:30，週一到週五）：先 `npm run fetch:new` 從 EDGAR 每日索引把最近幾天新的 10-K / 10-Q 抓下來、解析、評分，
+除了 push，也**定時**跑（cron 是 UTC，美東夏令 UTC-4、冬令 UTC-5，每個時間以其中一種寫、另一種會差一小時）：財報在最常出現的時段——美東 08:30、17:45、22:30（夏令）；
+日線則要在當天的 K 棒收完之後——16:00 收盤那根在 17:45 那次就有了，但 12 月起美股改成 23 小時交易（美東 20:00 到隔天 19:00，19:00–20:00 休市），整天的 K 棒只在那一小時是定案的，所以另外排 23:30 UTC（夏令 19:30）和 00:30 UTC（冬令 19:30）各一次，兩種時制總有一次落在休市那小時。
+每次都先 `npm run fetch:new` 從 EDGAR 每日索引把最近幾天新的 10-K / 10-Q 抓下來、解析、評分，
 commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workflow），再用新資料重建網站。`fetch:new` 在本機也能跑，等於爬蟲「監看新申報」那一步跑一次就結束。
 日線則不碰 `main`：repo 裡只有已結束年份的 `data/bars/**/<年>.zst`，每次 build 前 `npm run fetch:bars` 從 TradingView 把今年的 `head.zst` 補到最新（8 條並發約 12 分鐘；`actions/cache` 在兩次 run 之間留住 head，之後每次只接最後幾根），
 放進站台但不 commit。TradingView 抓不到（例如 runner 的 IP 被擋）也不會讓 build 失敗，只是自製 ETF 頁的日線停在去年底。

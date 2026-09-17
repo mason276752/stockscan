@@ -3,8 +3,10 @@
 // only the bars since the last one - a run after the close is one short
 // request per symbol, and the year files on disk change by a few bytes.
 //
-// One run per trading day, half an hour after the New York close (and at
-// startup if the last run predates the last close). Symbols TradingView
+// One run per trading day, at 19:30 New York - in the hour the 23-hour US
+// session (from December 2026: 20:00 ET to 19:00 ET the next day) is closed,
+// when the day's bar is certainly final - and at startup if the last run
+// predates that. Symbols TradingView
 // does not know are retried a week later. STOCKSCAN_BARS_CRAWL=0 turns it
 // off; it also needs TradingView (TV_ENABLED).
 
@@ -14,7 +16,7 @@ import { lastClose, syncTvBars } from './bars.js';
 import { tvStatus } from './tvws.js';
 
 const LANES = Math.max(1, Number(process.env.STOCKSCAN_BARS_CRAWL_PARALLEL) || 6); // TradingView allows 8 sessions at once; leave room for the user
-const AFTER_CLOSE = 30 * 60 * 1000; // wait for the day's bar to settle
+const AFTER_CLOSE = 3.5 * 3600 * 1000; // 16:00 close + 3.5 h = 19:30 ET, inside the 19:00-20:00 pause of the 23-hour session
 const POLL = 5 * 60 * 1000; // how often the clock is checked
 const MAX_FAILS = 3;
 const RETRY_FAILED = 7 * 24 * 3600 * 1000;
