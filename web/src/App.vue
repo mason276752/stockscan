@@ -7,6 +7,7 @@ import StatementTable from './components/StatementTable.vue';
 import IndicatorsTable from './components/IndicatorsTable.vue';
 import ValuationPanel from './components/ValuationPanel.vue';
 import TvEmbedChart from './components/TvEmbedChart.vue';
+import { simplifyStatement } from '../../shared/simplify.js';
 import BrowsePage from './components/BrowsePage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
 import ScreenerPage from './components/ScreenerPage.vue';
@@ -80,6 +81,11 @@ const tab = ref('balance_sheet');
 const divisor = ref(1e6);
 const applyNegation = ref(false);
 const showConcept = ref(false);
+// simple = the four primary statements show only their total columns; member
+// breakdowns (equity components, share classes, product lines) are hidden and
+// rolled up where the filer tagged a line only per member
+const simple = ref(localStorage.getItem('stockscan.simple') !== '0');
+watch(simple, (v) => localStorage.setItem('stockscan.simple', v ? '1' : '0'));
 const lang = ref('zh');
 const view = ref('current'); // current = only the filing's own period | all = every column in the filing
 
@@ -225,7 +231,8 @@ const otherStatements = computed(() => {
 const current = computed(() => {
   if (!data.value) return null;
   if (tab.value.startsWith('role:')) return otherStatements.value.find((s) => s.role === tab.value.slice(5)) || null;
-  return data.value.statements[tab.value];
+  const stmt = data.value.statements[tab.value];
+  return simple.value ? simplifyStatement(stmt) : stmt;
 });
 
 function openBrowse(params) {
@@ -596,6 +603,7 @@ onMounted(() => {
                   <option :value="1e9">十億</option>
                 </select>
               </label>
+              <label><input v-model="simple" type="checkbox" title="四大報表只留合計欄，隱藏股本組成、股別、產品線等分欄；只標在分欄的數字加總計入合計" /> 簡化（只留合計欄）</label>
               <label><input v-model="applyNegation" type="checkbox" /> 依報表顯示反號</label>
               <label><input v-model="showConcept" type="checkbox" /> 顯示 XBRL 概念名稱</label>
             </div>

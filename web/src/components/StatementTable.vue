@@ -55,6 +55,7 @@ const columns = computed(() =>
       ...c,
       periodLabel: c.period.instant ? c.period.instant : `${c.period.start} ~ ${c.period.end}`,
       derivedQ4: !!c.derived,
+      synthetic: !!c.synthetic,
       periodKind: c.merged ? `期初 ${c.opening || '—'} · 期末 ${c.closing || '—'}` : c.period.instant ? '時點' : '期間',
       dimLabel: dims.length ? dims.map(humanize).join(' / ') : hasAxes.value ? '合計' : '',
     };
@@ -85,6 +86,12 @@ function shown(item, cell) {
   if (cell?.approx) d = { ...d, text: `≈${d.text}` };
   return d;
 }
+
+// simplified view: which member columns a rolled-up total came from
+function rolledTitle(cell) {
+  return cell?.rolled ? `分欄加總：${cell.rolled.join(' + ')}` : null;
+}
+const hiddenLabel = computed(() => (props.statement.hiddenGroups || []).map((d) => Object.values(d).map(humanize).join(' / ')).join('、'));
 
 const recUnit = computed(() => {
   const first = Object.values(props.statement.reconciliation || {})[0];
@@ -121,6 +128,7 @@ function rowClass(item) {
             <div v-if="c.label" class="qlabel">
               {{ c.label }}<span v-if="c.derivedQ4" class="badge" :title="c.label === 'Q4' ? 'FY − Q1 − Q2 − Q3' : '年初至今 − 上一季年初至今'">推算</span>
             </div>
+            <div v-if="c.synthetic" class="badge" title="申報書這一期只有分欄，沒有合計欄：全部數字為分欄加總">分欄加總</div>
             <div :class="{ small: c.label }">{{ c.periodLabel }}</div>
             <div class="muted kind">{{ c.periodKind }}</div>
           </th>
@@ -136,8 +144,8 @@ function rowClass(item) {
             <div v-if="showConcept" class="mono muted">{{ item.concept }}<span v-if="item.negated"> · negated</span></div>
           </td>
           <td class="unit muted">{{ item.abstract ? '' : rowUnit(item) }}</td>
-          <td v-for="c in columns" :key="c.id" class="num" :class="{ neg: shown(item, item.values[c.id]).neg, derived: c.derivedQ4 }">
-            {{ shown(item, item.values[c.id]).text }}
+          <td v-for="c in columns" :key="c.id" class="num" :class="{ neg: shown(item, item.values[c.id]).neg, derived: c.derivedQ4 }" :title="rolledTitle(item.values[c.id])">
+            {{ shown(item, item.values[c.id]).text }}<span v-if="item.values[c.id]?.rolled" class="sigma">Σ</span>
           </td>
         </tr>
       </tbody>
@@ -158,6 +166,9 @@ function rowClass(item) {
         </tr>
       </tfoot>
     </table>
+    <p v-if="statement.simplified && hiddenLabel" class="muted small simplified-note">
+      簡化檢視：已隱藏分欄（{{ hiddenLabel }}）。合計欄空白而分欄有數字的列，以分欄加總填入並標 <span class="sigma">Σ</span>（滑鼠移上去看加了哪些欄）；取消「簡化」可看完整分欄。
+    </p>
     <Teleport to="body">
       <div v-if="tip" class="tip" :style="tipStyle">
         <div class="tip-en">{{ tip.item.label || tip.item.concept }}</div>
@@ -277,6 +288,16 @@ thead th .small {
 }
 td.derived {
   background: var(--accent-soft) !important;
+}
+.sigma {
+  font-size: 10px;
+  color: var(--accent);
+  margin-left: 3px;
+  vertical-align: super;
+}
+.simplified-note {
+  margin: 8px 0 0;
+  font-size: 12px;
 }
 td.label,
 th.label {
