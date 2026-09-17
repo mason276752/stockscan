@@ -131,7 +131,7 @@ const api = {
       shares: async () => ({ byAccn: {}, list: [] }),
       prices: async (ticker) => {
         const b = await api.bars(ticker);
-        return { symbol: b.symbol, source: b.source, currency: b.currency, days: b.days.map((d) => ({ date: d.date, close: d.close })), splits: null, fetchedAt: b.fetchedAt };
+        return { symbol: b.symbol, source: b.source, currency: b.currency, days: b.days.map((d) => ({ date: d.date, close: d.close })), splits: null, fetchedAt: b.fetchedAt, headMissing: b.headMissing };
       },
       fx: async () => null,
     });
@@ -243,7 +243,8 @@ const api = {
     ]);
     const raw = years.flatMap(decodeBars).concat(head ? decodeBars(head) : []);
     if (!raw.length) throw new Error(t('static.noBars', { s }));
-    return { symbol: s, source: meta.source || 'TradingView', currency: meta.currency || 'USD', resolved: meta.resolved || null, fetchedAt: head?.fetchedAt || null, days: adjusted(raw, meta.adjust || []) };
+    // headMissing: the build shipped no head.zst for it - the series stops at last year's end
+    return { symbol: s, source: meta.source || 'TradingView', currency: meta.currency || 'USD', resolved: meta.resolved || null, fetchedAt: head?.fetchedAt || null, headMissing: !head, days: adjusted(raw, meta.adjust || []) };
   },
   // the custom-ETF index, computed here from those bars
   async basket(body) {

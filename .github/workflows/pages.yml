@@ -105,17 +105,20 @@ jobs:
       # run's cache, topped up from TradingView on scheduled / manual runs
       # (one request per symbol, ~12 min the first time after a close, a
       # minute when they are already fresh), saved for the next run. A push
-      # only rebuilds with the bars the last such run left in the cache. A
-      # cache key is immutable, so it carries the run id; restore-keys picks
-      # the newest previous one.
+      # only rebuilds with the bars the last such run left in the cache -
+      # unless there is no such cache (evicted, or the earlier runs failed
+      # before saving one): then it fetches too, or the site would go out
+      # with last year's prices. A cache key is immutable, so it carries the
+      # run id; restore-keys picks the newest previous one.
       - name: Restore this year's bars
+        id: bars
         uses: actions/cache@v4
         with:
           path: data-repo/data/bars/**/head.zst
           key: bars-head-${{ github.run_id }}
           restore-keys: bars-head-
       - name: Fetch this year's bars from TradingView
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' || steps.bars.outputs.cache-matched-key == ''
         run: npm run fetch:bars
         continue-on-error: true
         env:

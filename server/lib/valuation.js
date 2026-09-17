@@ -352,7 +352,7 @@ export async function buildValuation(company, { year, period, n = 20, adr = 1 },
     // fxMissing: another reporting currency but no rate - the per-share figures are still in it
     currency: { reporting, quote: quoteCurrency, fxNow: reporting === quoteCurrency ? 1 : fxNow, fxSource: fxHist ? `${reporting}${quoteCurrency}=X` : null, fxMissing: reporting !== quoteCurrency && !fxHist, adr },
     nowPerShare: nowPs,
-    priceHistory: { source: hist.source || null, from: hist.days[0]?.date || null, to: hist.last?.date || null, splits: hist.splits, splitsInferred: hist.splitsInferred, error: hist.error || null, eventsError: hist.eventsError || null, fetchedAt: hist.fetchedAt || null },
+    priceHistory: { source: hist.source || null, from: hist.days[0]?.date || null, to: hist.last?.date || null, splits: hist.splits, splitsInferred: hist.splitsInferred, headMissing: !!hist.headMissing, error: hist.error || null, eventsError: hist.eventsError || null, fetchedAt: hist.fetchedAt || null },
     shares: latest ? { value: latest.shares, source: latest.sharesSource, asOf: latest.periodEnd } : null,
     columns,
     now,

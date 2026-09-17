@@ -207,6 +207,7 @@ export default {
   'vp.splitsError': '，分割資料抓不到（{err}），舊價格未還原',
   'vp.splitsInferred': '，已還原分割（{list}；純前端版沒有分割事件，由各期財報的股數跳動推得）',
   'vp.splitsNoneInferred': '（純前端版沒有分割事件：各期財報的股數沒有整倍數跳動，視為期間內無分割）',
+  'vp.headMissing': '；這次網站建置沒帶今年的日線，價格只到 {to}——下一次排程重建會補上',
   'vp.fxMissing': '財報幣別 {reporting} 而股價為 {quote}，純前端版沒有匯率資料：下方每股數字與倍數未換算，僅供參考',
   'vp.basis': '股價基準',
   'vp.basisTitle': '估值用哪一天的股價：所選申報的期末收盤（與各期表一致）、申報日收盤（看到財報時的價格）、或現在的價格',
