@@ -95,6 +95,20 @@ export const api = {
   indicatorsUrl: () => null,
   valuation: () => unavailable('static.whatValuation'),
   valuationUrl: () => null,
+  // what the idle prefetcher (prefetch.js) warms after start-up: first the
+  // indexes every page needs (search, company records, the statement
+  // documentation - that one also loads the zstd decoder), then the big
+  // ones behind the screener and the browse pages
+  warmup: () => [
+    ['idx:tickers', () => data.tickers(), 1],
+    ['idx:scores', () => data.scoresMin(), 1],
+    ['idx:companies', () => data.companies(), 1],
+    ['idx:documentation', () => data.documentation(), 1],
+    ['idx:tvsymbols', () => data.tvSymbols(), 0],
+    ['idx:universe', () => data.universe(), 0],
+    ['idx:etfs', () => data.etfs(), 0],
+    ['idx:screen', () => data.screenRowsIndex(), 0],
+  ],
   async status() {
     const m = await data.meta();
     return { static: true, meta: m, store: { filings: m.filings, scores: m.scores }, crawler: { enabled: false } };

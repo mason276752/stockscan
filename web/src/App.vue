@@ -14,7 +14,11 @@ import ScreenerPage from './components/ScreenerPage.vue';
 import BasketPage from './components/BasketPage.vue';
 import ScoreCard from './components/ScoreCard.vue';
 import Note from './components/Note.vue';
+import Loading from './components/Loading.vue';
+import { busy } from './busy';
 import { isPhone } from './viewport';
+import { drop, prefetch, setBusy } from './prefetch';
+import { memoize } from './memo';
 import { isWatched, toggleWatch, watchlist } from './watchlist';
 import { baskets } from './baskets';
 import { bigMoney, dateLocale, isZh, locale, LOCALES, pick, t } from './i18n';
@@ -48,6 +52,17 @@ const crawlText = computed(() => {
 const page = ref('report');
 const browseParams = ref({});
 const screenParams = ref({}); // the screener's filters, mirrored in the URL
+
+// the per-company requests, memoized so an idle prefetch (see planPrefetch)
+// and the click that follows share one request
+const cached = {
+  filing: memoize((cik, accession, view) => api.filing(cik, accession, view), 24),
+  quarters: memoize((id, year) => api.quarters(id, year), 8),
+  indicators: memoize((id, p) => api.indicators(id, p), 24),
+  valuation: memoize((id, p) => api.valuation(id, p), 24),
+  score: memoize((cik, accession) => api.score(cik, accession), 60),
+  tvSymbol: memoize((ticker) => api.tvSymbol(ticker), 60),
+};
 
 const company = ref(null);
 const filing = ref(null); // the filing row picked from the list
@@ -123,7 +138,7 @@ async function loadIndicators() {
   loadingIndicators.value = true;
   indicatorsError.value = null;
   try {
-    indicators.value = await api.indicators(String(company.value.cik), p);
+    indicators.value = await cached.indicators(String(company.value.cik), p);
   } catch (e) {
     indicatorsError.value = e.message;
     indicators.value = null;
@@ -150,7 +165,7 @@ async function loadValuation() {
   loadingValuation.value = true;
   valuationError.value = null;
   try {
-    valuation.value = await api.valuation(String(company.value.cik), p);
+    valuation.value = await cached.valuation(String(company.value.cik), p);
   } catch (e) {
     valuationError.value = e.message;
     valuation.value = null;
@@ -186,7 +201,7 @@ watch(
     if (tvSymbol.value?.ticker === ticker) return;
     tvSymbol.value = null;
     try {
-      const r = await api.tvSymbol(ticker);
+      const r = await cached.tvSymbol(ticker);
       if (company.value === c) tvSymbol.value = r;
     } catch {
       if (company.value === c) tvSymbol.value = { ticker, symbol: ticker.replace(/-/g, '.'), known: false };
@@ -216,7 +231,7 @@ watch(
     if (filingScore.value?.accession === f.accession) return;
     filingScore.value = null;
     try {
-      filingScore.value = await api.score(f.cik, f.accession);
+      filingScore.value = await cached.score(f.cik, f.accession);
     } catch {
       filingScore.value = null;
     }
@@ -273,7 +288,7 @@ async function loadFiling(f) {
   loadingFiling.value = true;
   filing.value = f;
   try {
-    data.value = await api.filing(f.cik, f.accession, view.value);
+    data.value = await cached.filing(f.cik, f.accession, view.value);
     const valid = tab.value.startsWith('role:')
       ? data.value.allStatements.some((s) => `role:${s.role}` === tab.value)
       : tab.value === 'indicators' || tab.value === 'valuation' || tab.value === 'chart' || !!data.value.statements[tab.value];
@@ -292,7 +307,7 @@ async function loadQuarters(year) {
   loadingFiling.value = true;
   filing.value = { accession: `q4-${year}`, form: 'Q4*', fiscalYear: year, fiscalPeriod: 'Q4', quartersYear: year };
   try {
-    data.value = await api.quarters(String(company.value.cik), year);
+    data.value = await cached.quarters(String(company.value.cik), year);
     if (!data.value.statements[tab.value] && !tab.value.startsWith('role:') && tab.value !== 'indicators' && tab.value !== 'valuation' && tab.value !== 'chart') tab.value = 'income_statement';
     if (tab.value.startsWith('role:') && !data.value.allStatements.some((s) => `role:${s.role}` === tab.value)) tab.value = 'income_statement';
   } catch (e) {
@@ -302,6 +317,38 @@ async function loadQuarters(year) {
     loadingFiling.value = false;
   }
 }
+
+// ---- idle prefetch ----
+// Once a filing is on screen, what a click is likely to ask for next is
+// fetched in the background, in this order: the filing's score (indicators
+// tab), the indicators with the current settings, the TradingView symbol
+// (chart tab), the next three older filings in the picker; on the server
+// build also the valuation, but only after an 8 s dwell since the server
+// has to fetch prices for it. The static build's indexes are warmed at
+// start-up (api.warmup). All of it waits while a real load is in flight.
+setBusy(() => loadingCompany.value || loadingFiling.value || loadingIndicators.value || loadingValuation.value);
+function planPrefetch() {
+  drop('company');
+  const c = company.value;
+  const f = filing.value;
+  if (!c || !f || !data.value) return;
+  const cik = String(c.cik);
+  const tag = 'company';
+  if (!f.quartersYear) prefetch(`score:${f.accession}`, () => cached.score(f.cik, f.accession), { tag, priority: 2 });
+  const ip = indicatorsParams.value;
+  if (ip) prefetch(`ind:${cik}:${JSON.stringify(ip)}`, () => cached.indicators(cik, ip), { tag, priority: 2 });
+  if (c.tickers?.[0]) prefetch(`tv:${c.tickers[0]}`, () => cached.tvSymbol(c.tickers[0]), { tag, priority: 2 });
+  const i = c.filings.findIndex((x) => x.accession === f.accession);
+  for (const nf of c.filings.slice(Math.max(i, 0) + 1, Math.max(i, 0) + 4)) prefetch(`filing:${nf.accession}:${view.value}`, () => cached.filing(nf.cik, nf.accession, view.value), { tag, priority: 1 });
+  const vp = valuationParams.value;
+  if (vp && !isStatic) prefetch(`val:${cik}:${JSON.stringify(vp)}`, () => cached.valuation(cik, vp), { tag, priority: 1, delay: 8000 });
+}
+watch([data, indicatorsParams], () => {
+  if (!loadingFiling.value) planPrefetch();
+});
+watch(company, (c, prev) => {
+  if (c !== prev) drop('company');
+});
 
 const jsonUrl = computed(() => {
   if (!data.value) return '#';
@@ -396,6 +443,7 @@ function applyUrl() {
 }
 
 onMounted(() => {
+  for (const [key, task, priority] of api.warmup()) prefetch(key, task, { tag: 'boot', priority });
   pollStatus();
   setInterval(pollStatus, 15_000);
   applyUrl();
@@ -409,6 +457,7 @@ onMounted(() => {
 
 <template>
   <div class="app">
+    <div v-if="busy.count" class="topbar" aria-hidden="true"></div>
     <header>
       <h1 class="logo">stockscan <span class="muted">{{ t('header.subtitle') }}</span></h1>
       <nav class="nav">
@@ -432,7 +481,7 @@ onMounted(() => {
 
     <template v-else>
     <p v-if="error" class="error">{{ error }}</p>
-    <p v-if="loadingCompany" class="muted">{{ t('loading.company') }}</p>
+    <Loading v-if="loadingCompany" :text="t('loading.company')" />
 
     <div v-if="company" class="layout">
       <aside class="panel company">
@@ -456,7 +505,7 @@ onMounted(() => {
         <h3 class="pick-head" :class="{ fold: isPhone }" @click="isPhone && (pickerOpen = !pickerOpen)">
           <span><span v-if="isPhone" class="caret">{{ pickerOpen ? '▾' : '▸' }}</span> {{ t('filings.pick') }}<span v-if="isPhone && !pickerOpen && filing" class="picked">{{ filing.form }} {{ filing.fiscalYear }} {{ filing.fiscalPeriod }}</span></span>
           <button v-if="!isStatic" class="refresh" :disabled="refreshing" :title="t('filings.refreshTitle')" @click.stop="refreshFilings">
-            {{ refreshing ? t('filings.refreshing') : t('filings.refresh') }}
+            <Loading v-if="refreshing" inline small :text="t('filings.refreshing')" /><template v-else>{{ t('filings.refresh') }}</template>
           </button>
         </h3>
         <div v-show="!isPhone || pickerOpen" class="pick-body">
@@ -468,7 +517,7 @@ onMounted(() => {
       </aside>
 
       <main>
-        <p v-if="loadingFiling" class="muted">{{ t('loading.filing', { form: filing?.form, year: filing?.fiscalYear, period: filing?.fiscalPeriod }) }}</p>
+        <Loading v-if="loadingFiling" :text="t('loading.filing', { form: filing?.form, year: filing?.fiscalYear, period: filing?.fiscalPeriod })" />
 
         <template v-if="data && !loadingFiling">
           <div class="panel meta">
@@ -609,7 +658,7 @@ onMounted(() => {
 
           <template v-if="isIndicators">
             <ScoreCard v-if="filingScore && !filing?.quartersYear" :score="filingScore" />
-            <p v-if="loadingIndicators" class="muted">{{ t('ind.loading', { end: indicatorsEnd, n: indCount, unit: indMode === 'quarter' ? t('ind.periodUnit') : t('ind.yearUnit') }) }}</p>
+            <Loading v-if="loadingIndicators" :text="t('ind.loading', { end: indicatorsEnd, n: indCount, unit: indMode === 'quarter' ? t('ind.periodUnit') : t('ind.yearUnit') })" />
             <p v-else-if="indicatorsError" class="error">{{ indicatorsError }}</p>
             <template v-else-if="indicators">
               <Note>
@@ -624,7 +673,7 @@ onMounted(() => {
           </template>
           <template v-else-if="isChart">
             <p v-if="!company.tickers?.length" class="muted">{{ t('chart.noTicker') }}</p>
-            <p v-else-if="!tvSymbol" class="muted">{{ t('chart.lookup') }}</p>
+            <Loading v-else-if="!tvSymbol" :text="t('chart.lookup')" />
             <template v-else>
               <Note>
                 {{ tvSymbol.symbol }}<template v-if="tvSymbol.exchange"> · {{ tvSymbol.exchange }}</template> · {{ t('chart.embedNote') }}
@@ -634,7 +683,7 @@ onMounted(() => {
             </template>
           </template>
           <template v-else-if="isValuation">
-            <p v-if="loadingValuation" class="muted">{{ t('val.loading', { year: valuationParams?.year, period: valuationParams?.period, n: valCount }) }}</p>
+            <Loading v-if="loadingValuation" :text="t('val.loading', { year: valuationParams?.year, period: valuationParams?.period, n: valCount })" />
             <p v-else-if="valuationError" class="error">{{ valuationError }}</p>
             <ValuationPanel v-else-if="valuation" :data="valuation" :adr="valAdr" @update:adr="valAdr = $event" />
           </template>

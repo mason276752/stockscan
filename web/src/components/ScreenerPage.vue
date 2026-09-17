@@ -9,6 +9,7 @@ import { bigMoney, dateLocale, isZh, pick, t, tr } from '../i18n';
 import { sicInfo } from '../../../server/lib/sic.js';
 import { isNarrow, isPhone } from '../viewport';
 import Note from './Note.vue';
+import Loading from './Loading.vue';
 
 // params: the screen as it appears in the URL (see App.vue); `navigate`
 // reports every change so the URL and the browser history follow along
@@ -421,7 +422,7 @@ onMounted(async () => {
             <span v-if="result" class="muted small">{{ t('sr.matches', { total: result.total.toLocaleString(), scored: result.scored.toLocaleString(), count: result.count }) }}</span>
           </div>
           <div class="options">
-            <span v-if="loading" class="muted small">{{ t('sr.searching') }}</span>
+            <Loading v-if="loading" inline small :text="t('sr.searching')" />
             <span class="copy" :title="editing ? t('sr.updateTitle', { name: editing.name }) : t('sr.makeBasketTitle')">
               <span v-if="editing" class="editing">{{ t('sr.editing', { name: editing.name }) }} <button class="mini ghost" :title="t('sr.stopEditing')" @click="stopEditing">✕</button></span>
               {{ t('top') }} <input v-model="basketN" type="number" min="1" class="n" :placeholder="String(basketable.length)" /> {{ t('sr.companiesUnit') }}
@@ -432,6 +433,7 @@ onMounted(async () => {
           </div>
         </div>
         <p v-if="error" class="error">{{ error }}</p>
+        <Loading v-if="!result && !error" :text="t('sr.searching')" />
         <div v-if="result" class="wrap">
           <table>
             <thead>

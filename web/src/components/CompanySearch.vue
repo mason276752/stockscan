@@ -3,6 +3,7 @@ import { ref, watch } from 'vue';
 import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import { t } from '../i18n';
+import Loading from './Loading.vue';
 
 const emit = defineEmits(['select']);
 const query = ref('');
@@ -79,6 +80,7 @@ function onBlur() {
       @focus="onFocus"
       @blur="onBlur"
     />
+    <Loading v-if="loading" inline small class="searching" />
     <ul v-if="open && results.length" class="suggest">
       <li v-for="r in results" :key="r.ticker" @mousedown.prevent="choose(r)">
         <span class="ticker">{{ r.ticker }}</span>
@@ -93,6 +95,12 @@ function onBlur() {
 <style scoped>
 .search {
   position: relative;
+}
+.searching {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .suggest {
   position: absolute;

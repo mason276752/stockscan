@@ -10,6 +10,7 @@ import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeig
 import { watchlist } from '../watchlist';
 import { dateLocale, t, tr } from '../i18n';
 import Note from './Note.vue';
+import Loading from './Loading.vue';
 
 const emit = defineEmits(['open', 'screen']);
 
@@ -494,7 +495,7 @@ const sourceText = computed(() => {
             </template>
             <span class="muted small">{{ t('bk.names', { n: current.constituents.length }) }}</span>
             <span v-if="result?.start" class="muted small">{{ result.start }} ～ {{ result.end }}{{ t('bk.startIs100') }}</span>
-            <span v-if="loading" class="muted small">{{ progress ? t('bk.fetching', { done: progress.done, total: progress.total }) : t('bk.computing') }}</span>
+            <Loading v-if="loading" inline small :text="progress ? t('bk.fetching', { done: progress.done, total: progress.total }) : t('bk.computing')" />
           </div>
           <div class="options">
             <span class="seg">
@@ -532,7 +533,7 @@ const sourceText = computed(() => {
           <div class="options">
             <span v-if="syncMsg" class="small" :class="{ warn: syncFailed }">{{ syncMsg }}</span>
             <button v-if="current.source.type === 'screen'" class="small" :title="t('bk.editFiltersTitle')" @click="emit('screen', current)">{{ t('bk.editFilters') }}</button>
-            <button class="small" :disabled="syncing" :title="t('bk.resyncTitle')" @click="resync">{{ syncing ? t('bk.syncing') : t('bk.resync') }}</button>
+            <button class="small" :disabled="syncing" :title="t('bk.resyncTitle')" @click="resync"><Loading v-if="syncing" inline small :text="t('bk.syncing')" /><template v-else>{{ t('bk.resync') }}</template></button>
           </div>
         </div>
         <p v-if="!current.constituents.length" class="empty muted">{{ t('bk.empty') }}</p>
@@ -548,7 +549,7 @@ const sourceText = computed(() => {
                 <span v-for="m in progress.members" :key="m.symbol" class="chip mono" :class="{ bad: m.error, bench: m.bench }" :title="m.error ? m.error : `${m.source} · ${m.first} ～ ${m.last} (${t('bk.days', { n: m.days })})`">{{ m.symbol }}</span>
               </span>
             </template>
-            <template v-else>{{ t('bk.connecting') }}</template>
+            <Loading v-else inline small :text="t('bk.connecting')" />
           </div>
         </div>
         <div v-if="useTv || result?.bars?.length" class="panel chart">

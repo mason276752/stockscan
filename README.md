@@ -75,6 +75,9 @@ commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workf
 - 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json.zst` 以 build 時間為版本，換一次 build 才重抓。
   另有 service worker（[web/public/sw.js](web/public/sw.js)，只在純前端版註冊）：app shell（`index.html` 與 `assets/` 的 hash 檔）走快取、離線也能開，`index.html` 本身 network-first 所以新部署下次開就生效、舊 assets 會照新頁面引用的清單清掉；
   每次部署都會變的小檔（`index/meta.json`、今年的 `head.zst`）network-first、離線時用上次的。財報、字典、已結束年份的日線由 app 自己的 Cache Storage 管，service worker 不再存一份。
+- 閒置預抓（[web/src/prefetch.js](web/src/prefetch.js)，兩種版本都有）：瀏覽器閒置、且沒有使用者要的東西在載入時，一次一件把「接下來很可能會點的」先抓好——
+  開了一家公司後依序抓這份申報的評分、目前設定的財務指標、TradingView 代號、申報表裡接下來三份申報；伺服器版停留 8 秒後再抓股價估值（伺服器要去抓股價，不為路過的公司抓）。
+  純前端版啟動時先把搜尋 / 公司 / 評分 / 科目說明索引抓好，再抓尋找股票與分類瀏覽用的大索引。結果進同一個 memo（[memo.js](web/src/memo.js)）／Cache Storage，之後點到就直接用；換公司時還沒跑的會丟掉，`navigator.connection.saveData` 開著就完全不預抓。
   索引全部 zstd 壓過再放上去（靜態主機不一定會壓，瀏覽器反正已經為了財報載了 zstd-wasm）：尋找股票的 `screen.json` 27 MB → 4 MB、公司清單 12 MB → 0.7 MB，解壓最大的那個約 40 ms；只有 `meta.json` 是明文（第一個抓、帶 build 時間）。
 
 - 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、

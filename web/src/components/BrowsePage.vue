@@ -8,6 +8,7 @@ import { isWatched, toggleWatch } from '../watchlist';
 import { dateLocale, isZh, pick, t, tr } from '../i18n';
 import { isNarrow } from '../viewport';
 import Note from './Note.vue';
+import Loading from './Loading.vue';
 
 // params: { cat: 'sic'|'filer'|'etf', code, afs, etf }
 const props = defineProps({ params: { type: Object, default: () => ({}) } });
@@ -255,7 +256,7 @@ onMounted(async () => {
       <aside v-show="!isNarrow || sideOpen" class="panel side">
         <input v-model="sicFilter" type="text" :placeholder="t('br.sicSearch')" />
         <label class="small"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
-        <p v-if="!sic" class="muted small">{{ t('br.loadingSic') }}</p>
+        <Loading v-if="!sic" small :text="t('br.loadingSic')" />
         <div v-for="d in sicGroups" :key="d.id" class="division">
           <div class="division-head" @click="toggleDivision(d.id)">
             <span class="caret">{{ openDivisions.has(d.id) || sicFilter ? '▾' : '▸' }}</span>
@@ -281,7 +282,7 @@ onMounted(async () => {
               <span class="muted small">{{ t('companies', { n: visibleCompanies.length }) }}</span>
             </div>
           </div>
-          <p v-if="loadingCompanies" class="muted">{{ t('br.loadingCompanies') }}</p>
+          <Loading v-if="loadingCompanies" :text="t('br.loadingCompanies')" />
           <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-sic="false" :scores="scores" @open="emit('open', $event)" />
         </template>
         <p v-else class="empty muted">{{ t('br.pickSic') }}</p>
@@ -293,7 +294,7 @@ onMounted(async () => {
       <aside v-show="!isNarrow || sideOpen" class="panel side">
         <p class="muted small">{{ t('br.filerIntro') }}</p>
         <label class="small"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
-        <p v-if="!filer" class="muted small">{{ t('br.loadingFiler') }}</p>
+        <Loading v-if="!filer" small :text="t('br.loadingFiler')" />
         <div v-for="c in filer?.categories || []" :key="c.key" class="card" :class="{ active: c.key === afs }" @click="afs = c.key">
           <div class="card-title">{{ pick(c, 'zh', 'label') }}</div>
           <div v-if="isZh" class="muted small">{{ c.label }}</div>
@@ -313,10 +314,10 @@ onMounted(async () => {
               <span class="muted small">{{ t('br.sortedByFloat', { n: visibleCompanies.length }) }}</span>
             </div>
           </div>
-          <p v-if="loadingCompanies" class="muted">{{ t('br.loadingCompanies') }}</p>
+          <Loading v-if="loadingCompanies" :text="t('br.loadingCompanies')" />
           <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-afs="false" :scores="scores" @open="emit('open', $event)" />
         </template>
-        <p v-else-if="loadingCompanies" class="muted">{{ t('br.loadingCompanies') }}</p>
+        <Loading v-else-if="loadingCompanies" :text="t('br.loadingCompanies')" />
         <p v-else class="empty muted">{{ t('br.pickFiler') }}</p>
       </main>
     </div>
@@ -333,6 +334,7 @@ onMounted(async () => {
           </div>
           <div class="muted small head">{{ t('br.allAz') }}</div>
         </template>
+        <Loading v-if="!etfs" small :text="t('br.loadingEtfs')" />
         <div class="etf-list">
           <div v-for="e in etfResults" :key="e.ticker" class="etf" :class="{ active: e.ticker === etf }" :title="e.entity" @click="etf = e.ticker">
             <span class="mono">{{ e.ticker }}</span> <span class="small">{{ e.name }}</span>
@@ -341,7 +343,7 @@ onMounted(async () => {
         </div>
       </aside>
       <main>
-        <p v-if="loadingHoldings" class="muted">{{ t(api.isStatic ? 'br.loadingHoldingsStatic' : 'br.loadingHoldings', { etf }) }}</p>
+        <Loading v-if="loadingHoldings" :text="t(api.isStatic ? 'br.loadingHoldingsStatic' : 'br.loadingHoldings', { etf })" />
         <template v-else-if="holdings">
           <div class="panel meta">
             <div>
@@ -359,7 +361,7 @@ onMounted(async () => {
               <span class="muted small">{{ t('br.holdingsCount', { n: visibleHoldings.length, mapped: holdings.stats.mapped, total: holdings.stats.total }) }}</span>
               <span class="copy" :title="t('br.copyTitle')">
                 {{ t('top') }} <input v-model="copyN" type="number" min="1" class="n" :placeholder="String(copyable.length)" /> {{ t('br.holdingsUnit') }}
-                <button class="small" :disabled="!copyable.length || copying" @click="copyToBasket">{{ copying ? t(api.isStatic ? 'br.copyingStatic' : 'br.copying') : t('br.copyButton', { which: Number(copyN) > 0 ? t('br.copyTop', { n: Math.min(Number(copyN), copyable.length) }) : t('all') }) }}</button>
+                <button class="small" :disabled="!copyable.length || copying" @click="copyToBasket"><Loading v-if="copying" inline small :text="t(api.isStatic ? 'br.copyingStatic' : 'br.copying')" /><template v-else>{{ t('br.copyButton', { which: Number(copyN) > 0 ? t('br.copyTop', { n: Math.min(Number(copyN), copyable.length) }) : t('all') }) }}</template></button>
               </span>
             </div>
           </div>

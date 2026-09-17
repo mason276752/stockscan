@@ -26,6 +26,7 @@ export const api = {
   indicatorsUrl: (id, params) => url(`/api/company/${encodeURIComponent(id)}/indicators?${new URLSearchParams(params)}`),
   valuation: (id, params) => get(`/api/company/${encodeURIComponent(id)}/valuation?${new URLSearchParams(params)}`),
   valuationUrl: (id, params) => url(`/api/company/${encodeURIComponent(id)}/valuation?${new URLSearchParams(params)}`),
+  warmup: () => [], // the server holds the indexes; nothing to warm
   status: () => get('/api/status'),
   screenFields: () => get('/api/screen/fields'),
   screen: (params) => get(`/api/screen?${new URLSearchParams(params)}`),

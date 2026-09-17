@@ -115,3 +115,56 @@ input[type='text']:focus {
     padding: 6px 10px;
   }
 }
+
+/* ---- loading indicators ---- */
+/* the ring: `.spinner` alone is a 16px turning ring in the accent colour */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 2.5px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* the bar across the top of the page while anything is loading */
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 1000;
+  background: var(--accent-soft);
+  overflow: hidden;
+  pointer-events: none;
+}
+.topbar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  width: 40%;
+  background: var(--accent);
+  animation: slide 1.2s ease-in-out infinite;
+}
+@keyframes slide {
+  to {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 1.6s;
+  }
+  .topbar::after {
+    animation-duration: 2.4s;
+  }
+}

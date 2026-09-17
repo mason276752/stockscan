@@ -7,6 +7,7 @@ import { addGroup, removeGroup, removeWatch, renameGroup, setGroups, toggleWatch
 import { createBasket } from '../baskets';
 import { t, tr } from '../i18n';
 import Note from './Note.vue';
+import Loading from './Loading.vue';
 
 const emit = defineEmits(['open', 'basket']);
 const scores = ref({});
@@ -155,7 +156,7 @@ async function addFromSearch(ticker) {
           </div>
           <div class="options">
             <button class="small" :disabled="!rows.length" :title="t('wl.makeBasketTitle')" @click="makeBasket">{{ t('makeBasket') }}</button>
-            <button class="small" :disabled="loading || !watchlist.items.length" @click="refresh">{{ loading ? t('filings.refreshing') : t('wl.refreshScores') }}</button>
+            <button class="small" :disabled="loading || !watchlist.items.length" @click="refresh"><Loading v-if="loading" inline small :text="t('filings.refreshing')" /><template v-else>{{ t('wl.refreshScores') }}</template></button>
           </div>
         </div>
         <p v-if="!rows.length" class="empty muted">

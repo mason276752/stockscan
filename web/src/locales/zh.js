@@ -296,6 +296,7 @@ export default {
   'br.pickFiler': '選一種申報身分。',
   'br.etfSearch': '搜尋 ETF 代號 / 名稱 / 發行商',
   'br.etfIntro': '清單來自 SEC 投資公司系列資料（{n} 檔）；成分股取自各基金最新的 Form N-PORT（每季申報，落後約兩個月）。',
+  'br.loadingEtfs': '讀取 ETF 清單…',
   'br.popular': '常用',
   'br.allAz': '全部（A–Z）',
   'br.first300': '只顯示前 300 筆，請輸入代號縮小範圍。',

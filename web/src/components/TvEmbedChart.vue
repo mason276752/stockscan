@@ -81,14 +81,33 @@ watch(() => [props.expression, props.compare, props.range, props.colors, props.v
 
 <template>
   <div class="tv">
-    <div ref="el" class="frame" :style="{ height: `${height}px` }"></div>
+    <div class="frame-wrap" :style="{ height: `${height}px` }">
+      <div class="placeholder"><span class="spinner"></span></div>
+      <div ref="el" class="frame"></div>
+    </div>
     <p v-if="failed" class="muted small">{{ t('tv.failed') }}</p>
   </div>
 </template>
 
 <style scoped>
-.frame {
+.frame-wrap {
+  position: relative;
   width: 100%;
+}
+.frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+/* the ring shows until TradingView's iframe paints over it */
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--row-alt);
+  border-radius: 8px;
 }
 .small {
   font-size: 12px;

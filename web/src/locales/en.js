@@ -297,6 +297,7 @@ export default {
   'br.pickFiler': 'Pick a filer status.',
   'br.etfSearch': 'Search ETF ticker / name / issuer',
   'br.etfIntro': "The list comes from the SEC's investment company series data ({n} funds); holdings from each fund's latest Form N-PORT (filed quarterly, about two months behind).",
+  'br.loadingEtfs': 'Loading the ETF list…',
   'br.popular': 'Popular',
   'br.allAz': 'All (A–Z)',
   'br.first300': 'Only the first 300 shown; type a ticker to narrow down.',
