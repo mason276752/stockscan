@@ -10,7 +10,8 @@ const cache = new Map(); // path -> Promise of parsed JSON
 
 // The indexes change with every build: fetched with ?v=<build time> so the
 // browser's HTTP cache can keep them until the next build (meta.json itself
-// is always revalidated).
+// is always revalidated). All but meta.json are zstd'd (<name>.json.zst):
+// a quarter to a tenth of the bytes, 40 ms to inflate the biggest.
 let build = null;
 export function json(path) {
   if (!cache.has(path)) {
@@ -19,9 +20,11 @@ export function json(path) {
       (async () => {
         if (path !== '/index/meta.json') build ??= meta().then((m) => m.builtAt || '');
         const v = path === '/index/meta.json' ? '' : await build;
-        const res = v ? await fetchVersioned(path, v) : await fetch(url(path), { cache: 'no-cache' });
+        const [res] = await Promise.all([v ? fetchVersioned(path, v) : fetch(url(path), { cache: 'no-cache' }), path.endsWith('.zst') ? zstd() : null]);
         if (!res.ok) throw new Error(`${path}: ${res.status} ${res.statusText}`);
-        return res.json();
+        if (!path.endsWith('.zst')) return res.json();
+        const buf = new Uint8Array(await res.arrayBuffer());
+        return JSON.parse(utf8.decode(decompress(buf, { defaultHeapSize: 64 * 1024 * 1024 })));
       })(),
     );
     cache.get(path).catch(() => cache.delete(path));
@@ -80,14 +83,14 @@ async function fetchImmutable(path) {
 
 // the indexes the build writes
 export const meta = () => json('/index/meta.json');
-export const tickers = () => json('/index/tickers.json');
-export const companies = () => json('/index/companies.json');
-export const scoresMin = () => json('/index/scores-min.json');
-export const screenRowsIndex = () => json('/index/screen.json');
-export const universe = () => json('/index/universe.json');
-export const etfs = () => json('/index/etfs.json');
-export const tvSymbols = () => json('/index/tvsymbols.json');
-export const documentation = () => json('/data/store/documentation.json');
+export const tickers = () => json('/index/tickers.json.zst');
+export const companies = () => json('/index/companies.json.zst');
+export const scoresMin = () => json('/index/scores-min.json.zst');
+export const screenRowsIndex = () => json('/index/screen.json.zst');
+export const universe = () => json('/index/universe.json.zst');
+export const etfs = () => json('/index/etfs.json.zst');
+export const tvSymbols = () => json('/index/tvsymbols.json.zst');
+export const documentation = () => json('/index/documentation.json.zst');
 
 // ---- zstd with dictionary ----
 let ready = null;

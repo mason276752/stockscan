@@ -57,7 +57,7 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 | ETF 每日持股（SSGA / Nasdaq） | ✅ | ✗ 用 build 時的 N-PORT 季報成分 |
 
 ```bash
-npm run build:static        # -> web/dist-static/（約 210 MB：網頁 + data/store + index/）
+npm run build:static        # -> web/dist-static/（網頁 + data/store + data/bars + index/，約 550 MB）
 # 放到任何靜態主機；手動推 GitHub Pages 的話：npx gh-pages -d web/dist-static -t
 ```
 
@@ -71,10 +71,11 @@ commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workf
 日線則不碰 `main`：repo 裡只有已結束年份的 `data/bars/**/<年>.zst`，每次 build 前 `npm run fetch:bars` 從 TradingView 把今年的 `head.zst` 補到最新（8 條並發約 12 分鐘；`actions/cache` 在兩次 run 之間留住 head，之後每次只接最後幾根），
 放進站台但不 commit。TradingView 抓不到（例如 runner 的 IP 被擋）也不會讓 build 失敗，只是自製 ETF 頁的日線停在去年底。
 
-- 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json` 以 build 時間為版本，換一次 build 才重抓。
+- 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json.zst` 以 build 時間為版本，換一次 build 才重抓。
+  索引全部 zstd 壓過再放上去（靜態主機不一定會壓，瀏覽器反正已經為了財報載了 zstd-wasm）：尋找股票的 `screen.json` 27 MB → 4 MB、公司清單 12 MB → 0.7 MB，解壓最大的那個約 40 ms；只有 `meta.json` 是明文（第一個抓、帶 build 時間）。
 
 - 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、
-  `index/*.json`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。
+  `index/*.json.zst`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。
 - 瀏覽器用 WASM zstd（`@bokuweb/zstd-wasm`）配同一份字典解開 `.json.zst`，再跑 `current.js` / `quarters.js` / `indicators.js` / `scoreModel.js` / `screen.js` 這些純計算模組——它們和伺服器用的是同一份檔案。
 - 用相對路徑，放在子路徑（`https://user.github.io/stockscan/`）也不用改設定。
 - 頁首會標「純前端版 · N 份財報，資料至 <build 日期>」；不支援的功能會直接說明。

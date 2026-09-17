@@ -11,6 +11,7 @@
 // the ETF list / holdings that are not cached yet are fetched from EDGAR.
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -72,10 +73,15 @@ if (fs.existsSync(barsDir)) {
 // ---- 3. indexes ----
 const idx = path.join(OUT, 'index');
 fs.mkdirSync(idx, { recursive: true });
-const write = (name, obj) => {
-  const file = path.join(idx, name);
-  fs.writeFileSync(file, JSON.stringify(obj));
-  console.log(`build-static: ${name} ${(fs.statSync(file).size / 1048576).toFixed(1)} MB`);
+// Index files go out zstd'd (<name>.zst): a static host may not compress
+// what it serves and the browser has zstd-wasm anyway (the filings need it).
+// screen.json is 27 MB raw, 4 MB so - 36 ms to inflate. meta.json stays
+// plain: it is the first fetch and carries the build id the rest is cached by.
+const write = (name, obj, { compress = true } = {}) => {
+  const json = Buffer.from(JSON.stringify(obj));
+  const file = path.join(idx, compress ? `${name}.zst` : name);
+  fs.writeFileSync(file, compress ? zlib.zstdCompressSync(json, { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } }) : json);
+  console.log(`build-static: ${path.basename(file)} ${(fs.statSync(file).size / 1048576).toFixed(1)} MB${compress ? ` (${(json.length / 1048576).toFixed(1)} MB raw)` : ''}`);
 };
 
 // the ticker table, the SIC / filer universe and the market snapshot: from
@@ -194,16 +200,21 @@ try {
 }
 write('etfs.json', etfs);
 
-write('meta.json', {
-  builtAt: new Date().toISOString(),
-  filings: store.filingCount(),
-  scores: scores.length,
-  companies: Object.keys(companies).length,
-  scrapeVersion: SCRAPE_VERSION,
-  scoreVersion: SCORE_VERSION,
-  market: { count: market?.count ?? 0, updatedAt: market?.updatedAt ?? null, refreshing: false },
-  bars: bars.symbols ? { symbols: bars.symbols, heads: bars.heads, sources: ['tv2'] } : null,
-});
+write('documentation.json', JSON.parse(fs.readFileSync(path.join(store.file, 'documentation.json'), 'utf8')));
+write(
+  'meta.json',
+  {
+    builtAt: new Date().toISOString(),
+    filings: store.filingCount(),
+    scores: scores.length,
+    companies: Object.keys(companies).length,
+    scrapeVersion: SCRAPE_VERSION,
+    scoreVersion: SCORE_VERSION,
+    market: { count: market?.count ?? 0, updatedAt: market?.updatedAt ?? null, refreshing: false },
+    bars: bars.symbols ? { symbols: bars.symbols, heads: bars.heads, sources: ['tv2'] } : null,
+  },
+  { compress: false },
+);
 
 // GitHub Pages: no Jekyll processing (paths with __ would otherwise be skipped)
 fs.writeFileSync(path.join(OUT, '.nojekyll'), '');
