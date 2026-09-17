@@ -51,11 +51,11 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
           <th class="sortable" @click="sortBy('ticker')">{{ t('col.ticker') }}{{ arrow('ticker') }}</th>
           <th class="sortable" :title="t('col.scoreTitle')" @click="sortBy('score')">{{ t('col.score') }}{{ arrow('score') }}</th>
           <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
-          <th v-if="showSic" class="sortable" @click="sortBy('sic')">{{ t('col.sic') }}{{ arrow('sic') }}</th>
-          <th v-if="showAfs" class="sortable" @click="sortBy('afs')">{{ t('col.afs') }}{{ arrow('afs') }}</th>
+          <th v-if="showSic" class="sortable hide-p" @click="sortBy('sic')">{{ t('col.sic') }}{{ arrow('sic') }}</th>
+          <th v-if="showAfs" class="sortable hide-p" @click="sortBy('afs')">{{ t('col.afs') }}{{ arrow('afs') }}</th>
           <th class="num sortable" :title="t('col.floatTitle')" @click="sortBy('float')">{{ t('col.float') }} USD{{ arrow('float') }}</th>
-          <th class="sortable" @click="sortBy('filed')">{{ t('col.latestFiling') }}{{ arrow('filed') }}</th>
-          <th>{{ t('col.region') }}</th>
+          <th class="sortable hide-p" @click="sortBy('filed')">{{ t('col.latestFiling') }}{{ arrow('filed') }}</th>
+          <th class="hide-t">{{ t('col.region') }}</th>
         </tr>
       </thead>
       <tbody>
@@ -67,19 +67,19 @@ const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼'
           </td>
           <td><ScoreBadge :score="scores[c.cik] ?? null" /></td>
           <td class="name">{{ c.name }}</td>
-          <td v-if="showSic" class="small">
+          <td v-if="showSic" class="small hide-p">
             <span v-if="c.sic">{{ c.sic }} {{ (isZh ? c.sicZh || c.sicTitle : c.sicTitle || c.sicZh) || '' }}</span>
             <span v-else class="muted">—</span>
           </td>
-          <td v-if="showAfs" class="small">
+          <td v-if="showAfs" class="small hide-p">
             {{ afsShort(c.afs) }}<span v-if="c.wksi" class="tag" :title="t('col.wksiTitle')">WKSI</span>
           </td>
           <td class="num" :title="c.floatAdjusted ? t('company.floatAdjusted') : ''">
             {{ fmtFloat(c.float) }}<span v-if="c.floatAdjusted" class="warn">*</span>
             <div v-if="c.floatDate" class="muted tiny">{{ c.floatDate }}</div>
           </td>
-          <td class="small">{{ c.form }} {{ fmtDate(c.filed) }}</td>
-          <td class="small muted">{{ [c.state, c.country].filter(Boolean).join(', ') }}</td>
+          <td class="small hide-p">{{ c.form }} {{ fmtDate(c.filed) }}</td>
+          <td class="small muted hide-t">{{ [c.state, c.country].filter(Boolean).join(', ') }}</td>
         </tr>
       </tbody>
     </table>
@@ -177,5 +177,18 @@ td.star .on {
 .empty {
   padding: 24px;
   text-align: center;
+}
+@media (max-width: 760px) {
+  .wrap {
+    max-height: none;
+  }
+  th,
+  td {
+    padding: 5px 6px;
+  }
+  .name {
+    min-width: 140px;
+    font-size: 12px;
+  }
 }
 </style>

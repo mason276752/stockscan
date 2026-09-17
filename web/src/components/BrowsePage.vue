@@ -6,6 +6,8 @@ import CompanyTable from './CompanyTable.vue';
 import ScoreBadge from './ScoreBadge.vue';
 import { isWatched, toggleWatch } from '../watchlist';
 import { dateLocale, isZh, pick, t, tr } from '../i18n';
+import { isNarrow } from '../viewport';
+import Note from './Note.vue';
 
 // params: { cat: 'sic'|'filer'|'etf', code, afs, etf }
 const props = defineProps({ params: { type: Object, default: () => ({}) } });
@@ -201,7 +203,20 @@ const num = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 function pickCat(c) {
   cat.value = c;
   filter.value = '';
+  sideOpen.value = !selected.value;
 }
+// small screens: the list panel is a drawer above the content, closed once
+// something is picked and reopened from the bar that names the pick
+const selected = computed(() => (cat.value === 'sic' ? code.value : cat.value === 'filer' ? afs.value : etf.value));
+const sideOpen = ref(!selected.value);
+watch(selected, (v) => {
+  if (v && isNarrow.value) sideOpen.value = false;
+});
+const pickLabel = computed(() => {
+  if (cat.value === 'sic') return selectedSic.value ? `SIC ${selectedSic.value.code} · ${pick(selectedSic.value, 'zh', 'title')}` : t('br.pickBarSic');
+  if (cat.value === 'filer') return companies.value?.filer ? pick(companies.value.filer, 'zh', 'label') : t('br.pickBarFiler');
+  return holdings.value ? `${holdings.value.etf.ticker} · ${holdings.value.etf.name}` : t('br.pickBarEtf');
+});
 
 onMounted(async () => {
   try {
@@ -233,9 +248,11 @@ onMounted(async () => {
     </div>
     <p v-if="error" class="error">{{ error }}</p>
 
+    <button v-if="isNarrow" class="pickbar" :class="{ open: sideOpen }" @click="sideOpen = !sideOpen"><span class="caret">{{ sideOpen ? '▾' : '▸' }}</span> {{ pickLabel }}</button>
+
     <!-- ===== SIC ===== -->
     <div v-if="cat === 'sic'" class="layout">
-      <aside class="panel side">
+      <aside v-show="!isNarrow || sideOpen" class="panel side">
         <input v-model="sicFilter" type="text" :placeholder="t('br.sicSearch')" />
         <label class="small"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
         <p v-if="!sic" class="muted small">{{ t('br.loadingSic') }}</p>
@@ -273,7 +290,7 @@ onMounted(async () => {
 
     <!-- ===== filer status ===== -->
     <div v-else-if="cat === 'filer'" class="layout">
-      <aside class="panel side">
+      <aside v-show="!isNarrow || sideOpen" class="panel side">
         <p class="muted small">{{ t('br.filerIntro') }}</p>
         <label class="small"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
         <p v-if="!filer" class="muted small">{{ t('br.loadingFiler') }}</p>
@@ -283,7 +300,7 @@ onMounted(async () => {
           <div class="small">{{ tr(c.note) }}</div>
           <div class="muted small">{{ t('companies', { n: listedOnly ? c.listed : c.total }) }}<span v-if="c.wksi"> · WKSI {{ c.wksi }}</span></div>
         </div>
-        <p class="muted small">{{ t('br.filerDeadlines') }}</p>
+        <p class="muted small hide-p">{{ t('br.filerDeadlines') }}</p>
       </aside>
       <main>
         <template v-if="afs && companies?.filer">
@@ -306,9 +323,9 @@ onMounted(async () => {
 
     <!-- ===== ETF ===== -->
     <div v-else class="layout">
-      <aside class="panel side">
+      <aside v-show="!isNarrow || sideOpen" class="panel side">
         <input v-model="etfQuery" type="text" :placeholder="t('br.etfSearch')" />
-        <p class="muted small">{{ t('br.etfIntro', { n: etfs ? etfs.total : '…' }) }}</p>
+        <p class="muted small hide-p">{{ t('br.etfIntro', { n: etfs ? etfs.total : '…' }) }}</p>
         <template v-if="!etfQuery && popular.length">
           <div class="muted small head">{{ t('br.popular') }}</div>
           <div v-for="e in popular" :key="e.ticker" class="etf" :class="{ active: e.ticker === etf }" @click="etf = e.ticker">
@@ -324,7 +341,7 @@ onMounted(async () => {
         </div>
       </aside>
       <main>
-        <p v-if="loadingHoldings" class="muted">{{ t('br.loadingHoldings', { etf }) }}</p>
+        <p v-if="loadingHoldings" class="muted">{{ t(api.isStatic ? 'br.loadingHoldingsStatic' : 'br.loadingHoldings', { etf }) }}</p>
         <template v-else-if="holdings">
           <div class="panel meta">
             <div>
@@ -342,7 +359,7 @@ onMounted(async () => {
               <span class="muted small">{{ t('br.holdingsCount', { n: visibleHoldings.length, mapped: holdings.stats.mapped, total: holdings.stats.total }) }}</span>
               <span class="copy" :title="t('br.copyTitle')">
                 {{ t('top') }} <input v-model="copyN" type="number" min="1" class="n" :placeholder="String(copyable.length)" /> {{ t('br.holdingsUnit') }}
-                <button class="small" :disabled="!copyable.length || copying" @click="copyToBasket">{{ copying ? t('br.copying') : t('br.copyButton', { which: Number(copyN) > 0 ? t('br.copyTop', { n: Math.min(Number(copyN), copyable.length) }) : t('all') }) }}</button>
+                <button class="small" :disabled="!copyable.length || copying" @click="copyToBasket">{{ copying ? t(api.isStatic ? 'br.copyingStatic' : 'br.copying') : t('br.copyButton', { which: Number(copyN) > 0 ? t('br.copyTop', { n: Math.min(Number(copyN), copyable.length) }) : t('all') }) }}</button>
               </span>
             </div>
           </div>
@@ -356,10 +373,10 @@ onMounted(async () => {
                   <th>{{ t('col.score') }}</th>
                   <th>{{ t('col.name') }}</th>
                   <th class="num">{{ t('br.weight') }}</th>
-                  <th class="num">{{ t('br.valueMusd') }}</th>
-                  <th class="num">{{ t('br.sharesHeld') }}</th>
-                  <th>{{ t('br.assetClass') }}</th>
-                  <th>{{ t('br.country') }}</th>
+                  <th class="num hide-p">{{ t('br.valueMusd') }}</th>
+                  <th class="num hide-t">{{ t('br.sharesHeld') }}</th>
+                  <th class="hide-p">{{ t('br.assetClass') }}</th>
+                  <th class="hide-t">{{ t('br.country') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -375,15 +392,15 @@ onMounted(async () => {
                     {{ h.name }}<span v-if="h.title && h.title !== h.name" class="muted small"> · {{ h.title }}</span>
                   </td>
                   <td class="num">{{ pct(h.pctVal) }}</td>
-                  <td class="num">{{ money(h.valUSD) }}</td>
-                  <td class="num small">{{ h.balance == null ? '—' : num.format(h.balance) }}</td>
-                  <td class="small">{{ (isZh ? h.assetZh : tr(h.assetZh)) || h.assetCat || '—' }}</td>
-                  <td class="small muted">{{ h.country || '' }}</td>
+                  <td class="num hide-p">{{ money(h.valUSD) }}</td>
+                  <td class="num small hide-t">{{ h.balance == null ? '—' : num.format(h.balance) }}</td>
+                  <td class="small hide-p">{{ (isZh ? h.assetZh : tr(h.assetZh)) || h.assetCat || '—' }}</td>
+                  <td class="small muted hide-t">{{ h.country || '' }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <p class="muted small note">{{ t('br.holdingsNote') }}</p>
+          <Note>{{ t('br.holdingsNote') }}</Note>
         </template>
         <p v-else class="empty muted">{{ t('br.pickEtf') }}</p>
       </main>
@@ -585,12 +602,38 @@ tbody tr:nth-child(even) td {
 .note {
   margin-top: 8px;
 }
-@media (max-width: 900px) {
+.pickbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.pickbar.open {
+  border-color: var(--accent);
+}
+@media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;
   }
   .side {
     position: static;
+    max-height: 60vh;
+  }
+}
+@media (max-width: 760px) {
+  .tabs {
+    flex-wrap: wrap;
+  }
+  .tabs .src {
+    display: none;
+  }
+  .meta .options {
+    flex-wrap: wrap;
+  }
+  .wrap {
     max-height: none;
   }
 }

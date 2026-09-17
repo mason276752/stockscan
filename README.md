@@ -51,9 +51,10 @@ npm --prefix web run dev                                  # 前端 :5173，/api 
 |---|---|---|
 | 財報頁：四大報表、其他報表、只看本期、Q4 推算、財務指標、評分 | ✅ | ✅ 在瀏覽器裡算（同一套 `server/lib` 模組） |
 | 尋找股票、分類瀏覽（產業 / 申報身分 / ETF 成分股）、搜尋 | ✅ 即時 | ✅ build 當時的快照 |
-| 觀察名單、自製 ETF（TradingView widget 模式）、K 線圖分頁 | ✅ | ✅（widget 在瀏覽器裡跑） |
-| 抓 SEC 新申報、爬蟲、「更新」 | ✅ | ✗ 資料 = build 時的 `data/store` |
-| 股價估值、自製 ETF 自己算的指數與成分股報酬 | ✅ | ✗ 瀏覽器打不到 Yahoo / TradingView ws / TWS（CORS） |
+| 觀察名單、K 線圖分頁、自製 ETF 的 TradingView widget 模式 | ✅ | ✅（嵌入圖由 tradingview.com 載入——純前端版唯一會連的外部服務） |
+| 自製 ETF 自己算的指數與成分股報酬 | ✅ 伺服器抓日線（TradingView，備用 TWS、Yahoo） | ✅ 日線隨網站發布（`data/bars`，排程從 TradingView 抓到前一個交易日），瀏覽器自己算，不連外 |
+| 抓 SEC 新申報、爬蟲、「更新」 | ✅ | ✗ 瀏覽器不連 SEC；資料由排程重新建置（每個交易日數次） |
+| 股價估值 | ✅ | ✗ 要每季的股價與即時報價 |
 | ETF 每日持股（SSGA / Nasdaq） | ✅ | ✗ 用 build 時的 N-PORT 季報成分 |
 
 ```bash
@@ -72,13 +73,15 @@ commit 進 `main`（workflow 自己的 token 推的 commit 不會再觸發 workf
 放進站台但不 commit。TradingView 抓不到（例如 runner 的 IP 被擋）也不會讓 build 失敗，只是自製 ETF 頁的日線停在去年底。
 
 - 瀏覽器端：財報 / 評分的 `.zst` 檔名帶版本、內容永不變，抓過一次就放進 Cache Storage 不再下載；`index/*.json.zst` 以 build 時間為版本，換一次 build 才重抓。
+  另有 service worker（[web/public/sw.js](web/public/sw.js)，只在純前端版註冊）：app shell（`index.html` 與 `assets/` 的 hash 檔）走快取、離線也能開，`index.html` 本身 network-first 所以新部署下次開就生效、舊 assets 會照新頁面引用的清單清掉；
+  每次部署都會變的小檔（`index/meta.json`、今年的 `head.zst`）network-first、離線時用上次的。財報、字典、已結束年份的日線由 app 自己的 Cache Storage 管，service worker 不再存一份。
   索引全部 zstd 壓過再放上去（靜態主機不一定會壓，瀏覽器反正已經為了財報載了 zstd-wasm）：尋找股票的 `screen.json` 27 MB → 4 MB、公司清單 12 MB → 0.7 MB，解壓最大的那個約 40 ms；只有 `meta.json` 是明文（第一個抓、帶 build 時間）。
 
 - 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、
   `index/*.json.zst`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。
 - 瀏覽器用 WASM zstd（`@bokuweb/zstd-wasm`）配同一份字典解開 `.json.zst`，再跑 `current.js` / `quarters.js` / `indicators.js` / `scoreModel.js` / `screen.js` 這些純計算模組——它們和伺服器用的是同一份檔案。
 - 用相對路徑，放在子路徑（`https://user.github.io/stockscan/`）也不用改設定。
-- 頁首會標「純前端版 · N 份財報，資料至 <build 日期>」；不支援的功能會直接說明。
+- 頁首會標「純前端版 · N 份財報 · 資料更新至 <build 日期>」（tooltip 說明資料來源與唯一的外連）；不支援的功能會直接說明。
 
 ### 資料存放（可進 git）
 
@@ -438,7 +441,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
   只有對不成一個倍數的資料修訂才重寫牽涉到的那幾年。一個月沒人讀的檔啟動時清掉。
   另有背景抓取（[barCrawler.js](server/lib/barCrawler.js)）：每個交易日紐約收盤後半小時，把代號表上每一檔的 TradingView 日線補到最新——第一次看到的代號抓十年（約 30 KB），之後每天只抓最後一根之後的幾根；
   6 條並發約每秒 11 檔，一萬多檔一輪約 16 分鐘。TradingView 查不到的代號（多是 OTC 的外國股）連續三次失敗後隔一週再試。`/api/status` 的 `barCrawler` 看進度；`npm run fetch:bars` 手動跑一輪就結束（workflow 用這個）。
-  純前端版（GitHub Pages）也有日線：build 把 `data/bars` 一起放進站台，自製 ETF 頁在瀏覽器裡解 zstd、套分割調整、算指數（[basket.js](server/lib/basket.js) 前後端共用），資料到 build 當天。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
+  純前端版（GitHub Pages）也有日線：build 把 `data/bars` 一起放進站台，自製 ETF 頁在瀏覽器裡解 zstd、套分割調整、算指數（[basket.js](server/lib/basket.js) 前後端共用），資料到排程最後一次抓的交易日、不連外部服務。有快取的成分股不會去探測 TWS（TWS 沒開時探測一次要等 1.5 秒，且結果記一分鐘）。股價估值頁也走同一條鏈（見「股價估值」）。
 - **K 線圖（預設：Advanced Charts）**：伺服器把各成分股日線組成指數後餵給 TradingView 授權版 **Advanced Charts**
   （`charting_library` 放在 `web/assets/tradingview/`，後端以 `/tradingview/` 提供、Vite 開發模式代理過去；資料由 `web/src/tvDatafeed.js`
   以 Datafeed API 餵入，大盤 ETF 以 Overlay 指標疊同一價格軸，週／月線由函式庫從日線合成），沒有這個資料夾時用開源的

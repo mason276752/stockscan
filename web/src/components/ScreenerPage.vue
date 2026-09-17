@@ -7,6 +7,8 @@ import { isWatched, toggleWatch } from '../watchlist';
 import { applySource, basketOf, createBasket, setSource } from '../baskets';
 import { bigMoney, dateLocale, isZh, pick, t, tr } from '../i18n';
 import { sicInfo } from '../../../server/lib/sic.js';
+import { isNarrow, isPhone } from '../viewport';
+import Note from './Note.vue';
 
 // params: the screen as it appears in the URL (see App.vue); `navigate`
 // reports every change so the URL and the browser history follow along
@@ -259,6 +261,10 @@ const arrow = (k, mode = 'now') => (sortKey.value === k && sortMode.value === mo
 
 // result columns: the fields used in conditions (with their change columns) plus a few staples
 const STAPLES = ['price', 'marketCap', 'pe', 'grossMargin', 'opMargin', 'netMargin', 'roe', 'debtRatio', 'currentRatio', 'revenueAnn'];
+const STAPLES_PHONE = ['price', 'marketCap', 'pe'];
+// small screens: the filter panel is a drawer above the results
+const filtersOpen = ref(false);
+const activeConditions = computed(() => conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).length + (division.value ? 1 : 0) + (sicCode.value ? 1 : 0) + (afs.value ? 1 : 0) + exDivisions.value.length + exSics.value.filter(Boolean).length + (text.value.trim() ? 1 : 0));
 const columns = computed(() => {
   const out = [];
   const seen = new Set();
@@ -275,7 +281,7 @@ const columns = computed(() => {
     if (c.mode !== 'now') push(c.key, c.mode);
   }
   if (sortMode.value !== 'now') push(sortKey.value, sortMode.value);
-  for (const k of STAPLES) push(k, 'now');
+  for (const k of isPhone.value ? STAPLES_PHONE : STAPLES) push(k, 'now');
   return out;
 });
 const f1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
@@ -340,8 +346,9 @@ onMounted(async () => {
 
 <template>
   <div class="screen">
+    <button v-if="isNarrow" class="pickbar" :class="{ open: filtersOpen }" @click="filtersOpen = !filtersOpen"><span>{{ filtersOpen ? '▾' : '▸' }}</span> {{ t('sr.filters') }}<span v-if="activeConditions" class="count">{{ activeConditions }}</span></button>
     <div class="layout">
-      <aside class="panel side">
+      <aside v-show="!isNarrow || filtersOpen" class="panel side">
         <div class="side-head">{{ t('sr.filters') }}</div>
         <label class="frow">
           <span>{{ t('sr.tickerName') }}</span>
@@ -404,7 +411,7 @@ onMounted(async () => {
           <button class="mini" @click="addCondition">{{ t('sr.addCondition') }}</button>
           <button class="mini" @click="reset">{{ t('reset') }}</button>
         </div>
-        <p class="muted small">{{ t('sr.note', { snapshot: meta?.market?.updatedAt ? ` (${new Date(meta.market.updatedAt).toLocaleString(dateLocale)})` : '' }) }}</p>
+        <Note>{{ t('sr.note') }} {{ t(api.isStatic ? 'sr.noteMarketStatic' : 'sr.noteMarket', { snapshot: meta?.market?.updatedAt ? ` (${new Date(meta.market.updatedAt).toLocaleString(dateLocale)})` : '' }) }}</Note>
       </aside>
 
       <main>
@@ -432,23 +439,23 @@ onMounted(async () => {
                 <th class="star"></th>
                 <th class="sortable" @click="sortBy('ticker')">{{ t('col.ticker') }}{{ arrow('ticker') }}</th>
                 <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
-                <th>{{ t('sr.industry') }}</th>
+                <th class="hide-p">{{ t('sr.industry') }}</th>
                 <th class="sortable" @click="sortBy('score')">{{ t('col.score') }}{{ arrow('score') }}</th>
                 <th v-for="col in columns" :key="col.id" class="num sortable" :class="{ chg: col.mode !== 'now' }" :title="tr(col.field.name) + (col.mode === 'chg' ? t('sr.chgParen') : col.mode === 'yoy' ? t('sr.yoyParen') : '')" @click="sortBy(col.field.key, col.mode)">
                   {{ colTitle(col) }}<span v-if="col.mode === 'now' && (col.field.unit === '百萬' || col.field.unit === '百萬股')" class="muted"> {{ tr('百萬') }}</span>{{ arrow(col.field.key, col.mode) }}
                 </th>
-                <th class="sortable num" @click="sortBy('float')">{{ t('col.float') }}{{ arrow('float') }}</th>
+                <th class="sortable num hide-p" @click="sortBy('float')">{{ t('col.float') }}{{ arrow('float') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="r in result.rows" :key="r.cik" class="row" @click="emit('open', r)">
                 <td class="star" @click.stop="toggleWatch(r)"><span :class="{ on: isWatched(r.cik) }">{{ isWatched(r.cik) ? '★' : '☆' }}</span></td>
                 <td class="mono"><a :href="`?company=${r.ticker || r.cik}`" @click.prevent>{{ r.ticker || `CIK ${r.cik}` }}</a></td>
-                <td class="name">{{ r.name }}<span class="muted small afs"> {{ afsShort(r.afs) }}</span></td>
-                <td class="small">{{ r.sic }} {{ sicName(r) }}</td>
+                <td class="name">{{ r.name }}<span class="muted small afs hide-p"> {{ afsShort(r.afs) }}</span></td>
+                <td class="small hide-p">{{ r.sic }} {{ sicName(r) }}</td>
                 <td><ScoreBadge :score="r.score" /></td>
                 <td v-for="col in columns" :key="col.id" class="num" :class="{ neg: cell(r, col).neg, pos: cell(r, col).pos, chg: col.mode !== 'now' }" :title="cell(r, col).title || ''">{{ cell(r, col).text }}</td>
-                <td class="num small">{{ bigMoney(r.float) }}</td>
+                <td class="num small hide-p">{{ bigMoney(r.float) }}</td>
               </tr>
             </tbody>
           </table>
@@ -630,13 +637,48 @@ td.star .on {
   text-align: center;
   padding: 40px;
 }
-@media (max-width: 900px) {
+.pickbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.pickbar.open {
+  border-color: var(--accent);
+}
+.pickbar .count {
+  font-size: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+@media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;
   }
   .side {
     position: static;
     max-height: none;
+  }
+}
+@media (max-width: 760px) {
+  .wrap {
+    max-height: none;
+  }
+  .meta .options {
+    flex-wrap: wrap;
+  }
+  .name {
+    min-width: 120px;
+    font-size: 12px;
+  }
+  th,
+  td {
+    padding: 5px 6px;
   }
 }
 .copy {

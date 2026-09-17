@@ -13,6 +13,8 @@ import WatchlistPage from './components/WatchlistPage.vue';
 import ScreenerPage from './components/ScreenerPage.vue';
 import BasketPage from './components/BasketPage.vue';
 import ScoreCard from './components/ScoreCard.vue';
+import Note from './components/Note.vue';
+import { isPhone } from './viewport';
 import { isWatched, toggleWatch, watchlist } from './watchlist';
 import { baskets } from './baskets';
 import { bigMoney, dateLocale, isZh, locale, LOCALES, pick, t } from './i18n';
@@ -77,6 +79,11 @@ async function refreshFilings() {
 }
 const loadingFiling = ref(false);
 const error = ref(null);
+// phones: the filing picker folds away once a filing is chosen, so the statements start near the top
+const pickerOpen = ref(true);
+watch(filing, (f) => {
+  if (f && isPhone.value) pickerOpen.value = false;
+});
 
 const tab = ref('balance_sheet');
 const divisor = ref(1e6);
@@ -403,7 +410,7 @@ onMounted(() => {
 <template>
   <div class="app">
     <header>
-      <h1>stockscan <span class="muted">{{ t('header.subtitle') }}</span></h1>
+      <h1 class="logo">stockscan <span class="muted">{{ t('header.subtitle') }}</span></h1>
       <nav class="nav">
         <button :class="{ active: page === 'report' }" @click="page = 'report'">{{ t('nav.report') }}</button>
         <button :class="{ active: page === 'browse' }" @click="page = 'browse'">{{ t('nav.browse') }}</button>
@@ -416,7 +423,7 @@ onMounted(() => {
         <option v-for="[k, name] in LOCALES" :key="k" :value="k">{{ name }}</option>
       </select>
     </header>
-    <p v-if="crawlText" class="muted small crawl" :title="t('crawl.title')">{{ crawlText }}</p>
+    <p v-if="crawlText" class="muted small crawl" :title="t(isStatic ? 'crawl.staticTitle' : 'crawl.title')">{{ crawlText }}</p>
 
     <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" @basket="page = 'basket'" />
     <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" />
@@ -428,12 +435,12 @@ onMounted(() => {
     <p v-if="loadingCompany" class="muted">{{ t('loading.company') }}</p>
 
     <div v-if="company" class="layout">
-      <aside class="panel">
-        <h2>
+      <aside class="panel company">
+        <h2 class="co-name">
           <button class="star" :class="{ on: isWatched(company.cik) }" :title="isWatched(company.cik) ? t('watch.remove') : t('watch.add')" @click="toggleWatch(company)">{{ isWatched(company.cik) ? '★' : '☆' }}</button>
           {{ company.name }}
         </h2>
-        <div class="muted small">
+        <div class="muted small co-info">
           {{ company.tickers.join(', ') }} · CIK {{ company.cik }}
           <span v-if="company.fiscalYearEnd"> · {{ t('company.fye') }} {{ company.fiscalYearEnd.slice(0, 2) }}/{{ company.fiscalYearEnd.slice(2) }}</span>
           <div v-if="company.sic">
@@ -446,16 +453,18 @@ onMounted(() => {
             <span v-if="company.filer.publicFloat != null"> · {{ t('company.publicFloat') }} {{ fmtFloat(company.filer.publicFloat) }}<span v-if="company.filer.publicFloatAdjusted" :title="t('company.floatAdjusted')">*</span>（{{ company.filer.publicFloatDate }}）</span>
           </div>
         </div>
-        <h3>
-          {{ t('filings.pick') }}
-          <button v-if="!isStatic" class="refresh" :disabled="refreshing" :title="t('filings.refreshTitle')" @click="refreshFilings">
+        <h3 class="pick-head" :class="{ fold: isPhone }" @click="isPhone && (pickerOpen = !pickerOpen)">
+          <span><span v-if="isPhone" class="caret">{{ pickerOpen ? '▾' : '▸' }}</span> {{ t('filings.pick') }}<span v-if="isPhone && !pickerOpen && filing" class="picked">{{ filing.form }} {{ filing.fiscalYear }} {{ filing.fiscalPeriod }}</span></span>
+          <button v-if="!isStatic" class="refresh" :disabled="refreshing" :title="t('filings.refreshTitle')" @click.stop="refreshFilings">
             {{ refreshing ? t('filings.refreshing') : t('filings.refresh') }}
           </button>
         </h3>
-        <p v-if="refreshMessage" class="small refresh-msg">{{ refreshMessage }}</p>
-        <FilingPicker :filings="company.filings" :selected="filing?.accession" @select="loadFiling" @select-quarters="loadQuarters" />
-        <p class="muted small">{{ t('filings.legend') }}</p>
-        <p class="muted small">{{ t('filings.listTime', { time: new Date(company.filingsUpdatedAt).toLocaleString(dateLocale) }) }}<span v-if="company.filingsStale">{{ t('filings.stale') }}</span></p>
+        <div v-show="!isPhone || pickerOpen" class="pick-body">
+          <p v-if="refreshMessage" class="small refresh-msg">{{ refreshMessage }}</p>
+          <FilingPicker :filings="company.filings" :selected="filing?.accession" @select="loadFiling" @select-quarters="loadQuarters" />
+          <p class="muted small hide-p">{{ t('filings.legend') }}</p>
+          <p class="muted small">{{ t(isStatic ? 'filings.builtAt' : 'filings.listTime', { time: new Date(company.filingsUpdatedAt).toLocaleString(dateLocale) }) }}<span v-if="company.filingsStale">{{ t('filings.stale') }}</span></p>
+        </div>
       </aside>
 
       <main>
@@ -481,13 +490,13 @@ onMounted(() => {
               <span class="muted small">{{ data.stats.facts }} facts<template v-if="data.stats.contexts"> · {{ data.stats.contexts }} contexts</template></span>
             </div>
           </div>
-          <p v-if="data.view === 'current' && !isIndicators && !isValuation" class="muted small note">
+          <Note v-if="data.view === 'current' && !isIndicators && !isValuation && !isChart">
             {{ t('note.current', { is: data.filing.form?.startsWith('10-Q') ? t('note.currentQ') : t('note.currentFY') }) }}
             <template v-if="data.previous">{{ t('note.previous', { year: data.previous.fiscalYear, period: data.previous.fiscalPeriod }) }}</template>
             <template v-for="n in data.notes.filter((x) => x.code === 'ytdOnly')" :key="n.title"> {{ t('note.ytdOnly', n) }}</template>
             {{ t('note.compare') }}
-          </p>
-          <p v-if="data.derived" class="muted small note">{{ t('note.derived') }}</p>
+          </Note>
+          <Note v-if="data.derived && !isIndicators && !isValuation && !isChart">{{ t('note.derived') }}</Note>
 
           <div class="toolbar">
             <div class="tabs">
@@ -603,22 +612,13 @@ onMounted(() => {
             <p v-if="loadingIndicators" class="muted">{{ t('ind.loading', { end: indicatorsEnd, n: indCount, unit: indMode === 'quarter' ? t('ind.periodUnit') : t('ind.yearUnit') }) }}</p>
             <p v-else-if="indicatorsError" class="error">{{ indicatorsError }}</p>
             <template v-else-if="indicators">
-              <p v-if="indicators.quarterly && indicators.mode === 'year'" class="muted small note">
-                {{ t('ind.noteYear', { end: indicatorsEnd, example: indicators.columns.at(-1)?.sublabel || indicators.columns.at(-1)?.label, n: indicators.columns.length }) }}
+              <Note>
+                <template v-if="indicators.quarterly && indicators.mode === 'year'">{{ t('ind.noteYear', { end: indicatorsEnd, example: indicators.columns.at(-1)?.sublabel || indicators.columns.at(-1)?.label, n: indicators.columns.length }) }}</template>
+                <template v-else-if="indicators.quarterly && indicators.mode === 'same'">{{ t('ind.noteSame', { period: indicatorsParams.period, from: indicators.columns[0]?.label, to: indicators.columns.at(-1)?.label, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}</template>
+                <template v-else-if="indicators.quarterly">{{ t('ind.noteQuarter', { end: indicatorsEnd, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}</template>
+                <template v-else>{{ t('ind.noteAnnual', { n: indicators.columns.length }) }}</template>
                 <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
-              </p>
-              <p v-else-if="indicators.quarterly && indicators.mode === 'same'" class="muted small note">
-                {{ t('ind.noteSame', { period: indicatorsParams.period, from: indicators.columns[0]?.label, to: indicators.columns.at(-1)?.label, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}
-                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
-              </p>
-              <p v-else-if="indicators.quarterly" class="muted small note">
-                {{ t('ind.noteQuarter', { end: indicatorsEnd, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}
-                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
-              </p>
-              <p v-else class="muted small note">
-                {{ t('ind.noteAnnual', { n: indicators.columns.length }) }}
-                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
-              </p>
+              </Note>
               <IndicatorsTable :data="indicators" :annualize-amounts="indAnnualizeAmounts" />
             </template>
           </template>
@@ -626,11 +626,11 @@ onMounted(() => {
             <p v-if="!company.tickers?.length" class="muted">{{ t('chart.noTicker') }}</p>
             <p v-else-if="!tvSymbol" class="muted">{{ t('chart.lookup') }}</p>
             <template v-else>
-              <p class="muted small note">
+              <Note>
                 {{ tvSymbol.symbol }}<template v-if="tvSymbol.exchange"> · {{ tvSymbol.exchange }}</template> · {{ t('chart.embedNote') }}
                 <span v-if="tvSymbol.known === false">{{ t('chart.unknown') }}</span>
-              </p>
-              <TvEmbedChart :expression="tvSymbol.symbol" :range="chartRange" :colors="chartColors" :height="620" volume symbol-change />
+              </Note>
+              <TvEmbedChart :expression="tvSymbol.symbol" :range="chartRange" :colors="chartColors" :height="isPhone ? 400 : 620" volume symbol-change />
             </template>
           </template>
           <template v-else-if="isValuation">
@@ -666,9 +666,22 @@ onMounted(() => {
 header {
   display: grid;
   grid-template-columns: auto auto 1fr auto;
+  grid-template-areas: 'logo nav search lang';
   gap: 24px;
   align-items: center;
   margin-bottom: 16px;
+}
+header .logo {
+  grid-area: logo;
+}
+header .nav {
+  grid-area: nav;
+}
+header :deep(.search) {
+  grid-area: search;
+}
+header .lang {
+  grid-area: lang;
 }
 header .lang {
   font: inherit;
@@ -730,6 +743,15 @@ h3 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+h3.fold {
+  cursor: pointer;
+  margin: 10px 0 6px;
+}
+h3 .picked {
+  margin-left: 8px;
+  color: var(--accent);
+  font-weight: 600;
 }
 .refresh {
   font-size: 12px;
@@ -806,13 +828,94 @@ select {
   text-align: center;
   padding: 80px 0;
 }
-@media (max-width: 900px) {
-  header,
+@media (max-width: 1100px) {
+  header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'logo lang'
+      'nav nav'
+      'search search';
+    gap: 10px 16px;
+  }
+  .nav {
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  header :deep(.search) {
+    min-width: 0;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+  .nav button {
+    white-space: nowrap;
+  }
   .layout {
     grid-template-columns: 1fr;
   }
   aside {
     position: static;
+  }
+  /* tablets: company facts on the left, the filing picker on the right */
+  aside.company {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+    grid-template-rows: auto 1fr;
+    column-gap: 24px;
+    align-items: start;
+  }
+  .co-name {
+    grid-area: 1 / 1;
+  }
+  .co-info {
+    grid-area: 2 / 1;
+  }
+  .pick-head {
+    grid-area: 1 / 2;
+    margin-top: 0;
+  }
+  .pick-body {
+    grid-area: 2 / 2;
+  }
+}
+@media (max-width: 760px) {
+  aside.company {
+    display: block;
+  }
+  .app {
+    padding: 10px 10px 32px;
+  }
+  h1 .muted {
+    display: none;
+  }
+  .crawl {
+    text-align: left;
+    margin: -4px 0 10px;
+  }
+  .options {
+    gap: 8px 12px;
+    flex-wrap: wrap;
+  }
+  .toolbar > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .tabs {
+    width: 100%;
+  }
+  .tabs select {
+    max-width: 100%;
+  }
+  .meta {
+    padding: 8px 12px;
+  }
+  .links {
+    gap: 10px;
+  }
+  .empty {
+    padding: 40px 0;
   }
 }
 </style>

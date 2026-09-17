@@ -107,7 +107,7 @@ const tipStyle = computed(() => {
     <table>
       <thead>
         <tr>
-          <th class="group">{{ t('it.group') }}</th>
+          <th class="group hide-p">{{ t('it.group') }}</th>
           <th class="name">{{ t('it.ratio') }}</th>
           <th v-for="c in data.columns" :key="c.label" class="num" :class="{ missing: c.missing }" :title="c.periodEnd ? `${t('meta.periodEnd')} ${c.periodEnd}` : ''">
             <div>{{ c.label }}</div>
@@ -118,7 +118,7 @@ const tipStyle = computed(() => {
       <tbody>
         <template v-for="g in groups" :key="g.name">
           <tr v-for="(row, i) in g.rows" :key="row.key" :class="{ first: i === 0, flow: row.kind === 'flow', hover: hoverKey === row.key }" @mouseenter="hoverKey = row.key" @mouseleave="hoverKey = null">
-            <td v-if="i === 0" class="group" :rowspan="g.rows.length">{{ tr(g.name) }}</td>
+            <td v-if="i === 0" class="group hide-p" :rowspan="g.rows.length">{{ tr(g.name) }}</td>
             <td class="name" @mouseenter="showTip(row, $event)" @mouseleave="hideTip">
               {{ tr(row.name) }}
               <span class="unit muted">{{ tr(row.unit) }}</span>
@@ -250,5 +250,26 @@ tr.flow td.name {
   padding: 0 3px;
   margin-left: 4px;
   vertical-align: middle;
+}
+@media (max-width: 760px) {
+  .wrap {
+    max-height: none;
+  }
+  th,
+  td {
+    padding: 4px 7px;
+  }
+  th.name,
+  td.name {
+    left: 0;
+    min-width: 150px;
+    max-width: 48vw;
+    white-space: normal;
+    font-size: 12px;
+    line-height: 1.3;
+  }
+  tr.first td {
+    border-top: 2px solid var(--border);
+  }
 }
 </style>

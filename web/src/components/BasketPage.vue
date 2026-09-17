@@ -9,6 +9,7 @@ import Icon from './Icon.vue';
 import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, renameConstituent, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
 import { watchlist } from '../watchlist';
 import { dateLocale, t, tr } from '../i18n';
+import Note from './Note.vue';
 
 const emit = defineEmits(['open', 'screen']);
 
@@ -449,6 +450,7 @@ const sourceText = computed(() => {
     <div class="layout">
       <aside class="panel side">
         <div class="side-head">{{ t('nav.basket') }}</div>
+        <div class="items">
         <div v-for="b in baskets.items" :key="b.id" class="item" :class="{ active: current?.id === b.id }" @click="baskets.current = b.id">
           <template v-if="sideRename?.id === b.id">
             <input v-model="sideRename.to" type="text" class="rename" @keyup.enter="finishSideRename" @keyup.esc="sideRename = null" @blur="finishSideRename" @click.stop />
@@ -461,6 +463,7 @@ const sourceText = computed(() => {
             </span>
           </template>
         </div>
+        </div>
         <p v-if="!baskets.items.length" class="muted small">{{ t('bk.none') }}</p>
         <div class="newgroup">
           <input v-model="newName" type="text" :placeholder="t('bk.newPlaceholder')" @keyup.enter="create" />
@@ -472,8 +475,8 @@ const sourceText = computed(() => {
             <option v-for="[k, label] in groupOptions" :key="k" :value="k">{{ label }}</option>
           </select>
         </div>
-        <p class="muted small">{{ t('bk.storage') }}</p>
-        <p v-if="sourceText" class="muted small src">
+        <p class="muted small hide-p">{{ t('bk.storage') }}</p>
+        <p v-if="sourceText" class="muted small src hide-p">
           {{ sourceText }}
           <button v-if="quotes?.ib?.enabled && !quotes.ib.connected" class="mini" @click="reconnect">{{ t('bk.reconnect') }}</button>
         </p>
@@ -504,15 +507,15 @@ const sourceText = computed(() => {
             <select v-model="benchmark" class="small" :title="t('bk.benchmarkTitle')">
               <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label() }}</option>
             </select>
-            <select v-if="!noBars" v-model="chartSource" class="small" :title="t('bk.chartSourceTitle')">
+            <select v-if="!noBars" v-model="chartSource" class="small" :title="t(isStatic ? 'bk.chartSourceTitleStatic' : 'bk.chartSourceTitle')">
               <option value="own">{{ t('bk.chartOwn') }}</option>
               <option value="widget">{{ t('bk.chartWidget') }}</option>
             </select>
-            <select v-model="colors" class="small" :title="t('bk.candleColors')">
+            <select v-model="colors" class="small hide-p" :title="t('bk.candleColors')">
               <option value="tw">{{ t('chart.tw') }}</option>
               <option value="us">{{ t('chart.us') }}</option>
             </select>
-            <button class="small" :title="t('bk.duplicateTitle')" @click="duplicate(current)">{{ t('bk.duplicate') }}</button>
+            <button class="small hide-p" :title="t('bk.duplicateTitle')" @click="duplicate(current)">{{ t('bk.duplicate') }}</button>
             <button class="small danger" @click="remove(current)">{{ t('delete') }}</button>
           </div>
         </div>
@@ -540,7 +543,7 @@ const sourceText = computed(() => {
           </div>
           <div class="ptext small">
             <template v-if="progress">
-              <b>{{ progress.done }} / {{ progress.total }}</b> {{ t('bk.barsArrived') }}<template v-if="progress.done < progress.total">{{ t('bk.barsFetching') }}</template><template v-else>{{ t('bk.barsComputing') }}</template>…
+              <b>{{ progress.done }} / {{ progress.total }}</b> {{ t('bk.barsArrived') }}<template v-if="progress.done < progress.total">{{ t(isStatic ? 'bk.barsFetchingStatic' : 'bk.barsFetching') }}</template><template v-else>{{ t('bk.barsComputing') }}</template>…
               <span class="chips">
                 <span v-for="m in progress.members" :key="m.symbol" class="chip mono" :class="{ bad: m.error, bench: m.bench }" :title="m.error ? m.error : `${m.source} · ${m.first} ～ ${m.last} (${t('bk.days', { n: m.days })})`">{{ m.symbol }}</span>
               </span>
@@ -588,12 +591,12 @@ const sourceText = computed(() => {
                 <th class="sortable" @click="sortBy('ticker')">{{ t('col.ticker') }}{{ arrow('ticker') }}</th>
                 <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
                 <th class="num sortable" :title="t('bk.weightTitle')" @click="sortBy('weight')">{{ t('bk.weightPct') }}{{ arrow('weight') }}</th>
-                <th v-if="current.source" class="num" :title="t('bk.sourceWeightTitle')">{{ t('bk.sourceWeight') }}</th>
-                <th class="num">{{ t('bk.startClose') }}</th>
-                <th class="num">{{ t('bk.lastClose') }}</th>
+                <th v-if="current.source" class="num hide-p" :title="t('bk.sourceWeightTitle')">{{ t('bk.sourceWeight') }}</th>
+                <th class="num hide-p">{{ t('bk.startClose') }}</th>
+                <th class="num hide-p">{{ t('bk.lastClose') }}</th>
                 <th class="num sortable" @click="sortBy('return')">{{ t('bk.periodReturn') }}{{ arrow('return') }}</th>
-                <th class="num sortable" :title="t('bk.contributionTitle')" @click="sortBy('contribution')">{{ t('bk.contribution') }}{{ arrow('contribution') }}</th>
-                <th>{{ t('bk.data') }}</th>
+                <th class="num sortable hide-p" :title="t('bk.contributionTitle')" @click="sortBy('contribution')">{{ t('bk.contribution') }}{{ arrow('contribution') }}</th>
+                <th class="hide-t">{{ t('bk.data') }}</th>
                 <th class="del"></th>
               </tr>
             </thead>
@@ -608,12 +611,12 @@ const sourceText = computed(() => {
                   <span v-if="c.origin === 'source' && c.manualWeight" class="tag manual" :title="t('bk.manualTitle')">{{ t('bk.manual') }}</span>
                   <button v-if="c.origin === 'source' && c.manualWeight" class="mini ghost" :title="c.gone ? t('bk.revertGone') : t('bk.revert', { w: c.sourceWeight })" @click="revertWeight(current.id, c.ticker)">↺</button>
                 </td>
-                <td v-if="current.source" class="num mono small muted">{{ c.origin === 'source' && c.sourceWeight != null && !c.gone ? f1.format(c.sourceWeight) + '%' : '—' }}</td>
-                <td class="num mono">{{ perf[c.ticker]?.startClose != null ? f2.format(perf[c.ticker].startClose) : '—' }}</td>
-                <td class="num mono">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}</td>
+                <td v-if="current.source" class="num mono small muted hide-p">{{ c.origin === 'source' && c.sourceWeight != null && !c.gone ? f1.format(c.sourceWeight) + '%' : '—' }}</td>
+                <td class="num mono hide-p">{{ perf[c.ticker]?.startClose != null ? f2.format(perf[c.ticker].startClose) : '—' }}</td>
+                <td class="num mono hide-p">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}</td>
                 <td class="num mono" :class="cls(perf[c.ticker]?.return)">{{ pct(perf[c.ticker]?.return) }}</td>
-                <td class="num mono" :class="cls(perf[c.ticker]?.contribution)">{{ pct(perf[c.ticker]?.contribution) }}</td>
-                <td class="small muted">
+                <td class="num mono hide-p" :class="cls(perf[c.ticker]?.contribution)">{{ pct(perf[c.ticker]?.contribution) }}</td>
+                <td class="small muted hide-t">
                   <template v-if="perf[c.ticker]">
                     <span v-if="perf[c.ticker].illiquid" class="warn" :title="t('bk.illiquidTitle')">{{ t('bk.illiquid') }}</span>
                     {{ perf[c.ticker].source }} · {{ t('bk.from', { date: perf[c.ticker].first }) }}<span v-if="perf[c.ticker].joined && perf[c.ticker].joined !== result.start" class="warn">{{ t('bk.joinedOn', { date: perf[c.ticker].joined }) }}</span><span v-if="perf[c.ticker].delisted" class="warn" :title="t('bk.delistedTitle')">{{ t('bk.noQuotesAfter', { date: perf[c.ticker].last }) }}</span><span v-else-if="perf[c.ticker].left" class="warn">{{ t('bk.leftOn', { date: perf[c.ticker].left }) }}</span><span v-else-if="!perf[c.ticker].joined" class="warn">{{ t('bk.noDataInRange') }}</span>
@@ -635,7 +638,7 @@ const sourceText = computed(() => {
                   <button v-if="totalOff" class="mini" :title="t('bk.normalizeTitle')" @click="normalizeWeights(current.constituents)">{{ t('bk.normalize') }}</button>
                   <button v-else class="mini ghost" :title="t('bk.equalTitle')" @click="equalWeights(current.id)">{{ t('bk.equal') }}</button>
                 </td>
-                <td :colspan="current.source ? 7 : 6" class="muted small">{{ totalOff ? t('bk.totalOff') : hiddenCount ? t('bk.hiddenShare') : '' }}</td>
+                <td :colspan="current.source ? 7 : 6" class="muted small hide-p">{{ totalOff ? t('bk.totalOff') : hiddenCount ? t('bk.hiddenShare') : '' }}</td>
               </tr>
             </tfoot>
           </table>
@@ -697,7 +700,7 @@ const sourceText = computed(() => {
             </tbody>
           </table>
         </div>
-        <p class="muted small note">{{ t('bk.indexNote', { adv: advanced ? t('bk.indexNoteAdvanced') : '' }) }}</p>
+        <Note>{{ t('bk.indexNote', { adv: advanced ? t('bk.indexNoteAdvanced') : '' }) }}</Note>
       </main>
       <main v-else>
         <p class="empty muted">{{ t('bk.noCurrent') }}</p>
@@ -1123,5 +1126,67 @@ tfoot .mini {
 }
 .small {
   font-size: 12px;
+}
+@media (max-width: 1100px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .side {
+    position: static;
+  }
+  /* the baskets as a row of chips instead of a list */
+  .items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .item {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 4px 10px;
+    gap: 6px;
+  }
+  .item .tools {
+    display: inline-flex;
+  }
+  .newgroup {
+    display: flex;
+    gap: 6px;
+    margin: 8px 0;
+  }
+  .newgroup input {
+    flex: 1;
+  }
+}
+@media (max-width: 760px) {
+  .meta {
+    padding: 8px 10px;
+  }
+  .title {
+    flex-wrap: wrap;
+  }
+  .rename {
+    width: 100%;
+  }
+  .stats {
+    gap: 8px 16px;
+  }
+  .stats b {
+    font-size: 13px;
+  }
+  th,
+  td {
+    padding: 5px 6px;
+  }
+  .name {
+    max-width: 36vw;
+    font-size: 12px;
+  }
+  input.w {
+    width: 56px;
+  }
+  .note {
+    margin: 6px 0;
+  }
 }
 </style>

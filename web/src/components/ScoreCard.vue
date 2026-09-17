@@ -187,10 +187,23 @@ td {
 }
 @media (max-width: 900px) {
   .head {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto 1fr;
   }
   .cats {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+  }
+  .meta {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+}
+@media (max-width: 760px) {
+  .cats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .detail {
+    overflow-x: auto;
   }
 }
 </style>

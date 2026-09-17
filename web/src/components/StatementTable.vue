@@ -123,7 +123,7 @@ function rowClass(item) {
       <thead>
         <tr>
           <th class="label">{{ statement.title }}</th>
-          <th class="unit">{{ t('st.unit') }}</th>
+          <th class="unit hide-p">{{ t('st.unit') }}</th>
           <th v-for="c in columns" :key="c.id" class="num">
             <div v-if="c.dimLabel" class="dim" :title="Object.values(c.dimensions).join(', ')">{{ c.dimLabel }}</div>
             <div v-if="c.label" class="qlabel">
@@ -144,7 +144,7 @@ function rowClass(item) {
             </div>
             <div v-if="showConcept" class="mono muted">{{ item.concept }}<span v-if="item.negated"> · negated</span></div>
           </td>
-          <td class="unit muted">{{ item.abstract ? '' : rowUnit(item) }}</td>
+          <td class="unit muted hide-p">{{ item.abstract ? '' : rowUnit(item) }}</td>
           <td v-for="c in columns" :key="c.id" class="num" :class="{ neg: shown(item, item.values[c.id]).neg, derived: c.derivedQ4 }" :title="rolledTitle(item.values[c.id])">
             {{ shown(item, item.values[c.id]).text }}<span v-if="item.values[c.id]?.rolled" class="sigma">Σ</span>
           </td>
@@ -153,7 +153,7 @@ function rowClass(item) {
       <tfoot v-if="statement.reconciliation && Object.keys(statement.reconciliation).length">
         <tr class="check">
           <td class="label">{{ t('st.check') }}</td>
-          <td class="unit muted">{{ recUnit }}</td>
+          <td class="unit muted hide-p">{{ recUnit }}</td>
           <td v-for="c in columns" :key="c.id" class="num">
             <template v-if="statement.reconciliation[c.id]">
               <div class="muted small">{{ money(statement.reconciliation[c.id].opening) }} {{ statement.reconciliation[c.id].movements < 0 ? '−' : '+' }} {{ money(Math.abs(statement.reconciliation[c.id].movements)) }} = {{ money(statement.reconciliation[c.id].computed) }}</div>
@@ -367,4 +367,25 @@ tr.depth-2 td.label { padding-left: 22px; }
 tr.depth-3 td.label { padding-left: 34px; }
 tr.depth-4 td.label { padding-left: 46px; }
 tr.depth-5 td.label { padding-left: 58px; }
+@media (max-width: 760px) {
+  .wrap {
+    max-height: none;
+  }
+  td.label,
+  th.label {
+    min-width: 170px;
+    max-width: 55vw;
+    font-size: 12px;
+  }
+  th,
+  td {
+    padding: 5px 7px;
+  }
+  thead th .qlabel {
+    font-size: 13px;
+  }
+  thead th .dim {
+    max-width: 120px;
+  }
+}
 </style>

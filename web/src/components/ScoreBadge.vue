@@ -1,5 +1,6 @@
 <script setup>
 // Small coloured pill for a company's latest-filing score.
+import { api } from '../api';
 import { t, tr } from '../i18n';
 const props = defineProps({
   score: { type: Object, default: null }, // { score, coverage, form, fiscalYear, fiscalPeriod, categories[] } or null
@@ -7,7 +8,7 @@ const props = defineProps({
 const CATS = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
 const cls = (s) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
 const title = () => {
-  if (!props.score) return t('sb.none');
+  if (!props.score) return t(api.isStatic ? 'sb.noneStatic' : 'sb.none');
   const c = props.score.categories.map((v, i) => `${tr(CATS[i])} ${v == null ? '—' : v}`).join(t('sep'));
   return `${props.score.form} ${props.score.fiscalYear} ${props.score.fiscalPeriod} (${t('meta.periodEnd')} ${props.score.periodEnd})\n${c}\n${t('sb.coverage', { n: props.score.coverage })}`;
 };

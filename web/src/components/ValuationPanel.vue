@@ -501,4 +501,31 @@ td.bad {
     grid-template-columns: 1fr;
   }
 }
+@media (max-width: 760px) {
+  th,
+  td {
+    padding: 4px 7px;
+  }
+  th.name,
+  td.name {
+    min-width: 120px;
+    max-width: 44vw;
+    white-space: normal;
+    font-size: 12px;
+  }
+  .kvgrid {
+    grid-template-columns: auto 1fr;
+  }
+  .models td.desc {
+    max-width: 60vw;
+    font-size: 11px;
+  }
+  .head {
+    padding: 10px 12px;
+  }
+  .controls {
+    flex-wrap: wrap;
+    gap: 8px 14px;
+  }
+}
 </style>

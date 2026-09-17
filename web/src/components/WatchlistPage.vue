@@ -6,6 +6,7 @@ import CompanySearch from './CompanySearch.vue';
 import { addGroup, removeGroup, removeWatch, renameGroup, setGroups, toggleWatch, watchlist } from '../watchlist';
 import { createBasket } from '../baskets';
 import { t, tr } from '../i18n';
+import Note from './Note.vue';
 
 const emit = defineEmits(['open', 'basket']);
 const scores = ref({});
@@ -120,6 +121,7 @@ async function addFromSearch(ticker) {
     <div class="layout">
       <aside class="panel side">
         <div class="side-head">{{ t('wl.groups') }}</div>
+        <div class="groups-list">
         <div class="group" :class="{ active: current === 'all' }" @click="current = 'all'">{{ t('wl.all') }} <span class="muted">{{ counts.all }}</span></div>
         <div v-for="g in watchlist.groups" :key="g" class="group" :class="{ active: current === g }" @click="current = g">
           <template v-if="renaming?.from === g">
@@ -134,6 +136,7 @@ async function addFromSearch(ticker) {
           </template>
         </div>
         <div class="group" :class="{ active: current === '__none' }" @click="current = '__none'">{{ t('wl.ungrouped') }} <span class="muted">{{ counts.__none }}</span></div>
+        </div>
         <div class="newgroup">
           <input v-model="newGroup" type="text" :placeholder="t('wl.newGroupPlaceholder')" @keyup.enter="createGroup" />
           <button class="mini" :disabled="!newGroup.trim()" @click="createGroup">{{ t('add') }}</button>
@@ -141,7 +144,7 @@ async function addFromSearch(ticker) {
         <div class="side-head">{{ t('wl.addStock') }}</div>
         <CompanySearch @select="addFromSearch" />
         <p class="muted small">{{ addMsg || (current !== 'all' && current !== '__none' ? t('wl.addToGroup', { g: current }) : t('wl.addUngrouped')) }}</p>
-        <p class="muted small">{{ t('wl.storage') }}</p>
+        <p class="muted small hide-p">{{ t('wl.storage') }}</p>
       </aside>
 
       <main>
@@ -167,10 +170,10 @@ async function addFromSearch(ticker) {
                 <th class="sortable" @click="sortBy('name')">{{ t('col.company') }}{{ arrow('name') }}</th>
                 <th>{{ t('wl.groups') }}</th>
                 <th class="sortable" :title="t('wl.scoreTitle')" @click="sortBy('score')">{{ t('col.score') }}{{ arrow('score') }}</th>
-                <th v-for="c in CATS" :key="c" class="num cat">{{ tr(c) }}</th>
-                <th class="sortable" @click="sortBy('periodEnd')">{{ t('wl.latestFiling') }}{{ arrow('periodEnd') }}</th>
-                <th class="sortable" @click="sortBy('filingDate')">{{ t('meta.filingDate') }}{{ arrow('filingDate') }}</th>
-                <th class="sortable" @click="sortBy('addedAt')">{{ t('wl.addedCol') }}{{ arrow('addedAt') }}</th>
+                <th v-for="c in CATS" :key="c" class="num cat hide-p">{{ tr(c) }}</th>
+                <th class="sortable hide-p" @click="sortBy('periodEnd')">{{ t('wl.latestFiling') }}{{ arrow('periodEnd') }}</th>
+                <th class="sortable hide-t" @click="sortBy('filingDate')">{{ t('meta.filingDate') }}{{ arrow('filingDate') }}</th>
+                <th class="sortable hide-t" @click="sortBy('addedAt')">{{ t('wl.addedCol') }}{{ arrow('addedAt') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -190,18 +193,18 @@ async function addFromSearch(ticker) {
                   </template>
                 </td>
                 <td><ScoreBadge :score="scores[x.cik] ?? null" /></td>
-                <td v-for="(c, i) in CATS" :key="c" class="num small" :class="catCls(scores[x.cik]?.categories?.[i])">{{ scores[x.cik]?.categories?.[i] ?? '—' }}</td>
-                <td class="small">
+                <td v-for="(c, i) in CATS" :key="c" class="num small hide-p" :class="catCls(scores[x.cik]?.categories?.[i])">{{ scores[x.cik]?.categories?.[i] ?? '—' }}</td>
+                <td class="small hide-p">
                   <template v-if="scores[x.cik]">{{ scores[x.cik].form }} {{ scores[x.cik].fiscalYear }} {{ scores[x.cik].fiscalPeriod }} <span class="muted">{{ t('meta.periodEnd') }} {{ scores[x.cik].periodEnd }}</span></template>
                   <span v-else class="muted">{{ t('wl.notDownloaded') }}</span>
                 </td>
-                <td class="small">{{ scores[x.cik]?.filingDate || '—' }}</td>
-                <td class="small muted">{{ x.addedAt?.slice(0, 10) }}</td>
+                <td class="small hide-t">{{ scores[x.cik]?.filingDate || '—' }}</td>
+                <td class="small muted hide-t">{{ x.addedAt?.slice(0, 10) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <p class="muted small note">{{ t('wl.scoreNote') }}</p>
+        <Note>{{ t('wl.scoreNote') }} {{ t(api.isStatic ? 'wl.scoreRefreshStatic' : 'wl.scoreRefresh') }}</Note>
       </main>
     </div>
   </div>
@@ -401,12 +404,38 @@ td.bad {
 .note {
   margin-top: 10px;
 }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;
   }
   .side {
     position: static;
+  }
+  /* the groups as a row of chips instead of a list */
+  .groups-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .group {
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 14px;
+  }
+  .group .tools {
+    display: inline-flex;
+  }
+}
+@media (max-width: 760px) {
+  .wrap {
+    max-height: none;
+  }
+  .meta .options {
+    flex-wrap: wrap;
+  }
+  th,
+  td {
+    padding: 5px 6px;
   }
 }
 </style>
