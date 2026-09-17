@@ -47,3 +47,10 @@ export function pickFiling(filings, { year, period, form } = {}) {
   return (originals.length ? originals : list)[0] || null;
 }
 
+
+// The store's file names of a filing and its score (store.js's naming, here
+// so the static build and its browser can derive them instead of shipping
+// 30,000 paths in the company index): a form's slash becomes '~'.
+const safeName = (s) => String(s ?? '-').replace(/\//g, '~').replace(/[^A-Za-z0-9.~-]/g, '_') || '-';
+export const filingFile = (cik, f, version) => `filings/${cik}/${f.accession}__${safeName(f.reportDate)}__${safeName(f.form)}__v${version}.json.zst`;
+export const scoreFile = (cik, f, version) => `scores/${cik}/${f.accession}__${safeName(f.reportDate)}__v${version}.json.zst`;

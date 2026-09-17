@@ -1,3 +1,9 @@
+/* ---- colours ----
+   Every colour the app uses is a token here, in a light and a dark set.
+   <html data-theme="light" | "dark"> picks the set: index.html sets it
+   before the first paint from the saved choice or the system setting, and
+   theme.js keeps it up to date. Components use the tokens only - no
+   literal colours - so both themes stay complete. */
 :root {
   --bg: #f6f7f9;
   --panel: #ffffff;
@@ -5,13 +11,110 @@
   --text: #1f2933;
   --muted: #6b7280;
   --accent: #2563eb;
+  --accent-strong: #1d4ed8;
   --accent-soft: #dbeafe;
+  --accent-softer: #eff6ff;
+  --on-accent: #ffffff;
+  --link: #2563eb;
   --neg: #b91c1c;
+  --neg-soft: #fee2e2;
+  --neg-border: #fca5a5;
+  --pos: #15803d;
+  --pos-soft: #dcfce7;
+  --warn: #b45309;
+  --warn-text: #92400e;
+  --warn-border: #f59e0b;
+  --warn-soft: #fffbeb;
+  --warn-softer: #fef3c7;
+  --star: #f59e0b;
   --row-alt: #fafbfc;
   --total: #f1f5f9;
+  --hover: #f8fafc;
+  --chip: #f3f4f6;
+  --chip-text: #374151;
+  --track: #e5e7eb;
+  --grid: #f1f3f6;
+  --shadow: rgba(0, 0, 0, 0.08);
+  --shadow-strong: rgba(0, 0, 0, 0.25);
+  --overlay: rgba(255, 255, 255, 0.85);
+  --overlay-soft: rgba(255, 255, 255, 0.35);
+  --on-accent-soft: rgba(255, 255, 255, 0.5);
+  /* tooltips: the inverse of the page */
+  --tip-bg: #1f2933;
+  --tip-text: #f9fafb;
+  --tip-muted: #cbd5e1;
+  --tip-accent: #93c5fd;
+  --tip-border: #374151;
+  /* scores: good / middling / bad */
+  --good: #166534;
+  --good-soft: #dcfce7;
+  --good-bar: #22c55e;
+  --mid: #854d0e;
+  --mid-soft: #fef9c3;
+  --mid-bar: #eab308;
+  --bad: #991b1b;
+  --bad-soft: #fee2e2;
+  --bad-bar: #ef4444;
+  /* candles: US convention (green up) - Asian (red up) swaps them */
+  --up: #16a34a;
+  --down: #dc2626;
+  color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans TC', 'PingFang TC', sans-serif;
   font-size: 14px;
   color: var(--text);
+}
+:root[data-theme='dark'] {
+  --bg: #0f1419;
+  --panel: #171d26;
+  --border: #2a3341;
+  --text: #e6e9ee;
+  --muted: #8b95a5;
+  --accent: #3b82f6;
+  --accent-strong: #93c5fd;
+  --accent-soft: #1e3a5f;
+  --accent-softer: #172a45;
+  --on-accent: #ffffff;
+  --link: #7cb0ff;
+  --neg: #f87171;
+  --neg-soft: #3b1d1d;
+  --neg-border: #7f1d1d;
+  --pos: #4ade80;
+  --pos-soft: #14301f;
+  --warn: #fbbf24;
+  --warn-text: #fcd34d;
+  --warn-border: #b45309;
+  --warn-soft: #2b2412;
+  --warn-softer: #3a2f14;
+  --star: #fbbf24;
+  --row-alt: #151b23;
+  --total: #1c2430;
+  --hover: #1c2430;
+  --chip: #232b36;
+  --chip-text: #d1d5db;
+  --track: #2a3341;
+  --grid: #1f2732;
+  --shadow: rgba(0, 0, 0, 0.5);
+  --shadow-strong: rgba(0, 0, 0, 0.7);
+  --overlay: rgba(23, 29, 38, 0.85);
+  --overlay-soft: rgba(23, 29, 38, 0.35);
+  --on-accent-soft: rgba(255, 255, 255, 0.5);
+  --tip-bg: #e6e9ee;
+  --tip-text: #1f2933;
+  --tip-muted: #4b5563;
+  --tip-accent: #1d4ed8;
+  --tip-border: #cbd5e1;
+  --good: #86efac;
+  --good-soft: #14301f;
+  --good-bar: #22c55e;
+  --mid: #fde68a;
+  --mid-soft: #3a2f14;
+  --mid-bar: #eab308;
+  --bad: #fca5a5;
+  --bad-soft: #3b1d1d;
+  --bad-bar: #ef4444;
+  --up: #22c55e;
+  --down: #ef4444;
+  color-scheme: dark;
 }
 
 * {
@@ -24,7 +127,7 @@ body {
 }
 
 a {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: none;
 }
 a:hover {
@@ -46,7 +149,7 @@ button:hover {
 button.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 button:disabled {
   opacity: 0.5;

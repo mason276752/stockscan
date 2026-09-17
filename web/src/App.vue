@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { api } from './api';
 import CompanySearch from './components/CompanySearch.vue';
 import FilingPicker from './components/FilingPicker.vue';
@@ -11,11 +11,13 @@ import { simplifyStatement } from '../../shared/simplify.js';
 import BrowsePage from './components/BrowsePage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
 import ScreenerPage from './components/ScreenerPage.vue';
-import BasketPage from './components/BasketPage.vue';
+// the custom-ETF page brings its charting library along: loaded when first opened
+const BasketPage = defineAsyncComponent(() => import('./components/BasketPage.vue'));
 import ScoreCard from './components/ScoreCard.vue';
 import Note from './components/Note.vue';
 import Loading from './components/Loading.vue';
 import { busy, download } from './busy';
+import { THEMES, theme } from './theme';
 import { isPhone } from './viewport';
 import { drop, prefetch, setBusy } from './prefetch';
 import { memoize } from './memo';
@@ -469,9 +471,14 @@ onMounted(() => {
         <button :class="{ active: page === 'basket' }" @click="page = 'basket'">{{ t('nav.basket') }}<span v-if="baskets.items.length" class="count">{{ baskets.items.length }}</span></button>
       </nav>
       <CompanySearch @select="openCompany" />
-      <select v-model="locale" class="lang" :title="t('header.language')">
-        <option v-for="[k, name] in LOCALES" :key="k" :value="k">{{ name }}</option>
-      </select>
+      <div class="prefs">
+        <select v-model="theme" class="lang" :title="t('header.theme')">
+          <option v-for="k in THEMES" :key="k" :value="k">{{ t(`theme.${k}`) }}</option>
+        </select>
+        <select v-model="locale" class="lang" :title="t('header.language')">
+          <option v-for="[k, name] in LOCALES" :key="k" :value="k">{{ name }}</option>
+        </select>
+      </div>
     </header>
     <p v-if="crawlText" class="muted small crawl" :title="t(isStatic ? 'crawl.staticTitle' : 'crawl.title')">{{ crawlText }}</p>
 
@@ -730,8 +737,10 @@ header .nav {
 header :deep(.search) {
   grid-area: search;
 }
-header .lang {
+header .prefs {
   grid-area: lang;
+  display: flex;
+  gap: 6px;
 }
 header .lang {
   font: inherit;
@@ -748,7 +757,7 @@ header .lang {
 .nav .count {
   margin-left: 5px;
   font-size: 11px;
-  background: rgba(255, 255, 255, 0.35);
+  background: var(--overlay-soft);
   border-radius: 8px;
   padding: 0 5px;
 }
@@ -766,7 +775,7 @@ header .lang {
   vertical-align: -1px;
 }
 .star.on {
-  color: #f59e0b;
+  color: var(--star);
 }
 .crawl {
   margin: -8px 0 12px;
@@ -816,7 +825,7 @@ h3 .picked {
 }
 .error {
   color: var(--neg);
-  background: #fee2e2;
+  background: var(--neg-soft);
   padding: 8px 12px;
   border-radius: 6px;
 }

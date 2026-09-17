@@ -433,10 +433,10 @@ tr.flow td.name {
   cursor: default;
 }
 td.good {
-  background: #dcfce7;
+  background: var(--good-soft);
 }
 td.bad {
-  background: #fee2e2;
+  background: var(--neg-soft);
 }
 .abs {
   display: grid;

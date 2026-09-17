@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>stockscan</title>
+    <!-- the colour theme before the first paint: the saved choice, else the system's (theme.js keeps it up to date) -->
+    <script>
+      try {
+        var t = localStorage.getItem('stockscan.theme');
+        document.documentElement.dataset.theme = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

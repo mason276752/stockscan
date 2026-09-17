@@ -426,7 +426,7 @@ onMounted(async () => {
 }
 .error {
   color: var(--neg);
-  background: #fee2e2;
+  background: var(--neg-soft);
   padding: 8px 12px;
   border-radius: 6px;
 }
@@ -486,11 +486,11 @@ main {
 .code.active,
 .etf.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .code.active .muted,
 .etf.active .muted {
-  color: #dbeafe;
+  color: var(--accent-soft);
 }
 .code .count {
   margin-left: auto;
@@ -596,7 +596,7 @@ th.star {
   font-size: 15px;
 }
 td.star .on {
-  color: #f59e0b;
+  color: var(--star);
 }
 tbody tr:nth-child(even) td {
   background: var(--row-alt);

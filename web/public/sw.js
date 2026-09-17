@@ -46,10 +46,31 @@ async function navigate(req) {
     return (await cache.match(key)) || Response.error();
   }
 }
+// the assets of the current page: what index.html references, plus what
+// those scripts load themselves (the dynamically imported data layer, the
+// worker it starts, the chunk of a page) - found by reading the cached
+// scripts for hashed file names, one level after another
 async function prune(cache, html, pageUrl) {
   const keep = new Set();
-  for (const m of html.matchAll(/(?:src|href)="([^"]*assets\/[^"]+)"/g)) keep.add(new URL(m[1], pageUrl).href);
+  const queue = [];
+  for (const m of html.matchAll(/(?:src|href)="([^"]*assets\/[^"]+)"/g)) {
+    const u = new URL(m[1], pageUrl).href;
+    keep.add(u);
+    queue.push(u);
+  }
   if (!keep.size) return;
+  while (queue.length) {
+    const u = queue.shift();
+    if (!/\.js$/.test(u)) continue;
+    const res = await cache.match(u);
+    if (!res) continue;
+    for (const m of (await res.text()).matchAll(/["'`]((?:\.\/)?[\w.-]+-[\w-]{8}\.(?:js|css|wasm))["'`]/g)) {
+      const ref = new URL(m[1], u).href;
+      if (keep.has(ref)) continue;
+      keep.add(ref);
+      queue.push(ref);
+    }
+  }
   for (const req of await cache.keys()) {
     const u = new URL(req.url);
     if (isAsset(u) && !keep.has(u.href)) await cache.delete(req);

@@ -59,9 +59,10 @@ const WARMUP = [
   ['idx:scores', 1],
   ['idx:documentation', 1],
   ['idx:tvsymbols', 0],
+  ['idx:browse', 0],
+  ['idx:etfs', 0],
   ['idx:companies', 1, 'big'],
   ['idx:universe', 0, 'big'],
-  ['idx:etfs', 0, 'big'],
   ['idx:screen', 0, 'big'],
   ['idx:screen-history', -1, 'big'],
 ];

@@ -172,7 +172,7 @@ th.star {
   font-size: 15px;
 }
 td.star .on {
-  color: #f59e0b;
+  color: var(--star);
 }
 .empty {
   padding: 24px;

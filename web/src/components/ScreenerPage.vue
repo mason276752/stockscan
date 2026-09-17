@@ -561,7 +561,7 @@ main {
 }
 .error {
   color: var(--neg);
-  background: #fee2e2;
+  background: var(--neg-soft);
   padding: 8px 12px;
   border-radius: 6px;
 }
@@ -635,7 +635,7 @@ th.star {
   font-size: 15px;
 }
 td.star .on {
-  color: #f59e0b;
+  color: var(--star);
 }
 .empty {
   text-align: center;
@@ -692,13 +692,13 @@ td.star .on {
   font-size: 12px;
 }
 .copy .editing {
-  color: #1d4ed8;
+  color: var(--accent-strong);
   font-weight: 600;
 }
 .copy button.primary {
-  background: #2563eb;
-  border-color: #2563eb;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
 }
 .copy input.n {
   width: 56px;
@@ -723,9 +723,9 @@ td.star .on {
   cursor: pointer;
 }
 .chip.on {
-  background: #fee2e2;
-  border-color: #fca5a5;
-  color: #991b1b;
+  background: var(--neg-soft);
+  border-color: var(--neg-border);
+  color: var(--bad);
   text-decoration: line-through;
 }
 .cond-head {
@@ -747,10 +747,10 @@ td.star .on {
   flex: none;
 }
 td.pos {
-  color: #15803d;
+  color: var(--pos);
 }
 th.chg,
 td.chg {
-  background: #f8fafc;
+  background: var(--hover);
 }
 </style>

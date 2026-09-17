@@ -16,9 +16,9 @@ import { fatten } from '../../server/lib/storeFormat.js';
 import { currentView } from '../../server/lib/current.js';
 import { buildQuarterly } from '../../server/lib/quarters.js';
 import { buildIndicators } from '../../server/lib/indicators.js';
-import { filingUrls, pickFiling } from '../../server/lib/filings.js';
+import { filingFile, filingUrls, pickFiling, scoreFile } from '../../server/lib/filings.js';
 import { ITEMS, SCORE_VERSION, scoreFiling } from '../../server/lib/scoreModel.js';
-import { SCREEN_FIELDS, browseCompanies, filerCounts, screenQuery, screenTable, searchRows, sicCounts, wantsHistory } from '../../server/lib/screen.js';
+import { SCREEN_FIELDS, browseCompanies, screenQuery, screenTable, searchRows, wantsHistory } from '../../server/lib/screen.js';
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
 import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
 import { basketRequest, runBasket } from '../../server/lib/basket.js';
@@ -45,7 +45,16 @@ async function companyOf(id) {
   }
   const c = all[cik];
   if (!c) throw new Error(t('static.noCompany', { cik }));
-  if (!c.filings[0]?.viewerUrl) for (const f of c.filings) Object.assign(f, { cik, isInlineXBRL: true }, f.primaryDocument ? filingUrls(cik, f.accession, f.primaryDocument) : {});
+  if (!c.filings[0]?.viewerUrl) {
+    // the store paths the index left out because they follow the naming
+    const m = await data.meta();
+    for (const f of c.filings) {
+      Object.assign(f, { cik, isInlineXBRL: true }, f.primaryDocument ? filingUrls(cik, f.accession, f.primaryDocument) : {});
+      f.file ??= filingFile(cik, f, m.scrapeVersion);
+      if (f.scoreFile === true) f.scoreFile = scoreFile(cik, f, m.scoreVersion);
+      else f.scoreFile ??= null;
+    }
+  }
   return c;
 }
 
@@ -160,14 +169,14 @@ const api = {
     if (!s) throw new Error('Cannot score this filing');
     return s;
   },
-  // browse pages
+  // browse pages (the counts come precomputed; the company lists from the universe)
   async browseSic() {
-    const u = await data.universe();
-    return { updatedAt: u.updatedAt, datasets: u.datasets, ...sicCounts(u.companies) };
+    const b = await data.browse();
+    return { updatedAt: b.updatedAt, datasets: b.datasets, ...b.sic };
   },
   async browseFiler() {
-    const u = await data.universe();
-    return { updatedAt: u.updatedAt, datasets: u.datasets, categories: filerCounts(u.companies) };
+    const b = await data.browse();
+    return { updatedAt: b.updatedAt, datasets: b.datasets, categories: b.filer };
   },
   async browseCompanies(params) {
     const u = await data.universe();
@@ -184,9 +193,9 @@ const api = {
   },
   async etfHoldings(ticker) {
     const e = await data.etfs();
-    const h = e.holdings[String(ticker).toUpperCase()];
-    if (!h) throw new Error(t('static.onlyEtfs', { list: e.popular.join(t('sep')) }));
-    return h;
+    const tk = String(ticker).toUpperCase();
+    if (!e.holdings.includes(tk)) throw new Error(t('static.onlyEtfs', { list: e.popular.join(t('sep')) }));
+    return data.etfHoldings(tk);
   },
   async etfLive(ticker) {
     // the N-PORT snapshot of the build stands in for the issuer's daily file
@@ -262,6 +271,7 @@ const WARM = {
   'idx:companies': data.companies,
   'idx:documentation': data.documentation,
   'idx:tvsymbols': data.tvSymbols,
+  'idx:browse': data.browse,
   'idx:universe': data.universe,
   'idx:etfs': data.etfs,
   'idx:screen': () => screenRows(false),

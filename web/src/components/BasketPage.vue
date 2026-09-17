@@ -431,8 +431,8 @@ const tvCompare = computed(() => {
 // wait for the first stats result so the coefficients are right from the start (or for its failure: then plain weights)
 const useTv = computed(() => chartSource.value === 'widget' && tvIncluded.value.length > 0 && !tvTooMany.value && (result.value || error.value || noBars.value));
 
-const upColor = computed(() => (colors.value === 'us' ? '#16a34a' : '#dc2626'));
-const downColor = computed(() => (colors.value === 'us' ? '#dc2626' : '#16a34a'));
+const upColor = computed(() => (colors.value === 'us' ? 'var(--up)' : 'var(--down)'));
+const downColor = computed(() => (colors.value === 'us' ? 'var(--down)' : 'var(--up)'));
 // the data chain: TradingView websocket, then TWS, then Yahoo
 const sourceText = computed(() => {
   const q = quotes.value;
@@ -899,7 +899,7 @@ button.danger:hover {
 .warnbox {
   margin: 0 0 12px;
   padding: 8px 12px;
-  background: #fef3c7;
+  background: var(--warn-softer);
   border-radius: 8px;
 }
 .srcbar {
@@ -934,13 +934,13 @@ button.danger:hover {
   vertical-align: middle;
 }
 .tag.manual {
-  color: #92400e;
-  border: 1px solid #f59e0b;
-  background: #fffbeb;
+  color: var(--warn-text);
+  border: 1px solid var(--warn-border);
+  background: var(--warn-soft);
 }
 input.w.manual {
-  border-color: #f59e0b;
-  background: #fffbeb;
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
 }
 .infobox {
   margin: 0 0 12px;
@@ -971,12 +971,12 @@ input.w.manual {
 .pbar {
   height: 6px;
   border-radius: 3px;
-  background: #e5e7eb;
+  background: var(--track);
   overflow: hidden;
 }
 .pbar .fill {
   height: 100%;
-  background: #2563eb;
+  background: var(--accent);
   border-radius: 3px;
   transition: width 0.25s ease;
 }
@@ -993,7 +993,7 @@ input.w.manual {
 }
 .ptext {
   margin-top: 6px;
-  color: #4b5563;
+  color: var(--muted);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1007,18 +1007,18 @@ input.w.manual {
 .chip {
   padding: 0 6px;
   border-radius: 10px;
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--accent-softer);
+  color: var(--accent-strong);
   font-size: 11px;
   line-height: 18px;
 }
 .chip.bench {
-  background: #f3f4f6;
-  color: #374151;
+  background: var(--chip);
+  color: var(--chip-text);
 }
 .chip.bad {
-  background: #fef2f2;
-  color: #b91c1c;
+  background: var(--neg-soft);
+  color: var(--neg);
 }
 .stats {
   display: flex;
@@ -1119,7 +1119,7 @@ tfoot .mini {
   margin: 8px 2px;
 }
 .warn {
-  color: #b45309;
+  color: var(--warn);
 }
 .empty {
   padding: 24px;

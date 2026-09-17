@@ -367,15 +367,21 @@ app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, d
 //    <key>_min / _max filter the value; <key>_chg_* the change since the
 //    previous filing; <key>_yoy_* the change since the same period a year
 //    earlier - percentage points for ratios, % growth for amounts and the score.
+// the rows are built once per (scores, universe, market snapshot) - each of
+// those is memoised by its module, so the same objects come back until one
+// is refreshed
+let screenMemo = null;
 app.get(
   '/api/screen',
   wrap(async (req, res) => {
     const u = await getUniverse(client);
-    const byCik = new Map(u.companies.map((c) => [c.cik, c]));
     const market = await marketSnapshot({ wait: wantsMarket(req.query) });
     const scores = latestScores();
-    const rows = screenRows(scores, byCik, market?.byTicker || null);
-    res.json({ ...screenQuery(rows, req.query), scored: scores.length, market: marketStatus() });
+    if (!screenMemo || screenMemo.u !== u || screenMemo.market !== market || screenMemo.scores !== scores) {
+      const byCik = new Map(u.companies.map((c) => [c.cik, c]));
+      screenMemo = { u, market, scores, rows: screenRows(scores, byCik, market?.byTicker || null) };
+    }
+    res.json({ ...screenQuery(screenMemo.rows, req.query), scored: scores.length, market: marketStatus() });
   }),
 );
 

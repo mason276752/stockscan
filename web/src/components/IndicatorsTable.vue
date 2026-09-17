@@ -220,10 +220,10 @@ tr.hover td.name {
   background: var(--accent-soft);
 }
 td.good {
-  background: #dcfce7 !important;
+  background: var(--good-soft) !important;
 }
 td.bad {
-  background: #fee2e2 !important;
+  background: var(--neg-soft) !important;
 }
 .bench {
   font-size: 11px;

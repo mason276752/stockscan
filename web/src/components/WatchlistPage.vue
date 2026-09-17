@@ -246,10 +246,10 @@ main {
 }
 .group.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .group.active .muted {
-  color: #dbeafe;
+  color: var(--accent-soft);
 }
 .group .gname {
   flex: 1;
@@ -262,8 +262,8 @@ main {
   display: inline-flex;
 }
 .group.active .tools button {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.5);
+  color: var(--on-accent);
+  border-color: var(--on-accent-soft);
   background: transparent;
 }
 .rename {
@@ -388,19 +388,19 @@ tbody tr:nth-child(even) td {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 td.star {
-  color: #f59e0b;
+  color: var(--star);
   cursor: pointer;
   text-align: center;
   width: 28px;
 }
 td.good {
-  color: #166534;
+  color: var(--good);
 }
 td.mid {
-  color: #854d0e;
+  color: var(--mid);
 }
 td.bad {
-  color: #991b1b;
+  color: var(--bad);
 }
 .note {
   margin-top: 10px;

@@ -127,29 +127,29 @@ const byCat = computed(() => props.score.categories.map((c) => ({ ...c, items: p
   font-size: 12px;
 }
 .good {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--good-soft);
+  color: var(--good);
 }
 .mid {
-  background: #fef9c3;
-  color: #854d0e;
+  background: var(--mid-soft);
+  color: var(--mid);
 }
 .bad {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--neg-soft);
+  color: var(--bad);
 }
 .none {
   background: var(--total);
   color: var(--muted);
 }
 .fill.good {
-  background: #22c55e;
+  background: var(--good-bar);
 }
 .fill.mid {
-  background: #eab308;
+  background: var(--mid-bar);
 }
 .fill.bad {
-  background: #ef4444;
+  background: var(--bad-bar);
 }
 .detail {
   margin-top: 12px;
@@ -177,13 +177,13 @@ td {
   vertical-align: top;
 }
 .good-t {
-  color: #166534;
+  color: var(--good);
 }
 .mid-t {
-  color: #854d0e;
+  color: var(--mid);
 }
 .bad-t {
-  color: #991b1b;
+  color: var(--bad);
 }
 @media (max-width: 900px) {
   .head {

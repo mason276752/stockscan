@@ -90,6 +90,10 @@ Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、�
   它分兩個檔：`screen.json.zst`（公司、評分、最新一份的 66 個指標、市場快照，1.6 MB）與 `screen-history.json.zst`（前一份與去年同期的對照，1.8 MB）——第一頁只等前者；「較前期」「較去年同期」的條件、排序或欄位（頁面帶 `history=1`）才等後者（`wantsHistory`）。
 - 純前端版的資料層跑在 Web Worker（[api.static.worker.js](web/src/api.static.worker.js)；頁面上的 [api.static.js](web/src/api.static.js) 只是把每個呼叫轉過去的 proxy）：抓檔、zstd 解壓、JSON parse、解財報算指標、算自製 ETF 指數與股價估值全在 worker 裡，索引也留在 worker 不搬回頁面，只有結果過線——主執行緒沒有任何 long task（之前載尋找股票索引會卡 ~130 ms）。錯誤訊息要用的語言隨每個請求帶過去（[locales/translate.js](web/src/locales/translate.js)，無 Vue 的 `t()`）。
   32 KB 以上的下載 worker 逐段讀、回報進度（`busy.downloads`）：頂端那條進度條在有已知大小的下載時顯示真實百分比，載入中的訊息旁顯示「1.2 / 1.6 MB」。
+- 第一次打開的關鍵路徑：`index.html` 帶 `<link rel="modulepreload">` 預載 worker、`<link rel="preload">` 預載 zstd 解碼器（vite.config.js 的小 plugin 在 build 時注入），跟主 JS 並行而不是串在它後面；zstd 字典（90 KB）只在真的要解財報 / 評分時才抓，索引與日線用不到。
+  自製 ETF 頁連同 lightweight-charts 與 TradingView datafeed 是獨立 chunk（`defineAsyncComponent`），第一次點才載：主 bundle 563 → 355 KB（gzip 185 → 118 KB）。
+  Service worker 清 app shell 快取時，會順著留下的 JS 把它們動態載入的 chunk（資料層、worker、頁面 chunk）也留下，不再每次導覽都刪掉重抓。
+  幾個索引再瘦身：`companies.json` 不再帶 3 萬個存檔路徑（照 store 命名規則在瀏覽器推回，只有例外才寫出：12.3 → 8.4 MB raw、0.7 → 0.5 MB）；分類瀏覽的產業 / 申報身分家數 build 時算好放 `browse.json`（0.1 MB raw），尋找股票與分類瀏覽首頁不必載 2 MB 的宇宙；熱門 ETF 的成分股一檔一個 `etf-VOO.json`，看哪檔抓哪檔，`etfs.json` 只剩清單。
 
 - 輸出目錄裡：Vue app（`VITE_STATIC=1` 編譯，資料層換成 [api.static.js](web/src/api.static.js)）、`data/store` 原樣複製、`data/zdict` 字典、
   `index/*.json.zst`（靜態主機列不出目錄，所以先產好：公司與其申報清單、代號表、最新評分、尋找股票的整張表、產業宇宙、TradingView 代號、熱門 ETF 成分）。
@@ -156,6 +160,7 @@ docker compose up -d --build # http://localhost:3000（或 BASE_URL 下）
 - **欄位**：預設「只看本期」，每張報表只留這份申報自己的期間 —— 資產負債表只有本期末、損益表只有本季三個月（10-K 為全年）、
   現金流量表與權益變動表為期初 / 本期 / 期末。10-Q 的現金流量表通常只有年初至今欄，本季 = 年初至今 − 上一季 10-Q 的年初至今，
   期初現金 = 上一季期末（欄位標「推算」）；切到「申報書全部欄位」可看原本的比較期間。
+- **配色**：淺色 / 深色，預設跟隨系統（`prefers-color-scheme`），右上角可固定其一，選擇存在 localStorage。所有顏色都是 [style.css](web/src/style.css) 開頭的 token（`--panel`、`--pos`、`--good-soft`…）兩套各一份，元件只用 token 不寫死顏色；`index.html` 在第一次繪製前就依存下的選擇或系統設定放好 `data-theme`，不會閃白；自己畫顏色的 K 線圖（lightweight-charts、TradingView 嵌入）讀 token、換主題時重畫（[theme.js](web/src/theme.js)）。
 - **語言**：介面支援中文 / 英文，第一次造訪依瀏覽器（系統）語言決定，右上角可切換，選擇存在 localStorage。
   介面文字在 `web/src/locales/zh.js`、`en.js`；指標名稱、公式、單位這類由 `server/lib` 產生的中文字串，英文版在 `en.js` 的 `data` 表對照。
   財報科目跟著介面語言：中文介面顯示中文對照，英文介面顯示申報書原文。
@@ -488,6 +493,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/tools/build-static.mjs`、`fetch-new.mjs` | 產生純前端版（`npm run build:static`）；一次性抓最近幾天的新申報（`npm run fetch:new`，排程用） |
 | `tools/stockscan-static/` | Rust：靜態版 build 的重活（`copy` 平行複製／hard link、`decode` 平行解開 store 取每份財報表頭與評分、`compress` 多執行緒 zstd）；索引的內容仍由 build-static.mjs 決定，兩條路輸出相同 |
 | `web/src/api.js`、`api.http.js`、`api.static.js`、`api.static.worker.js`、`staticData.js` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（頁面上的 proxy 與做事的 Web Worker：讀靜態檔 + 瀏覽器內計算、WASM zstd） |
+| `web/src/theme.js`、`busy.js` | 配色（跟隨系統 / 淺 / 深，圖表用的 token 讀取）；載入中指示與下載進度的共用狀態 |
 | `server/lib/barStore.js` | 日線快取：一檔一個 brotli 檔、記憶體 LRU、增量接續（`mergeDays` 核對重疊段）、一個月未用清除；舊 kv 裡的日線第一次啟動會搬過來 |
 | `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |
 | `server/lib/prefetch.js` | 閒置時背景預抓相鄰申報 |

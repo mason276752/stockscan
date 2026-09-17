@@ -64,8 +64,8 @@ const { openStore, store } = await import('../lib/store.js');
 openStore();
 const { SCRAPE_VERSION } = await import('../lib/scrape.js');
 const { SCORE_VERSION, latestScores } = await import('../lib/score.js');
-const { screenColumns, screenRows, scoreBadge } = await import('../lib/screen.js');
-const { fiscalLabel, DEFAULT_FORMS } = await import('../lib/filings.js');
+const { filerCounts, screenColumns, screenRows, scoreBadge, sicCounts } = await import('../lib/screen.js');
+const { fiscalLabel, filingFile, scoreFile, DEFAULT_FORMS } = await import('../lib/filings.js');
 const { lookupFiler, sicInfo } = await import('../lib/universe.js');
 const { POPULAR_ETFS } = await import('../lib/etf.js');
 
@@ -197,7 +197,7 @@ for (const t of tickers) (tickersByCik.get(t.cik) || tickersByCik.set(t.cik, [])
 console.log('build-static: reading filing headers …');
 const filingsByCik = new Map();
 for (const f of store.allFilings()) (filingsByCik.get(f.cik) || filingsByCik.set(f.cik, []).get(f.cik)).push(f);
-const scoreFile = new Map(store.allScores().filter((s) => s.version === SCORE_VERSION).map((s) => [s.accession, s.file]));
+const scoreFiles = new Map(store.allScores().filter((s) => s.version === SCORE_VERSION).map((s) => [s.accession, s.file]));
 const allowed = new Set(DEFAULT_FORMS.map((f) => f.toUpperCase()));
 const companies = {};
 let headers = 0;
@@ -214,8 +214,14 @@ for (const [cik, list] of filingsByCik) {
     if (!allowed.has(form.toUpperCase())) continue;
     const reportDate = h.periodEnd || rec.reportDate || null;
     const label = fye ? fiscalLabel(form, reportDate, fye) : { fiscalYear: h.fiscalYear ? Number(h.fiscalYear) : null, fiscalPeriod: h.fiscalPeriod || null };
-    // (document / viewer URLs are derived in the browser from primaryDocument)
-    filings.push({ accession: rec.accession, form, filingDate: h.filingDate || null, reportDate, primaryDocument: h.primaryDocument || null, ...label, file: rec.file, scoreFile: scoreFile.get(rec.accession) || null });
+    // (document / viewer URLs are derived in the browser from primaryDocument;
+    // so are the store paths when they follow the naming - file / scoreFile
+    // are only spelled out when they do not, scoreFile: true when they do)
+    const f = { accession: rec.accession, form, filingDate: h.filingDate || null, reportDate, primaryDocument: h.primaryDocument || null, ...label };
+    if (rec.file !== filingFile(cik, f, SCRAPE_VERSION)) f.file = rec.file;
+    const sf = scoreFiles.get(rec.accession);
+    if (sf) f.scoreFile = sf === scoreFile(cik, f, SCORE_VERSION) ? true : sf;
+    filings.push(f);
   }
   if (!filings.length) continue;
   filings.sort((a, b) => (a.filingDate < b.filingDate ? 1 : a.filingDate > b.filingDate ? -1 : 0));
@@ -249,12 +255,17 @@ const screenCols = screenColumns(screenRows(scores, byCik, market?.byTicker || n
 write('screen.json', screenCols.screen);
 write('screen-history.json', screenCols.history);
 write('universe.json', { updatedAt: universe.updatedAt, datasets: universe.datasets, companies: universe.companies });
+// the SIC / filer-status counts of the browse pages and the screener's
+// pickers, so those need not load the 2 MB universe
+write('browse.json', { updatedAt: universe.updatedAt, datasets: universe.datasets, sic: sicCounts(universe.companies), filer: filerCounts(universe.companies) });
 write('tvsymbols.json', Object.fromEntries(Object.entries(market?.byTicker || {}).map(([t, r]) => [t, { symbol: r.tv, exchange: r.exchange || null }])));
 
 // ETF list and the popular ETFs' holdings (from the caches; fetched when
 // SEC_USER_AGENT allows - a new N-PORT quarter means one big XML per ETF
-// from EDGAR, which is where a build spends minutes when it does)
-let etfs = { updatedAt: null, popular: POPULAR_ETFS, etfs: [], holdings: {} };
+// from EDGAR, which is where a build spends minutes when it does). The
+// list is one index, each ETF's holdings its own (etf-VOO.json): the browse
+// page loads the one it shows
+let etfs = { updatedAt: null, popular: POPULAR_ETFS, etfs: [], holdings: [] };
 try {
   if (!client) throw new Error('no SEC client');
   const { etfList, etfHoldings } = await import('../lib/etf.js');
@@ -265,7 +276,8 @@ try {
   for (const t of POPULAR_ETFS) {
     const t0 = Date.now();
     try {
-      etfs.holdings[t] = await etfHoldings(client, t);
+      write(`etf-${t}.json`, await etfHoldings(client, t));
+      etfs.holdings.push(t);
       const ms = Date.now() - t0;
       if (ms > 1000) console.log(`build-static: ETF ${t} holdings (N-PORT from EDGAR) ${(ms / 1000).toFixed(1)} s`);
     } catch (err) {

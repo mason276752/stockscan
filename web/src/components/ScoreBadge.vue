@@ -38,16 +38,16 @@ const title = () => {
   opacity: 0.8;
 }
 .good {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--good-soft);
+  color: var(--good);
 }
 .mid {
-  background: #fef9c3;
-  color: #854d0e;
+  background: var(--mid-soft);
+  color: var(--mid);
 }
 .bad {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--neg-soft);
+  color: var(--bad);
 }
 .none {
   background: var(--total);

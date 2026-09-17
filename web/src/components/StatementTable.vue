@@ -188,13 +188,13 @@ function rowClass(item) {
 .tip {
   position: fixed;
   z-index: 100;
-  background: #1f2933;
-  color: #f9fafb;
+  background: var(--tip-bg);
+  color: var(--tip-text);
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 12px;
   line-height: 1.5;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 8px 24px var(--shadow-strong);
   pointer-events: none;
   white-space: normal;
 }
@@ -206,10 +206,10 @@ function rowClass(item) {
   font-weight: 600;
 }
 .tip .tip-std {
-  color: #cbd5e1;
+  color: var(--tip-muted);
 }
 .tip .tip-concept {
-  color: #93c5fd;
+  color: var(--tip-accent);
   margin: 4px 0;
   word-break: break-all;
 }
@@ -217,9 +217,9 @@ function rowClass(item) {
   margin-top: 4px;
 }
 .tip .tip-doc {
-  color: #cbd5e1;
+  color: var(--tip-muted);
   margin-top: 4px;
-  border-top: 1px solid #374151;
+  border-top: 1px solid var(--tip-border);
   padding-top: 4px;
 }
 </style>
@@ -357,7 +357,7 @@ tfoot .small {
   font-size: 11px;
 }
 tfoot .ok {
-  color: #15803d;
+  color: var(--pos);
 }
 tfoot .bad {
   color: var(--neg);

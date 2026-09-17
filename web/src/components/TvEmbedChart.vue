@@ -6,6 +6,7 @@
 // symbol. TradingView allows at most 10 tickers in one spread.
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { locale, t } from '../i18n';
+import { cssVar, isDark } from '../theme';
 
 const props = defineProps({
   expression: { type: String, required: true }, // spread symbol
@@ -27,14 +28,14 @@ function mount() {
   if (!el.value) return;
   el.value.innerHTML = '';
   failed.value = false;
-  const up = props.colors === 'us' ? '#16a34a' : '#dc2626';
-  const down = props.colors === 'us' ? '#dc2626' : '#16a34a';
+  const up = cssVar(props.colors === 'us' ? '--up' : '--down');
+  const down = cssVar(props.colors === 'us' ? '--down' : '--up');
   const cfg = {
     autosize: true,
     symbol: props.expression,
     interval: 'D',
     timezone: 'America/New_York',
-    theme: 'light',
+    theme: isDark.value ? 'dark' : 'light',
     style: '1',
     locale: locale.value === 'zh' ? 'zh_TW' : 'en',
     allow_symbol_change: props.symbolChange,
@@ -76,7 +77,7 @@ onBeforeUnmount(() => {
   clearTimeout(timer);
   if (el.value) el.value.innerHTML = '';
 });
-watch(() => [props.expression, props.compare, props.range, props.colors, props.volume, props.symbolChange, locale.value], remount);
+watch(() => [props.expression, props.compare, props.range, props.colors, props.volume, props.symbolChange, locale.value, isDark.value], remount);
 </script>
 
 <template>

@@ -147,9 +147,9 @@ export const meta = () =>
   });
 
 // the indexes the build writes (name -> the parsed JSON of this build's file)
-const index = (name) =>
+export const index = (name) =>
   once(`index:${name}`, async () => {
-    const [m] = await Promise.all([meta(), zstd()]);
+    const [m] = await Promise.all([meta(), wasm()]);
     const file = m.files?.[name];
     if (!file) throw new Error(`index ${name}: not in this build`);
     const buf = await fetchImmutable(`/index/${file}`);
@@ -161,32 +161,24 @@ export const scoresMin = () => index('scores-min');
 export const screenIndex = () => index('screen');
 export const screenHistoryIndex = () => index('screen-history');
 export const universe = () => index('universe');
+export const browse = () => index('browse');
 export const etfs = () => index('etfs');
+export const etfHoldings = (ticker) => index(`etf-${ticker}`);
 export const tvSymbols = () => index('tvsymbols');
 export const documentation = () => index('documentation');
 
-// ---- zstd with dictionary ----
-let ready = null;
-const dicts = {};
-function zstd() {
-  if (!ready) {
-    ready = Promise.all([
-      init(wasmUrl),
-      ...['filings', 'scores'].map((kind) =>
-        fetchImmutable(`/data/zdict/${kind}-v1.zdict`).then((b) => {
-          dicts[kind] = b;
-        }),
-      ),
-    ]);
-  }
-  return ready;
-}
+// ---- zstd ----
+// the decoder (80 KB, preloaded by index.html) is all the indexes and bars
+// need; the dictionaries (90 KB) only come when a filing / score is read
+let wasmReady = null;
+const wasm = () => (wasmReady ??= init(wasmUrl));
+const dict = (kind) => once(`dict:${kind}`, () => fetchImmutable(`/data/zdict/${kind}-v1.zdict`));
 
 // a saved filing / score file -> the JSON the server would have read
 export const readZst = (kind, path) =>
   once(path, async () => {
-    const [buf] = await Promise.all([fetchImmutable(path), zstd()]);
-    return JSON.parse(utf8.decode(decompressUsingDict(createDCtx(), buf, dicts[kind], { defaultHeapSize: 8 * 1024 * 1024 })));
+    const [buf, d] = await Promise.all([fetchImmutable(path), dict(kind), wasm()]);
+    return JSON.parse(utf8.decode(decompressUsingDict(createDCtx(), buf, d, { defaultHeapSize: 8 * 1024 * 1024 })));
   });
 
 // ---- daily bars (data/bars/<source>/<SYMBOL>/…, plain zstd, no dictionary) ----
@@ -194,7 +186,7 @@ export const readZst = (kind, path) =>
 // with the build (versioned)
 const build = () => meta().then((m) => m.builtAt || '');
 export async function readBarsZst(path, { immutable = false } = {}) {
-  const [buf] = await Promise.all([immutable ? fetchImmutable(path) : fetchVersioned(path, await build()), zstd()]);
+  const [buf] = await Promise.all([immutable ? fetchImmutable(path) : fetchVersioned(path, await build()), wasm()]);
   return JSON.parse(utf8.decode(decompress(buf, { defaultHeapSize: 2 * 1024 * 1024 })));
 }
 export async function readBarsMeta(path) {

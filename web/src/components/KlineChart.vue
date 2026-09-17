@@ -9,6 +9,7 @@ import { CandlestickSeries, ColorType, CrosshairMode, LineSeries, createChart } 
 import { makeDatafeed } from '../tvDatafeed';
 import { url } from '../base';
 import { locale, t } from '../i18n';
+import { cssVar, isDark } from '../theme';
 
 const props = defineProps({
   bars: { type: Array, default: () => [] }, // [{ time: 'YYYY-MM-DD', open, high, low, close }]
@@ -29,8 +30,9 @@ let widget = null; // Advanced Charts
 const usingAdvanced = ref(false);
 let ro = null;
 
-const UP = computed(() => (props.colors === 'us' ? '#16a34a' : '#dc2626'));
-const DOWN = computed(() => (props.colors === 'us' ? '#dc2626' : '#16a34a'));
+// the chart draws its own colours: the theme's tokens, re-read when it changes (isDark)
+const UP = computed(() => isDark.value != null && cssVar(props.colors === 'us' ? '--up' : '--down'));
+const DOWN = computed(() => isDark.value != null && cssVar(props.colors === 'us' ? '--down' : '--up'));
 
 const byTime = computed(() => new Map(props.bars.map((b) => [b.time, b])));
 const shown = computed(() => hover.value || (props.bars.length ? { ...props.bars.at(-1), overlay: props.overlay.at(-1)?.value ?? null, last: true } : null));
@@ -54,15 +56,15 @@ function seriesOptions() {
 function mountLight() {
   chart = createChart(el.value, {
     height: props.height,
-    layout: { background: { type: ColorType.Solid, color: '#ffffff' }, textColor: '#1f2933', fontFamily: 'inherit' },
-    grid: { vertLines: { color: '#f1f3f6' }, horzLines: { color: '#f1f3f6' } },
+    layout: { background: { type: ColorType.Solid, color: cssVar('--panel') }, textColor: cssVar('--text'), fontFamily: 'inherit' },
+    grid: { vertLines: { color: cssVar('--grid') }, horzLines: { color: cssVar('--grid') } },
     crosshair: { mode: CrosshairMode.Normal },
-    rightPriceScale: { borderColor: '#e2e5ea' },
-    timeScale: { borderColor: '#e2e5ea', rightOffset: 3 },
+    rightPriceScale: { borderColor: cssVar('--border') },
+    timeScale: { borderColor: cssVar('--border'), rightOffset: 3 },
     localization: { locale: locale.value === 'zh' ? 'zh-TW' : 'en-US' },
   });
   candles = chart.addSeries(CandlestickSeries, seriesOptions());
-  line = chart.addSeries(LineSeries, { color: '#2563eb', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false });
+  line = chart.addSeries(LineSeries, { color: cssVar('--accent'), lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false });
   chart.subscribeCrosshairMove((p) => {
     if (!p.time || !p.point) {
       hover.value = null;
@@ -90,7 +92,6 @@ function setData(fit) {
 }
 
 // ---- TradingView Advanced Charts (only when the library is installed) ----
-const OVERLAY_COLOR = '#2563eb';
 function mountAdvanced() {
   const TV = window.TradingView;
   if (!TV?.widget) return false;
@@ -105,7 +106,7 @@ function mountAdvanced() {
     locale: locale.value === 'zh' ? 'zh_TW' : 'en',
     timezone: 'America/New_York',
     autosize: true,
-    theme: 'light',
+    theme: isDark.value ? 'dark' : 'light',
     // the datafeed only knows this basket (and its benchmark): no symbol search
     disabled_features: ['header_symbol_search', 'symbol_search_hot_key', 'header_compare', 'save_chart_properties_to_local_storage', 'create_volume_indicator_by_default'],
     enabled_features: ['hide_left_toolbar_by_default'],
@@ -126,7 +127,7 @@ function mountAdvanced() {
     // the benchmark (already rebased to the basket's 100) as a line on the same scale
     if (overlayName) {
       w.activeChart()
-        .createStudy('Overlay', true, false, { symbol: overlayName }, { style: 2, 'lineStyle.color': OVERLAY_COLOR, 'lineStyle.linewidth': 2, showPriceLine: false }, { priceScale: 'as-series', disableUndo: true })
+        .createStudy('Overlay', true, false, { symbol: overlayName }, { style: 2, 'lineStyle.color': cssVar('--accent'), 'lineStyle.linewidth': 2, showPriceLine: false }, { priceScale: 'as-series', disableUndo: true })
         .catch(() => {});
     }
     // ten years of daily bars are already on hand: show the whole range at once
@@ -168,6 +169,7 @@ watch(() => [props.bars, props.overlay], () => (widget ? remount() : setData(tru
 watch(() => props.colors, () => (widget ? remount() : candles?.applyOptions(seriesOptions())));
 watch(() => props.advanced, remount);
 watch(locale, remount);
+watch(isDark, remount);
 </script>
 
 <template>
@@ -206,7 +208,7 @@ watch(locale, remount);
   gap: 4px 12px;
   font-size: 12px;
   pointer-events: none;
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--overlay);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -223,7 +225,7 @@ watch(locale, remount);
   display: inline-block;
   width: 14px;
   height: 2px;
-  background: #2563eb;
+  background: var(--accent);
   vertical-align: middle;
   margin-right: 4px;
 }
