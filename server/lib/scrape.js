@@ -126,6 +126,8 @@ async function scrapeUncached(client, filing, company) {
       taxonomyFiles: tax.files,
     },
     dei: doc.dei,
+    // Compact parser-derived cover facts; raw facts and contexts are not kept.
+    coverShares: doc.coverShares || [],
     units: doc.units,
     statements,
     allStatements,

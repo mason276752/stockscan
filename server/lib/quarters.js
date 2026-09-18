@@ -566,7 +566,14 @@ export function yearQuarterPoints(docs, filings) {
     const end = filings[q].reportDate;
     three[i + 1] = flowsAt(docs[q], { end, monthsLen: 3 });
     ytd[i + 1] = i === 0 ? three[1] : flowsAt(docs[q], { end, monthsLen: 3 * (i + 1) });
-    points.push({ period: q, periodEnd: end, flows: {}, balances: balancesAt(docs[q], end), sources: [filings[q].accession] });
+    points.push({
+      period: q,
+      periodEnd: end,
+      flows: {},
+      balances: balancesAt(docs[q], end),
+      sources: [filings[q].accession],
+      coverShares: (docs[q].coverShares || []).map((x) => ({ ...x, accession: filings[q].accession, source: x.source || 'cover' })),
+    });
   }
   const fyFlows = docs.FY ? flowsAt(docs.FY, { end: filings.FY.reportDate, monthsLen: 12 }) : null;
 
@@ -589,12 +596,23 @@ export function yearQuarterPoints(docs, filings) {
 
   if (docs.FY) {
     const end = filings.FY.reportDate;
-    const q4 = { period: 'Q4', periodEnd: end, flows: {}, balances: balancesAt(docs.FY, end), sources: [filings.FY.accession], fy: fyFlows };
+    const q4 = {
+      period: 'Q4',
+      periodEnd: end,
+      flows: {},
+      balances: balancesAt(docs.FY, end),
+      sources: [filings.FY.accession],
+      fy: fyFlows,
+      coverShares: (docs.FY.coverShares || []).map((x) => ({ ...x, accession: filings.FY.accession, source: x.source || 'cover' })),
+    };
     for (const c of Object.keys(fyFlows)) {
       const c3 = cum[3]?.[c];
       q4.flows[c] = c3 != null ? fyFlows[c] - c3 : null;
     }
-    if (docs.Q3) q4.sources.push(filings.Q3.accession);
+    if (docs.Q3) {
+      q4.sources.push(filings.Q3.accession);
+      q4.coverShares.push(...(docs.Q3.coverShares || []).map((x) => ({ ...x, accession: filings.Q3.accession, source: x.source || 'cover' })));
+    }
     points.push(q4);
   }
   return points;

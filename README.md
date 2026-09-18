@@ -270,10 +270,10 @@ C1、C2、C3 取各季 10-Q 的年初至今欄（沒有就用上一季累計 + �
   現價每 10 分鐘更新、日線快取一天。
 - **股價基準**：預設用所選申報的**期末收盤價**（跟各期表一致），可切換成**申報日收盤**（看到財報時的價格）或**現在**的價格，也可自訂；
   倍數、合理價與絕對估值模型都用這個基準價。頁首同時列出三個價格。
-- **流通股數**：SEC companyconcept API 的 `dei:EntityCommonStockSharesOutstanding`（申報封面），依 accession 對到各期；
-  沒有時用 `us-gaap:CommonStockSharesOutstanding`，再沒有用稀釋加權平均股數。
+- **流通股數**：解析申報時直接從封面的 `dei:EntityCommonStockSharesOutstanding` 存入財報檔，依 accession 對到各期；封面只分列多個普通股類別（Alphabet 的 A/B/C）時，只有同一 class axis 下可證明互斥的類別才加總。舊檔缺這項時，伺服器才安全地以 SEC companyconcept 的單一、無衝突 accession 值補；再沒有才用 `us-gaap:CommonStockSharesOutstanding` 或稀釋加權平均股數。遇到維度／日期／類別不明時寧可不猜。
+  舊資料可在 Actions 手動執行 workflow 時勾選 `enrich_cover_shares` 一次補齊；或在 data ref checkout 裡設定 `SEC_USER_AGENT` 後跑 `npm run enrich:cover-shares`（先用 `-- --dry-run` 看統計）。這是 additive migration，不升 parser 版號也不刪歷史財報。
 - **近四季 EPS 跨分割**：各季 EPS 是各自申報書裡的當時數字，四季相加前先把分割前那幾季換到最後一季的股數基準（分割 4:1 就除以 4），不然分割後那三季的本益比會差好幾倍。
-- **純前端版**：同一份 [valuation.js](server/lib/valuation.js)（資料來源用 `deps` 注入：伺服器版在 [valuationServer.js](server/lib/valuationServer.js)），股價用隨網站發布的十年日線。沒有封面股數（用稀釋加權平均）、沒有匯率（非美元財報不換算，頁面標示）、沒有分割事件——由各期申報的股數跳動推得（`inferSplits`：相鄰兩期整倍數跳動，2:1 以上或 1:2 以下、誤差 8% 內；3:2 這種抓不到），並在頁面註明是推得的。
+- **純前端版**：同一份 [valuation.js](server/lib/valuation.js)（資料來源用 `deps` 注入：伺服器版在 [valuationServer.js](server/lib/valuationServer.js)），股價用隨網站發布的十年日線；已存的 parser 封面股數隨 filing 檔送到瀏覽器，所以不需再向 SEC 連線。沒有安全封面股數時才用稀釋加權平均；沒有匯率（非美元財報不換算，頁面標示）、沒有分割事件——由已選出的各期可信股數跳動推得（`inferSplits`：相鄰兩期整倍數跳動，2:1 以上或 1:2 以下、誤差 8% 內；3:2 這種抓不到），並在頁面註明是推得的。
 - **相對估值法**：本益比、股價淨值比、股價營收比、P/OCF、P/FCF、EV/EBITDA、EV/營收、現金股利殖利率、盈餘殖利率、自由現金流殖利率。
   每一期用「期末收盤價 × 該期近四季數字」，「現在」用現價 × 最近四季；再以歷史平均 / 中位數 / 最低 / 最高倍數 × 目前每股數字反推合理價、便宜價、昂貴價。
 - **絕對估值法**（假設可在頁面上改，預設 r 9%、gT 2.5%、N 5 年、g1 = 近幾年營收年複合成長率限 0–15%、稅率 = 近四季有效稅率限 10–30%）：
@@ -492,7 +492,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/index.js` | Express 路由、靜態檔案 |
 | `server/lib/secClient.js` | sec.gov HTTP client：User-Agent、10 req/s 限速、重試、高/低優先權（預抓讓路） |
 | `server/lib/filings.js`、`statementTypes.js`、`storeFormat.js`、`scoreModel.js`、`screen.js`、`marketFields.js`、`sic.js` | 純計算 / 純資料模組（無 Node I/O），伺服器與純前端版共用：申報清單工具、報表分類、存檔格式還原、評分模型、尋找股票與分類瀏覽的篩選排序、市場欄位、SIC 表 |
-| `server/tools/build-static.mjs`、`fetch-new.mjs` | 產生純前端版（`npm run build:static`）；一次性抓最近幾天的新申報（`npm run fetch:new`，排程用） |
+| `server/tools/build-static.mjs`、`fetch-new.mjs`、`enrich-cover-shares.mjs` | 產生純前端版（`npm run build:static`）；一次性抓最近幾天的新申報（`npm run fetch:new`，排程用）；安全補齊舊財報的封面股數（`npm run enrich:cover-shares`） |
 | `tools/stockscan-static/` | Rust：靜態版 build 的重活（`copy` 平行複製／hard link、`decode` 平行解開 store 取每份財報表頭與評分、`compress` 多執行緒 zstd）；索引的內容仍由 build-static.mjs 決定，兩條路輸出相同 |
 | `web/src/api.js`、`api.http.js`、`api.static.js`、`api.static.worker.js`、`staticData.js` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（頁面上的 proxy 與做事的 Web Worker：讀靜態檔 + 瀏覽器內計算、WASM zstd） |
 | `web/src/theme.js`、`busy.js` | 配色（跟隨系統 / 淺 / 深，圖表用的 token 讀取）；載入中指示與下載進度的共用狀態 |

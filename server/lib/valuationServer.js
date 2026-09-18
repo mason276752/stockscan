@@ -7,34 +7,36 @@ import { store } from './store.js';
 import { history } from './prices.js';
 import { priceSeries } from './priceSeries.js';
 import { buildValuation } from './valuation.js';
+import { indexCoverShares } from './coverShares.js';
 
 const CONCEPT_API = 'https://data.sec.gov/api/xbrl/companyconcept/';
 const SHARES_TTL = 24 * 3600 * 1000;
 
-// Shares outstanding per filing (accession) from the cover page, via companyconcept.
+// Cover-share fallback for old filing files. companyconcept does not expose
+// the filing contexts needed to prove multiple rows are distinct classes, so
+// accept only the index's unambiguous singleton values.
 async function sharesByAccession(client, cik) {
-  const key = `shares:${cik}`;
+  const key = `shares:v2:${cik}`;
   const saved = store.getKV(key);
-  if (saved && saved.ageMs < SHARES_TTL) return saved.value;
+  if (saved && saved.ageMs < SHARES_TTL && saved.value?.version === 2) return saved.value;
   const padded = String(cik).padStart(10, '0');
-  const out = { byAccn: {}, list: [] };
+  const rows = [];
   for (const [tax, concept] of [
     ['dei', 'EntityCommonStockSharesOutstanding'],
     ['us-gaap', 'CommonStockSharesOutstanding'],
   ]) {
     try {
       const j = await client.json(`${CONCEPT_API}CIK${padded}/${tax}/${concept}.json`);
-      for (const f of j.units?.shares || []) {
-        if (typeof f.val !== 'number' || f.val <= 0) continue;
-        if (!out.byAccn[f.accn]) out.byAccn[f.accn] = f.val;
-        out.list.push({ end: f.end, val: f.val, accn: f.accn });
-      }
-      if (out.list.length) break; // dei found: no need for the balance-sheet concept
+      rows.push(
+        ...(Array.isArray(j.units?.shares) ? j.units.shares : [])
+          .filter((f) => typeof f.val === 'number' && Number.isFinite(f.val) && f.val > 0 && f.accn && /^\d{4}-\d{2}-\d{2}$/.test(f.end || ''))
+          .map((f) => ({ accession: f.accn, end: f.end, value: f.val, source: 'companyconcept', concept: `${tax}:${concept}`, basis: `${tax}:${concept}` })),
+      );
     } catch (err) {
       if (err.status !== 404) console.warn(`companyconcept ${concept} for CIK ${cik}: ${err.message}`);
     }
   }
-  out.list.sort((a, b) => (a.end < b.end ? -1 : 1));
+  const out = indexCoverShares(rows);
   store.putKV(key, out);
   return out;
 }

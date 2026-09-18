@@ -115,10 +115,10 @@ const api = {
     const basis = params.basis === 'ttm' ? 'ttm' : 'x4';
     return buildIndicators(loadFiling, c, { year, period, n, basis, mode });
   },
-  // the valuation page from the saved filings and the shipped bars: no
-  // cover-page share counts (the diluted weighted average of each filing
-  // stands in), no split events (inferred from the share counts), no FX
-  // rates (a non-USD reporter's figures stay in its currency, flagged)
+  // the valuation page from saved filings and shipped bars: parsed cover
+  // shares travel inside each filing (buildValuation indexes them itself);
+  // this empty provider is only for pre-cover-share historical filings. No
+  // split events or FX rates are shipped.
   async valuation(id, params) {
     const c = await companyOf(id);
     const year = Number(params.year);
@@ -128,7 +128,7 @@ const api = {
     const adr = Math.max(0.0001, Number(params.adr) || 1);
     return buildValuation(c, { year, period, n, adr }, {
       load: loadFiling,
-      shares: async () => ({ byAccn: {}, list: [] }),
+      shares: async () => ({ version: 2, byAccn: {}, list: [] }),
       prices: async (ticker) => {
         const b = await api.bars(ticker);
         return { symbol: b.symbol, source: b.source, currency: b.currency, days: b.days.map((d) => ({ date: d.date, close: d.close })), splits: null, fetchedAt: b.fetchedAt, headMissing: b.headMissing };

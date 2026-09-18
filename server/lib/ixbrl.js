@@ -165,6 +165,98 @@ function measureName(m) {
   return (m || '').split(':').pop();
 }
 
+const COVER_SHARE_CONCEPTS = ['dei:EntityCommonStockSharesOutstanding', 'us-gaap:CommonStockSharesOutstanding'];
+const CLASS_AXIS = /(?:class|share|stock).*(?:class|share|stock)|(?:class|share|stock)axis/i;
+const TOTAL_MEMBER = /(?:total|aggregate)/i;
+
+// Extract the shares on a filing cover while the raw facts still retain their
+// contexts. A total needs to be whole-entity; when the cover lists classes
+// separately (Alphabet A/B/C), add them only if one class axis is the sole
+// difference. Ambiguity is deliberately omitted rather than guessed.
+export function coverSharesOf({ contexts = {}, units = {}, facts = [] }) {
+  const candidates = facts
+    .filter((f) => COVER_SHARE_CONCEPTS.includes(f.name) && f.numeric && Number.isFinite(f.value) && f.value > 0 && units[f.unitRef] === 'shares')
+    .map((f) => {
+      const c = contexts[f.contextRef];
+      const end = c?.instant || c?.end || null;
+      return c?.entity && /^\d{4}-\d{2}-\d{2}$/.test(end || '') ? { fact: f, entity: c.entity, end, dims: c.dimensions || {} } : null;
+    })
+    .filter(Boolean);
+  const byGroup = new Map();
+  for (const x of candidates) {
+    const key = `${x.fact.name}\u0000${x.entity}\u0000${x.end}`;
+    const a = byGroup.get(key) || [];
+    a.push(x);
+    byGroup.set(key, a);
+  }
+  const picked = [];
+  for (const xs of byGroup.values()) {
+    const { name } = xs[0].fact;
+    const aggregate = xs.filter((x) => Object.keys(x.dims).length === 0);
+    const aggregateValues = [...new Set(aggregate.map((x) => x.fact.value))];
+    if (aggregateValues.length === 1) {
+      picked.push({ end: xs[0].end, entity: xs[0].entity, value: aggregateValues[0], concept: name, basis: 'aggregate', classes: 1 });
+      continue;
+    }
+    // A conflicting undimensioned total must not fall through to class facts.
+    if (aggregateValues.length > 1) continue;
+    const byAxis = new Map();
+    for (const x of xs) {
+      const entries = Object.entries(x.dims);
+      if (entries.length !== 1 || !CLASS_AXIS.test(entries[0][0]) || TOTAL_MEMBER.test(entries[0][1])) continue;
+      const [axis, member] = entries[0];
+      const a = byAxis.get(axis) || [];
+      a.push({ ...x, member });
+      byAxis.set(axis, a);
+    }
+    const sums = [];
+    for (const [axis, members] of byAxis) {
+      if (members.length < 2) continue;
+      const seen = new Set();
+      let total = 0;
+      let bad = false;
+      for (const x of members) {
+        if (seen.has(x.member)) {
+          bad = true;
+          break;
+        }
+        seen.add(x.member);
+        total += x.fact.value;
+      }
+      if (!bad) sums.push({ axis, total, classes: members.length });
+    }
+    // Multiple class axes are not proof that their totals mean the same thing.
+    if (sums.length !== 1) continue;
+    const sum = sums[0];
+    picked.push({ end: xs[0].end, entity: xs[0].entity, value: sum.total, concept: name, basis: 'class-sum', classes: sum.classes });
+  }
+  // DEI is the filing-cover concept. Use US-GAAP only when DEI supplied no
+  // safe record for the same entity/date.
+  const out = [];
+  for (const x of picked.sort((a, b) => a.end.localeCompare(b.end) || a.entity.localeCompare(b.entity))) {
+    if (x.concept.startsWith('us-gaap:') && out.some((y) => y.end === x.end && y.entity === x.entity && y.concept.startsWith('dei:'))) continue;
+    out.push(x);
+  }
+  return out;
+}
+
+function mergeCoverShares(docs) {
+  const byKey = new Map();
+  for (const x of docs.flatMap((d) => d.coverShares || [])) {
+    const key = `${x.entity}\u0000${x.end}\u0000${x.concept}`;
+    const a = byKey.get(key) || [];
+    a.push(x);
+    byKey.set(key, a);
+  }
+  const out = [];
+  for (const xs of byKey.values()) {
+    const values = [...new Set(xs.map((x) => x.value))];
+    if (values.length !== 1) continue;
+    out.push(xs.find((x) => x.basis === 'aggregate') || xs[0]);
+  }
+  return out.filter((x) => !(x.concept.startsWith('us-gaap:') && out.some((y) => y !== x && y.end === x.end && y.entity === x.entity && y.concept.startsWith('dei:'))));
+}
+
 export function parseInlineXbrl(text) {
   const $ = loadXml(unifyPrefixes(text));
   const p = prefixMap($);
@@ -240,7 +332,7 @@ export function parseInlineXbrl(text) {
   deiFacts.sort((a, b) => dimCount(contexts, a) - dimCount(contexts, b));
   for (const f of deiFacts) if (!(f.name.slice(4) in dei)) dei[f.name.slice(4)] = f.value;
 
-  return { contexts, units, facts, schemaRef, dei };
+  return { contexts, units, facts, schemaRef, dei, coverShares: coverSharesOf({ contexts, units, facts }) };
 }
 
 // An Inline XBRL document set: a 10-K whose financial statements sit in a
@@ -250,7 +342,7 @@ export function parseInlineXbrl(text) {
 export function mergeInlineDocs(docs) {
   const [first, ...rest] = docs;
   if (!rest.length) return first;
-  const out = { contexts: { ...first.contexts }, units: { ...first.units }, facts: [...first.facts], schemaRef: first.schemaRef, dei: { ...first.dei } };
+  const out = { contexts: { ...first.contexts }, units: { ...first.units }, facts: [...first.facts], schemaRef: first.schemaRef, dei: { ...first.dei }, coverShares: mergeCoverShares(docs) };
   const seen = new Set(first.facts.filter((f) => f.numeric).map((f) => `${f.name}|${f.contextRef}`));
   for (const d of rest) {
     Object.assign(out.contexts, d.contexts);

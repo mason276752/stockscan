@@ -6,11 +6,10 @@
 // page. What else it needs comes through `deps`, so the server and the
 // static build share this file (no Node I/O here):
 //   load(filing)    -> the filing's data (scrapeFiling / the saved file)
-//   shares(cik)     -> { byAccn: { accession: shares }, list: [{ end, val, accn }] }
-//                      shares outstanding from cover pages (SEC's companyconcept
-//                      API on the server); { byAccn: {}, list: [] } when there
-//                      is none: then the weighted-average diluted count of each
-//                      filing stands in
+//   shares(cik)     -> a structured cover-share index from SEC's companyconcept
+//                      API on the server; stored parsed cover facts carried by
+//                      the points below always win. When neither has a safe
+//                      count, the filing's diluted weighted-average shares stand in.
 //   prices(ticker)  -> { symbol, source, currency, days: [{ date, close }],
 //                      splits, dividends?, fetchedAt, error?, eventsError? }
 //                      daily closes as the sources give them (split-adjusted
@@ -24,6 +23,7 @@
 
 import { C, first, loadPoints, quarterKeys } from './indicators.js';
 import { pickFiling } from './filings.js';
+import { coverSharesFor, indexCoverShares, mergeCoverShareIndexes } from './coverShares.js';
 import { MODELS, cagr, clamp, impliedPrice, multiplesAt, runModels } from '../../shared/valuation.js';
 
 // extra concepts beyond the indicators table
@@ -152,19 +152,18 @@ export async function buildValuation(company, { year, period, n = 20, adr = 1 },
   }
 
   // --- shares, prices, currency (in parallel) ------------------------------
-  // prices: daily closes, no live quote ("now" = last close)
-  const [shares, raw, reporting] = await Promise.all([
-    deps.shares(company.cik).catch(() => ({ byAccn: {}, list: [] })),
-    ticker ? deps.prices(ticker).catch((e) => ({ error: e.message, days: [] })) : Promise.resolve({ days: [], error: 'no ticker' }),
+  // The saved parser facts work in both server and static builds. The server's
+  // companyconcept response is only a fallback for older saved filings.
+  const savedShares = indexCoverShares(points.flatMap((pt) => pt.coverShares || []));
+  const [externalShares, raw, reporting] = await Promise.all([
+    deps.shares(company.cik).catch(() => ({ version: 2, byAccn: {}, list: [] })),
+    ticker ? deps.prices(ticker).catch((e) => ({ error: e.message, days: [] })) : Promise.resolve({ error: 'no ticker', days: [] }),
     reportingCurrency(load, company, year, period),
   ]);
+  const shares = mergeCoverShareIndexes(savedShares, externalShares);
   const sharesFor = (pt) => {
-    for (const a of pt.sources || []) if (shares.byAccn[a]) return { value: shares.byAccn[a], source: 'cover' };
-    if (pt.periodEnd) {
-      // nearest cover-page count dated within ~3 months after the period end
-      const c = shares.list.find((s) => s.end >= pt.periodEnd && s.end <= addDays(pt.periodEnd, 100));
-      if (c) return { value: c.val, source: 'cover' };
-    }
+    const cover = coverSharesFor(shares, pt);
+    if (cover) return { value: cover.value, source: cover.source };
     const wa = quarterly && pt.period === 'Q4' ? first(pt.fy, V.dilutedShares) : first(pt.flows, V.dilutedShares);
     return wa ? { value: wa, source: 'diluted' } : null;
   };

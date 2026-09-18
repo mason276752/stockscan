@@ -42,6 +42,12 @@ on:
     - cron: '30 23 * * 1-5' # 19:30 EDT - in the pause (18:30 EST: too early, the next one covers winter)
     - cron: '30 0 * * 2-6'  # 19:30 EST - in the pause (20:30 EDT: the next session has opened; yesterday's bar is final anyway)
   workflow_dispatch:
+    inputs:
+      enrich_cover_shares:
+        description: 'Safely enrich historical filing cover shares (one-time; ~one SEC request per CIK)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -100,6 +106,13 @@ jobs:
       - name: Fetch new filings from EDGAR
         if: github.event_name != 'push'
         run: npm run fetch:new
+
+      # One-time, opt-in data-ref migration for filings saved before the
+      # parser persisted cover shares. It never replaces parser values and
+      # rejects ambiguous companyconcept rows.
+      - name: Enrich historical cover shares
+        if: github.event_name == 'workflow_dispatch' && inputs.enrich_cover_shares
+        run: npm run enrich:cover-shares
 
       # this year's bars (head.zst of every symbol): restored from the last
       # run's cache, topped up from TradingView on scheduled / manual runs
