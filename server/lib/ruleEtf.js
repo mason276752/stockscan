@@ -30,6 +30,26 @@
 // the *next* session's open - EDGAR accepts filings until 22:00 ET, so
 // buying at the close of the filing day would be reading tomorrow's paper.
 //
+// The filters decide who qualifies on any day, but the portfolio is only
+// rebuilt on a fixed schedule - the first session of each month by default.
+// Following every filing the day after it lands is not something anyone
+// could trade: filings arrive all year, and a name drifting either side of
+// the price floor would turn the whole book over daily. Between rebalances
+// nothing is touched, with one exception: a holding whose prices stop
+// (delisted, taken private, renamed) is sold at its last close and the
+// proceeds spread over the rest in proportion to what they are worth, which
+// is what the hand-picked basket does.
+//
+// Weighting is equal by default. The other is by market value on the
+// rebalance day - the share count from the filing that was current then,
+// times that day's price, so it is what was knowable on the day and not
+// hindsight - with a ceiling on any one name (`maxWeight`), the excess
+// spread over the rest until everyone is inside it. A ceiling of 1 is plain
+// market-value weighting. A company whose filings never carry a diluted
+// share count (about a fifth of them: banks, funds and trusts whose income
+// statement does not tag one) is weighted as the median of the rest rather
+// than dropped, and they are named in the result.
+//
 // One thing the filters cannot express is whether a stock can be bought at
 // all. A screen on the statements alone admits OTC shells quoted at
 // $0.000001, where the smallest tick the market has is a 100% move: hold a
@@ -42,10 +62,16 @@
 import { RANGES, dateWindow, stats, yearsBefore } from './basket.js';
 import { pickAsOf, screenFilter, screenTable } from './screen.js';
 
-export const RULE_MAX_MEMBERS = 900; // names ever held: beyond this the bars alone are a download of tens of MB
+export const RULE_MAX_MEMBERS = 3000; // names ever held: beyond this the bars alone are a download of tens of MB
 const GONE_DAYS = 14; // no bar for this long while the others trade: delisted, not merely behind
 export const MIN_PRICE = 1; // a share under a dollar is not bought (quote noise swamps an equal-weight index)
 const WILD = 4; // a one-day move of this many times, while held: a split nobody adjusted, or a quote nobody could trade on
+// when the portfolio is rebuilt: the first session of each period ('filing'
+// is the old behaviour - the day after every filing that changes the list)
+export const REBALANCE = ['monthly', 'quarterly', 'yearly', 'filing'];
+export const WEIGHTING = ['equal', 'cap'];
+export const MAX_WEIGHT = 0.1; // no one name above a tenth of a market-value weighted index
+const SHARE_KEY = 'sharesDiluted'; // the screener value the market value is built on (millions of shares)
 
 const daysBefore = (date, n) => new Date(Date.parse(date) - n * 86400000).toISOString().slice(0, 10);
 
@@ -53,8 +79,11 @@ const daysBefore = (date, n) => new Date(Date.parse(date) - n * 86400000).toISOS
 // core: the company columns (index/screen.json, or the server's screener
 // rows); index: screenAsOfIndex over every scored filing; q: the screener
 // query as the URL carries it.
-//   members [{ cik, ticker, name, sic, spans: [{ from, to }] }]  ever held
-//   events  [{ date, add: [ticker], drop: [ticker], n }]          every change, in order
+//   members [{ cik, ticker, name, sic, spans: [{ from, to }], shares }]  ever held
+//   events  [{ date, add: [ticker], drop: [ticker], n }]                every change, in order
+// `shares` is [{ date, value }] whenever the diluted share count changed, for
+// the market-value weighting - read off the same filings the filters test, so
+// it costs nothing extra and knows only what was public on the day.
 export function replaySchedule(core, index, q) {
   const t = screenTable(core);
   const { test, skipped } = screenFilter(q, { market: false });
@@ -102,12 +131,15 @@ export function replaySchedule(core, index, q) {
     view.i = i;
     let held = false;
     const spans = [];
+    const shares = [];
     for (const d of dates) {
       const p = pickAsOf(list, d);
       view.cur = p.cur;
       view.prev = p.prev;
       view.yoy = p.yoy;
       tested++;
+      const sh = value(p.cur, SHARE_KEY);
+      if (sh > 0 && shares.at(-1)?.value !== sh) shares.push({ date: d, value: sh });
       const ok = !!p.cur && test(view, 0);
       if (ok === held) continue;
       held = ok;
@@ -115,7 +147,7 @@ export function replaySchedule(core, index, q) {
       else spans[spans.length - 1].to = d;
       changes.push({ date: d, ticker, add: ok });
     }
-    if (spans.length) members.push({ cik: t.cik(i), ticker, name: t.name(i), sic: t.sic(i), spans });
+    if (spans.length) members.push({ cik: t.cik(i), ticker, name: t.name(i), sic: t.sic(i), spans, shares });
   }
 
   changes.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.add === b.add ? 0 : a.add ? 1 : -1)); // drops before adds on the same day
@@ -169,16 +201,70 @@ export function windowSchedule(schedule, { from = null, to = null } = {}) {
   return { ...schedule, members, events, first: events[0]?.date || null, last: events.at(-1)?.date || null };
 }
 
+// ---- 1c. weights ----
+// No name above `cap`: the excess is spread over the rest in proportion to
+// what they already have, again until everyone is inside it. A cap below an
+// equal weight cannot be met by anyone, so it is not asked for.
+export function capWeights(w, cap) {
+  const limit = Math.max(cap, 1 / w.length);
+  if (!(limit < 1)) return w;
+  const out = [...w];
+  for (let pass = 0; pass < 24; pass++) {
+    let excess = 0;
+    let room = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i] > limit + 1e-12) excess += out[i] - limit;
+      else room += out[i];
+    }
+    if (!(excess > 1e-12) || !(room > 0)) break;
+    for (let i = 0; i < out.length; i++) out[i] = out[i] > limit + 1e-12 ? limit : out[i] * (1 + excess / room);
+  }
+  return out;
+}
+
+// Target weights for the names being bought. `cap(j)` is a name's market
+// value on the day, or 0 when its filings never carried a share count -
+// those take the median of the rest, so a fifth of the market (banks, funds)
+// is neither dropped nor guessed at.
+export function marketWeights(values, maxWeight) {
+  const known = values.filter((x) => x > 0).sort((a, b) => a - b);
+  if (!known.length) return values.map(() => 1 / values.length);
+  const mid = known[Math.floor(known.length / 2)];
+  const v = values.map((x) => (x > 0 ? x : mid));
+  const total = v.reduce((a, b) => a + b, 0);
+  return capWeights(
+    v.map((x) => x / total),
+    maxWeight,
+  );
+}
+
+// The sessions the portfolio is rebuilt on: the first one, and the first of
+// every month / quarter / year after it. null = 'filing', the old behaviour,
+// where any change in what the filters hold is traded the next session.
+export function rebalanceSessions(dates, every) {
+  if (every === 'filing') return null;
+  const bucket = (d) => (every === 'yearly' ? d.slice(0, 4) : every === 'quarterly' ? `${d.slice(0, 4)}Q${Math.floor((Number(d.slice(5, 7)) - 1) / 3)}` : d.slice(0, 7));
+  const on = new Uint8Array(dates.length);
+  let prev = null;
+  for (let k = 0; k < dates.length; k++) {
+    const b = bucket(dates[k]);
+    if (b !== prev) on[k] = 1;
+    prev = b;
+  }
+  return on;
+}
+
 // ---- 2. the index ----
-// members: [{ symbol, days }] (the bars fetched for the schedule's members);
-// events: replaySchedule's, by ticker. Equal weight over whoever is held and
-// has a price, restored at the open of the first session after every change.
+// members: [{ symbol, days, shares }] (the bars fetched for the schedule's
+// members, and their share counts); events: replaySchedule's, by ticker.
+// Whoever the filters hold and can be bought, bought at the open of each
+// rebalance session at `weighting`'s target weights.
 //
 // The bars are addressed by (member, day-of-the-calendar) through an
 // Int32Array of indexes into each member's own days - a Map per member of
 // 900 names over 1,800 sessions is 1.6 M entries and hundreds of MB, this
 // is 6 MB. -1 = no price that day (not listed yet, or no longer).
-export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, from = null, to = null } = {}) {
+export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, from = null, to = null, rebalance = 'monthly', weighting = 'equal', maxWeight = MAX_WEIGHT } = {}) {
   const notes = [];
   const rows = members.filter((m) => m.days?.length);
   for (const m of members) if (!m.days?.length) notes.push({ code: 'ruleNoBars', symbol: m.symbol });
@@ -226,6 +312,34 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
   const bars = [];
   const counts = []; // { date, n } whenever the number of holdings changes
   const per = rows.map(() => ({ days: 0, ret: 1, spells: 0, first: null, last: null, prevClose: 0, in: false, cheap: 0, wild: null }));
+  const on = rebalanceSessions(dates, rebalance);
+  // share count of member i as of session k, from the newest filing on or
+  // before the day (0 = its filings never carried one). k only ever moves
+  // forward, so each member keeps a pointer rather than a search.
+  const sharePtr = new Int32Array(rows.length);
+  const sharesAt = (i, k) => {
+    const list = rows[i].shares || [];
+    while (sharePtr[i] < list.length && list[sharePtr[i]].date <= dates[k]) sharePtr[i]++;
+    return sharePtr[i] > 0 ? list[sharePtr[i] - 1].value : 0;
+  };
+  const noShares = new Set();
+  // what the portfolio is worth at this session's open (a holding with no
+  // price left is worth its last close)
+  const valueAt = (k) => {
+    let owned = false;
+    let V = 0;
+    for (let i = 0; i < rows.length; i++) {
+      if (!units[i]) continue;
+      owned = true;
+      V += units[i] * (at[i][k] >= 0 ? px(i, k, 'open') : rows[i].days.at(-1).close);
+    }
+    return owned ? V : value;
+  };
+  const sell = (i, price) => {
+    if (!per[i].in) return;
+    per[i].ret *= price / per[i].prevClose; // the sale closes its stretch
+    per[i].in = false;
+  };
 
   for (let k = 0; k < n; k++) {
     const d = dates[k];
@@ -252,28 +366,42 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
       }
       now.push(i);
     }
-    const changed = now.length !== active.length || now.some((x, j) => x !== active[j]);
-    if (changed) {
-      // sell everything at this open (a name with no price left goes at its
-      // last close), then buy the new list in equal parts
-      let owned = false;
-      let V = 0;
-      for (let i = 0; i < rows.length; i++) {
-        if (!units[i]) continue;
-        owned = true;
-        const price = at[i][k] >= 0 ? px(i, k, 'open') : rows[i].days.at(-1).close;
-        V += units[i] * price;
-        if (per[i].in && !now.includes(i)) {
-          per[i].ret *= price / per[i].prevClose; // the sale closes its stretch
-          per[i].in = false;
-        }
-      }
-      if (!owned) V = value;
+    // A holding whose prices have stopped goes whatever day of the month it
+    // is - it cannot be held once nothing trades.
+    const stopped = on && !on[k] ? active.filter((i) => at[i][k] < 0) : [];
+    const rebalancing = on ? !!on[k] : now.length !== active.length || now.some((x, j) => x !== active[j]);
+    if (rebalancing) {
+      // sell everything at this open, then buy the new list at its weights
+      const V = valueAt(k);
+      for (const i of active) if (!now.includes(i)) sell(i, at[i][k] >= 0 ? px(i, k, 'open') : rows[i].days.at(-1).close);
       units = new Float64Array(rows.length);
-      if (now.length) for (const i of now) units[i] = V / now.length / px(i, k, 'open');
-      else value = V;
+      if (now.length) {
+        let w;
+        if (weighting === 'cap') {
+          const caps = now.map((i) => sharesAt(i, k) * px(i, k, 'open'));
+          now.forEach((i, j) => caps[j] > 0 || noShares.add(rows[i].symbol));
+          w = marketWeights(caps, maxWeight);
+        } else w = now.map(() => 1 / now.length);
+        now.forEach((i, j) => {
+          units[i] = (V * w[j]) / px(i, k, 'open');
+        });
+      } else value = V;
       active = now;
       counts.push({ date: d, n: now.length });
+    } else if (stopped.length) {
+      // sold at the last close, the money spread over the rest in proportion
+      // to what they are worth - it is not redeployed until the next rebalance
+      const proceeds = stopped.reduce((sum, i) => sum + units[i] * rows[i].days.at(-1).close, 0);
+      const staying = active.filter((i) => at[i][k] >= 0);
+      const rest = staying.reduce((sum, i) => sum + units[i] * px(i, k, 'open'), 0);
+      for (const i of stopped) {
+        sell(i, rows[i].days.at(-1).close);
+        units[i] = 0;
+      }
+      if (proceeds > 0 && rest > 0) for (const i of staying) units[i] *= 1 + proceeds / rest;
+      if (!staying.length) value = proceeds || value;
+      active = staying;
+      counts.push({ date: d, n: staying.length });
     }
     let bar;
     if (active.length) {
@@ -318,6 +446,7 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
   if (wild.length) notes.push({ code: 'ruleWild', n: wild.length, list: wild.slice(0, 6).map((w) => `${w.symbol} ${w.date} ×${w.factor.toFixed(1)}`).join(', ') + (wild.length > 6 ? ' …' : '') });
   const cheap = rows.filter((_m, i) => per[i].cheap);
   if (cheap.length) notes.push({ code: 'ruleCheap', n: cheap.length, price: minPrice, list: cheap.slice(0, 12).map((m) => m.symbol).join(', ') + (cheap.length > 12 ? ' …' : '') });
+  if (noShares.size) notes.push({ code: 'ruleNoShares', n: noShares.size, list: [...noShares].slice(0, 12).join(', ') + (noShares.size > 12 ? ' …' : '') });
 
   const end = bars.at(-1).time;
   const constituents = rows.map((m, i) => ({
@@ -334,7 +463,7 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
     delisted: gone[i],
   }));
   for (const c of constituents) if (!c.days && !c.cheap) notes.push({ code: 'ruleNeverTraded', symbol: c.symbol });
-  return { bars, start: bars[0].time, end, notes, constituents, counts, holding: counts.at(-1)?.n ?? 0, minPrice, stats: stats(bars) };
+  return { bars, start: bars[0].time, end, notes, constituents, counts, holding: counts.at(-1)?.n ?? 0, minPrice, rebalance, weighting, maxWeight, rebalances: on ? counts.length : null, stats: stats(bars) };
 }
 
 // POST /api/basket/rule's body -> the query to replay, and the window to
@@ -345,9 +474,20 @@ export function ruleRequest(body, today = new Date().toISOString().slice(0, 10))
   const params = body?.params && typeof body.params === 'object' ? body.params : null;
   if (!params) throw Object.assign(new Error('params (the screener query) is required'), { status: 400 });
   const minPrice = body.minPrice === undefined || body.minPrice === null || body.minPrice === '' ? MIN_PRICE : Number(body.minPrice);
+  const maxWeight = Number(body.maxWeight);
   let { from, to } = dateWindow(body);
   if (!from && RANGES[body?.range]) from = yearsBefore(to || today, RANGES[body.range]);
-  return { params, from, to, range: from || to ? body?.range || 'custom' : 'all', benchmark: body.benchmark ? String(body.benchmark).trim().toUpperCase() : null, minPrice: Number.isFinite(minPrice) && minPrice >= 0 ? minPrice : MIN_PRICE };
+  return {
+    params,
+    from,
+    to,
+    range: from || to ? body?.range || 'custom' : 'all',
+    benchmark: body.benchmark ? String(body.benchmark).trim().toUpperCase() : null,
+    minPrice: Number.isFinite(minPrice) && minPrice >= 0 ? minPrice : MIN_PRICE,
+    rebalance: REBALANCE.includes(body?.rebalance) ? body.rebalance : 'monthly',
+    weighting: WEIGHTING.includes(body?.weighting) ? body.weighting : 'equal',
+    maxWeight: Number.isFinite(maxWeight) && maxWeight > 0 && maxWeight <= 1 ? maxWeight : MAX_WEIGHT,
+  };
 }
 
 // Fetch the bars of every name the schedule ever holds (a few at a time) and
@@ -382,10 +522,14 @@ export async function runRuleEtf(schedule, req, fetchBars, { emit = null, signal
   await Promise.all(Array.from({ length: Math.min(8, jobs.length) }, worker));
   if (signal?.aborted) return null;
   const bench = req.benchmark ? out.find((m) => m?.symbol === req.benchmark) : null;
+  // the share counts belong to the company, the bars to the ticker: two
+  // companies filing under one ticker share a series, so their counts merge
+  const shares = new Map();
+  for (const m of schedule.members) shares.set(m.ticker, [...(shares.get(m.ticker) || []), ...(m.shares || [])].sort((a, b) => (a.date < b.date ? -1 : 1)));
   const series = ruleSeries(
-    out.filter((m) => m && wanted.has(m.symbol)),
+    out.filter((m) => m && wanted.has(m.symbol)).map((m) => ({ ...m, shares: shares.get(m.symbol) || [] })),
     schedule.events,
-    { minPrice: req.minPrice, from: req.from, to: req.to },
+    { minPrice: req.minPrice, from: req.from, to: req.to, rebalance: req.rebalance, weighting: req.weighting, maxWeight: req.maxWeight },
   );
   const failed = out.filter((m) => m?.error && wanted.has(m.symbol)).map((m) => ({ ticker: m.symbol, error: m.error }));
   return {

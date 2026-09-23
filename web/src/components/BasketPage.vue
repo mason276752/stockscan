@@ -82,10 +82,10 @@ watch(benchmark, (v) => localStorage.setItem('stockscan.basket.bench', v));
 watch(colors, (v) => localStorage.setItem('stockscan.kcolors', v));
 
 // A rule ETF (mode 'rule') has no constituent list: the screener filters it
-// was made from are replayed through history and whoever passes them that
-// day is held, at equal weight (server/lib/ruleEtf.js). So the weights, the
-// add / remove buttons and the rebalance choice are not shown for one - the
-// only thing to edit is the filters.
+// was made from are replayed through history and whoever passes them is held
+// (server/lib/ruleEtf.js). So the per-name weights and the add / remove
+// buttons are not shown for one - what can be set is how often the book is
+// rebuilt and how the weights are worked out, not which names are in it.
 const isRule = computed(() => current.value?.mode === 'rule');
 const schedule = ref(null); // the replay's summary, before the bars land
 // A screen on the statements alone admits shells quoted at $0.000001, where
@@ -94,6 +94,15 @@ const schedule = ref(null); // the replay's summary, before the bars land
 // buy whatever they picked); kept per browser, like the other chart choices.
 const minPrice = ref(localStorage.getItem('stockscan.rule.minprice') ?? '1');
 watch(minPrice, (v) => localStorage.setItem('stockscan.rule.minprice', v));
+// How often the book is rebuilt, and how the money is split over it. Equal
+// weight, or by market value with a ceiling on any one name (100% = plain
+// market value). Kept per browser like the rest of the chart choices.
+const ruleRebalance = ref(localStorage.getItem('stockscan.rule.rebalance') ?? 'monthly');
+const weighting = ref(localStorage.getItem('stockscan.rule.weighting') ?? 'equal');
+const maxWeight = ref(localStorage.getItem('stockscan.rule.maxweight') ?? '10');
+watch(ruleRebalance, (v) => localStorage.setItem('stockscan.rule.rebalance', v));
+watch(weighting, (v) => localStorage.setItem('stockscan.rule.weighting', v));
+watch(maxWeight, (v) => localStorage.setItem('stockscan.rule.maxweight', v));
 
 const quotes = ref(null); // /api/quotes/status
 const advanced = ref(false); // TradingView Advanced Charts loaded
@@ -286,7 +295,17 @@ async function run(force = false) {
   // filing that passed. Both kinds take the same window otherwise.
   const w = window_.value;
   const body = rule
-    ? { rule: true, params: b.source?.params || {}, range: ruleRange.value, ...w, benchmark: benchmark.value || null, minPrice: Number(minPrice.value) >= 0 ? Number(minPrice.value) : 1 }
+    ? {
+        rule: true,
+        params: b.source?.params || {},
+        range: ruleRange.value,
+        ...w,
+        benchmark: benchmark.value || null,
+        minPrice: Number(minPrice.value) >= 0 ? Number(minPrice.value) : 1,
+        rebalance: ruleRebalance.value,
+        weighting: weighting.value,
+        maxWeight: Number(maxWeight.value) > 0 ? Math.min(1, Number(maxWeight.value) / 100) : 0.1,
+      }
     : { constituents: included.map((c) => ({ ticker: c.ticker, cik: c.cik, weight: Number(c.weight) })), range: range.value, ...w, rebalance: b.rebalance, benchmark: benchmark.value || null };
   const key = JSON.stringify(body);
   if (!force && key === lastKey) return;
@@ -308,7 +327,7 @@ async function run(force = false) {
     // bars stream in one constituent at a time: progress shows as they land, the
     // chart (the previous one stays up meanwhile) is replaced once by the final index
     await (rule ? api.ruleEtfStream : api.basketStream)(
-      rule ? { params: body.params, range: body.range, from: body.from, to: body.to, benchmark: body.benchmark, minPrice: body.minPrice } : body,
+      rule ? { params: body.params, range: body.range, from: body.from, to: body.to, benchmark: body.benchmark, minPrice: body.minPrice, rebalance: body.rebalance, weighting: body.weighting, maxWeight: body.maxWeight } : body,
       (ev) => {
         if (id !== seq) return;
         if (ev.type === 'schedule') schedule.value = ev;
@@ -358,7 +377,7 @@ onMounted(async () => {
   await loadQuotes();
   run();
 });
-watch([current, range, ruleRange, benchmark, hidden], () => run());
+watch([current, range, ruleRange, benchmark, hidden, ruleRebalance, weighting], () => run());
 // dates are typed in (a half-typed year is a window of its own): wait
 let dateTimer = null;
 watch([from, to], () => {
@@ -366,7 +385,7 @@ watch([from, to], () => {
   dateTimer = setTimeout(run, 600);
 });
 let priceTimer = null;
-watch(minPrice, () => {
+watch([minPrice, maxWeight], () => {
   clearTimeout(priceTimer);
   if (isRule.value) priceTimer = setTimeout(run, 500);
 });
@@ -587,7 +606,17 @@ const sourceText = computed(() => {
               <option value="none">{{ t('bk.buyHold') }}</option>
               <option value="daily">{{ t('bk.dailyRebalance') }}</option>
             </select>
-            <span v-else class="muted small" :title="t('rule.equalTitle')">{{ t('rule.equal') }}</span>
+            <select v-if="isRule" v-model="ruleRebalance" class="small" :title="t('rule.rebalanceTitle')">
+              <option value="monthly">{{ t('rule.monthly') }}</option>
+              <option value="quarterly">{{ t('rule.quarterly') }}</option>
+              <option value="yearly">{{ t('rule.yearly') }}</option>
+              <option value="filing">{{ t('rule.onFiling') }}</option>
+            </select>
+            <select v-if="isRule" v-model="weighting" class="small" :title="t('rule.weightingTitle')">
+              <option value="equal">{{ t('rule.equal') }}</option>
+              <option value="cap">{{ t('rule.byCap') }}</option>
+            </select>
+            <label v-if="isRule && weighting === 'cap'" class="minprice small" :title="t('rule.maxWeightTitle')">{{ t('rule.maxWeight') }} <input v-model="maxWeight" type="number" min="1" max="100" step="1" /></label>
             <label v-if="isRule" class="minprice small" :title="t('rule.minPriceTitle')">{{ t('rule.minPrice') }} <input v-model="minPrice" type="number" min="0" step="0.5" /></label>
             <select v-model="benchmark" class="small" :title="t('bk.benchmarkTitle')">
               <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label() }}</option>

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { screenAsOfColumns, screenAsOfIndex } from '../server/lib/screen.js';
-import { replaySchedule, ruleRequest, ruleSeries, windowSchedule } from '../server/lib/ruleEtf.js';
+import { capWeights, marketWeights, rebalanceSessions, replaySchedule, ruleRequest, ruleSeries, windowSchedule } from '../server/lib/ruleEtf.js';
 
 // --- the pieces a replay reads: the company half (index/screen.json) and
 // every scored filing (index/screen-asof-<year>.json) ---
@@ -118,7 +118,7 @@ const ev = (date, add = [], drop = [], n = 0) => ({ date, add, drop, n });
 
 test('equal weight is restored at the open of the session after every change', () => {
   // A from the start; B joins on the 3rd (so from the 6th); A leaves on the 6th (so from the 7th)
-  const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-03', ['B']), ev('2020-01-06', [], ['A'])]);
+  const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-03', ['B']), ev('2020-01-06', [], ['A'])], { rebalance: 'filing' });
   assert.deepEqual(
     r.bars.map((b) => [b.time, b.open, b.high, b.low, b.close]),
     [
@@ -142,7 +142,7 @@ test('equal weight is restored at the open of the session after every change', (
 });
 
 test('holding nothing is flat, not a hole', () => {
-  const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-02', [], ['A']), ev('2020-01-06', ['B'])]);
+  const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-02', [], ['A']), ev('2020-01-06', ['B'])], { rebalance: 'filing' });
   assert.deepEqual(
     r.bars.map((b) => [b.time, b.close]),
     [
@@ -224,7 +224,7 @@ test('a window starts the index at 100 on its own first session, holding what th
 });
 
 test('a window ends where it is told: nothing after it is replayed', () => {
-  const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-03', ['B'])], { to: '2020-01-06' });
+  const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-03', ['B'])], { to: '2020-01-06', rebalance: 'filing' });
   assert.deepEqual(r.bars.map((b) => b.time), ['2020-01-02', '2020-01-03', '2020-01-06']);
   assert.equal(r.end, '2020-01-06');
   assert.equal(r.constituents.find((c) => c.symbol === 'B').days, 1, "and a constituent's return is what it did inside the window");
@@ -275,4 +275,77 @@ test('a range preset is counted back from the end of the window, and no window i
   assert.deepEqual([typed.from, typed.to], ['2019-01-01', '2020-12-31'], 'a window typed back to front is turned round');
   const schedule = { members: [], events: [] };
   assert.equal(windowSchedule(schedule, all), schedule, 'no window: the schedule is handed back as it is');
+});
+
+// --- the rebalance schedule ---
+const flat = (symbol, price, days, shares = null) => ({
+  symbol,
+  source: 'test',
+  days: days.map(([date, p]) => ({ date, open: p ?? price, high: p ?? price, low: p ?? price, close: p ?? price, volume: 100 })),
+  ...(shares ? { shares } : {}),
+});
+const JAN_FEB = [['2020-01-02'], ['2020-01-03'], ['2020-01-31'], ['2020-02-03'], ['2020-02-04']];
+
+test('the portfolio is only rebuilt on the first session of each month', () => {
+  const a = flat('A', 10, JAN_FEB);
+  const b = flat('B', 5, JAN_FEB);
+  // B qualifies in the middle of January - it waits for February
+  const r = ruleSeries([a, b], [ev('2020-01-01', ['A']), ev('2020-01-15', ['B'])]);
+  assert.deepEqual(r.counts, [{ date: '2020-01-02', n: 1 }, { date: '2020-02-03', n: 2 }]);
+  assert.equal(r.constituents.find((c) => c.symbol === 'B').first, '2020-02-03');
+  // and quarterly waits until April, yearly until next January
+  assert.deepEqual(ruleSeries([a, b], [ev('2020-01-01', ['A']), ev('2020-01-15', ['B'])], { rebalance: 'quarterly' }).counts, [{ date: '2020-01-02', n: 1 }]);
+  assert.deepEqual(ruleSeries([a, b], [ev('2020-01-01', ['A']), ev('2020-01-15', ['B'])], { rebalance: 'filing' }).counts, [{ date: '2020-01-02', n: 1 }, { date: '2020-01-31', n: 2 }]);
+});
+
+test('a holding whose prices stop is sold between rebalances, the money spread over the rest', () => {
+  const a = flat('A', 10, JAN_FEB);
+  const b = flat('B', 5, [['2020-01-02'], ['2020-01-03']]); // stops dead in January
+  const r = ruleSeries([a, b], [ev('2020-01-01', ['A', 'B'])]);
+  assert.deepEqual(r.bars.map((x) => [x.time, Math.round(x.close)]), [
+    ['2020-01-02', 100],
+    ['2020-01-03', 100],
+    ['2020-01-31', 100], // B sold at its last close, all of it into A - the level does not jump
+    ['2020-02-03', 100],
+    ['2020-02-04', 100],
+  ]);
+  assert.equal(r.counts.find((c) => c.date === '2020-01-31').n, 1, 'sold the day its prices were gone, not at the next rebalance');
+  assert.equal(r.constituents.find((c) => c.symbol === 'B').delisted, true);
+});
+
+test('market-value weighting is the share count of the filing that was current, times the price that day', () => {
+  const shares = (v) => [{ date: '2019-01-01', value: v }];
+  // A is worth 100m x $10, B 10m x $5 - and B doubles the next session
+  const a = flat('A', 10, [['2020-01-02'], ['2020-01-03']], shares(100));
+  const b = flat('B', 5, [['2020-01-02'], ['2020-01-03', 10]], shares(10));
+  const events = [ev('2020-01-01', ['A', 'B'])];
+  const at = (opts) => ruleSeries([a, b], events, opts).bars.at(-1).close;
+  assert.equal(Math.round(at({ weighting: 'equal' }) * 100) / 100, 150, 'equal weight: half of the index doubles');
+  assert.equal(Math.round(at({ weighting: 'cap', maxWeight: 1 }) * 1000) / 1000, 104.762, 'by market value, B is 1/21 of it');
+  assert.equal(Math.round(at({ weighting: 'cap', maxWeight: 0.6 }) * 100) / 100, 140, 'a ceiling of 60% leaves B with 40%');
+});
+
+test('a company whose filings never carried a share count is weighted as the median, not dropped', () => {
+  const a = flat('A', 10, [['2020-01-02'], ['2020-01-03']], [{ date: '2019-01-01', value: 100 }]);
+  const b = flat('B', 5, [['2020-01-02'], ['2020-01-03', 10]]); // no share count at all
+  const r = ruleSeries([a, b], [ev('2020-01-01', ['A', 'B'])], { weighting: 'cap', maxWeight: 1 });
+  assert.equal(Math.round(r.bars.at(-1).close), 150, 'B takes A’s market value, so the two are even');
+  assert.equal(r.notes.find((x) => x.code === 'ruleNoShares').n, 1);
+});
+
+const w4 = (xs) => xs.map((x) => Math.round(x * 1e4) / 1e4);
+test('the weight ceiling is spread over the rest, and an impossible one is ignored', () => {
+  assert.deepEqual(w4(capWeights([0.7, 0.2, 0.1], 0.4)), [0.4, 0.4, 0.2]);
+  assert.deepEqual(w4(capWeights([0.5, 0.5], 1)), [0.5, 0.5]);
+  assert.deepEqual(w4(capWeights([0.7, 0.2, 0.1], 0.1)), [0.3333, 0.3333, 0.3333], 'a tenth each over three names cannot add to one');
+  assert.deepEqual(w4(marketWeights([100, 50, 0], 1)), [0.4, 0.2, 0.4]);
+  assert.deepEqual(w4(marketWeights([0, 0], 1)), [0.5, 0.5], 'nobody has a share count: equal weight');
+});
+
+test('rebalance sessions are the first of each period', () => {
+  const d = ['2024-01-02', '2024-01-03', '2024-02-01', '2024-03-28', '2024-04-01', '2025-01-02'];
+  assert.deepEqual([...rebalanceSessions(d, 'monthly')], [1, 0, 1, 1, 1, 1]);
+  assert.deepEqual([...rebalanceSessions(d, 'quarterly')], [1, 0, 0, 0, 1, 1]);
+  assert.deepEqual([...rebalanceSessions(d, 'yearly')], [1, 0, 0, 0, 0, 1]);
+  assert.equal(rebalanceSessions(d, 'filing'), null);
 });
