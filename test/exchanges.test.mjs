@@ -13,7 +13,9 @@ test('a blank venue is decided by the company’s own submissions record', () =>
   assert.equal(onMajorExchange({ cik: 1, exchange: null }, of), true);
   assert.equal(onMajorExchange({ cik: 2, exchange: null }, of), false);
   assert.equal(onMajorExchange({ cik: 3, exchange: null }, of), true, 'one real listing is enough');
-  assert.equal(onMajorExchange({ cik: 9, exchange: null }, of), true, 'nothing known yet (a fresh IPO): kept');
+  // the record of a company dropped as OTC is dropped with it, so "keep what
+  // is unknown" would take it back on the next refresh and drop it again
+  assert.equal(onMajorExchange({ cik: 9, exchange: null }, of), false, 'nothing says it is listed anywhere: not covered');
   assert.equal(onMajorExchange({ cik: 2, exchange: 'Nasdaq' }, of), true, 'the table wins when it has an answer');
 });
 

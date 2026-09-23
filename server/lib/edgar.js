@@ -34,13 +34,13 @@ const TICKERS_DOC = 'tickers.json';
 // silence there keeps the company.
 const MAJOR_EXCHANGE = /^(nasdaq|nyse|amex|cboe|bats|iex|arca)/i;
 export const isMajorExchange = (x) => MAJOR_EXCHANGE.test(String(x || '').trim());
-// `venuesOf(cik)` answers for a row EDGAR left blank: the exchanges of the
-// company's own submissions record, or nothing when there is none.
-export const onMajorExchange = (row, venuesOf) => {
-  if (row.exchange) return isMajorExchange(row.exchange);
-  const venues = (venuesOf(row.cik) || []).filter(Boolean);
-  return !venues.length || venues.some(isMajorExchange);
-};
+// `venuesOf(cik)` answers for a row EDGAR left the venue blank on (a couple
+// of hundred of them: fresh listings, SPACs, shells on their way out) - the
+// exchanges of the company's own submissions record. With nothing to go on
+// the company is not covered, which is an answer that survives the purge:
+// "keep whatever is unknown" would re-admit an OTC shell the moment its
+// record was deleted, crawl it, and delete it again the next day.
+export const onMajorExchange = (row, venuesOf) => (row.exchange ? isMajorExchange(row.exchange) : (venuesOf(row.cik) || []).some(isMajorExchange));
 const savedVenues = (cik) => store.getDoc(`companies/${String(cik).padStart(10, '0')}.json`)?.value?.exchanges;
 
 // company_tickers_exchange.json is { fields: [...], data: [[...], ...] }.
@@ -50,10 +50,9 @@ export const tickerRows = (data) => {
 };
 
 export async function refreshTickers(client) {
-  const all = tickerRows(await client.json(TICKERS_URL));
-  const rows = all.filter((r) => onMajorExchange(r, savedVenues));
-  const off = all.length - rows.length;
-  if (off) console.log(`ticker table: ${off} 檔非主要交易所（OTC）的代號不納入`);
+  // SEC's file lists every filer that has a ticker, OTC included; those rows
+  // are dropped here, on every refresh, so nothing downstream ever sees them
+  const rows = tickerRows(await client.json(TICKERS_URL)).filter((r) => onMajorExchange(r, savedVenues));
   store.putKV('tickers', rows);
   store.putDoc(TICKERS_DOC, { updatedAt: new Date().toISOString(), tickers: rows });
   tickersMemo = rows;
