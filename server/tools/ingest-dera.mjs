@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 import { openStore, store, requireVersion } from '../lib/store.js';
 import { SecClient } from '../lib/secClient.js';
 import { getCompany, refreshTickers, savedTickers } from '../lib/edgar.js';
-import { zipEntryStream } from '../lib/remoteZip.js';
+import { readZipEntry, zipEntryStream } from '../lib/remoteZip.js';
 import { SCRAPE_VERSION } from '../lib/scrape.js';
 import { DERA_FORMS, dateSnapper, deraResult } from '../lib/dera.js';
 import { scoreFiling } from '../lib/scoreModel.js';
@@ -72,7 +72,17 @@ const secs = () => ((Date.now() - t0) / 1000).toFixed(0);
 
 // ---------------------------------------------------------------- quarters
 
-const quarterOf = (d) => `${d.getUTCFullYear()}q${Math.floor(d.getUTCMonth() / 3) + 1}`;
+// SEC publishes a quarter a few days after it ends, so the newest one that
+// can exist is the one before the current one.
+function lastQuarter(now = new Date()) {
+  let year = now.getUTCFullYear();
+  let q = Math.floor(now.getUTCMonth() / 3);
+  if (q === 0) {
+    q = 4;
+    year--;
+  }
+  return `${year}q${q}`;
+}
 const parseQuarter = (s) => {
   const m = /^(\d{4})q([1-4])$/.exec(String(s || '').toLowerCase());
   if (!m) throw new Error(`not a quarter: ${s} (want e.g. 2012q1)`);
@@ -176,8 +186,11 @@ async function* filingRows(zip, accessions) {
 
 // -------------------------------------------------------------- the dataset
 
+const zipPath = (quarter) => path.join(ZIPS, `${quarter}.zip`);
+
+// The whole zip, downloaded only once a quarter is known to hold work.
 async function ensureZip(client, quarter) {
-  const file = path.join(ZIPS, `${quarter}.zip`);
+  const file = zipPath(quarter);
   if (fs.existsSync(file) && fs.statSync(file).size > 1024) return file;
   fs.mkdirSync(ZIPS, { recursive: true });
   const url = `${DATASETS}${quarter}.zip`;
@@ -204,17 +217,18 @@ async function ensureZip(client, quarter) {
   }
 }
 
-// sub.txt is small enough to read whole.
-async function readSubmissions(zip) {
-  const rl = readline.createInterface({ input: await zipEntryStream(zip, 'sub.txt'), crlfDelay: Infinity });
-  let col = null;
+// sub.txt, from the copy on disk or - when there is none yet - from sec.gov
+// with Range requests. Which is the point: sub.txt is 2 MB of a 60-90 MB
+// zip, and it alone says whether a quarter holds anything worth rebuilding.
+// A run that downloaded every zip to find that out pulled gigabytes for
+// nothing and sec.gov started answering 429 (readZipEntries is what
+// universe.js pulls the filer table with).
+function parseSubmissions(text) {
+  const lines = text.split('\n');
+  const col = header(lines[0]);
   const out = [];
-  for await (const line of rl) {
-    if (!col) {
-      col = header(line);
-      continue;
-    }
-    const f = line.replace(/\r$/, '').split('\t');
+  for (let i = 1; i < lines.length; i++) {
+    const f = lines[i].replace(/\r$/, '').split('\t');
     if (f.length < 10) continue;
     out.push({
       adsh: f[col.adsh],
@@ -229,6 +243,21 @@ async function readSubmissions(zip) {
     });
   }
   return out;
+}
+
+async function readSubmissions(client, quarter) {
+  const file = zipPath(quarter);
+  if (fs.existsSync(file)) {
+    const chunks = [];
+    for await (const chunk of await zipEntryStream(file, 'sub.txt')) chunks.push(chunk);
+    return parseSubmissions(Buffer.concat(chunks).toString('utf8'));
+  }
+  try {
+    return parseSubmissions((await readZipEntry(client, `${DATASETS}${quarter}.zip`, 'sub.txt')).toString('utf8'));
+  } catch (err) {
+    if (err.status === 404) return null; // not published (a quarter still open)
+    throw err;
+  }
 }
 
 // tag.txt: the datatype (which says what a number's unit means), the standard
@@ -319,12 +348,12 @@ async function compareOne(sub, rows, edgar, tagOf, dataset) {
 // ---------------------------------------------------------------- one quarter
 
 async function ingestQuarter(client, quarter, tickerCiks, totals) {
-  const zip = await ensureZip(client, quarter);
-  if (!zip) {
+  const all = await readSubmissions(client, quarter);
+  if (!all) {
     log(`${quarter}: not published yet`);
     return;
   }
-  const subs = (await readSubmissions(zip)).filter((s) => DERA_FORMS.includes(s.form.toUpperCase()) && (ONLY_CIK ? s.cik === ONLY_CIK : tickerCiks.has(s.cik)));
+  const subs = all.filter((s) => DERA_FORMS.includes(s.form.toUpperCase()) && (ONLY_CIK ? s.cik === ONLY_CIK : tickerCiks.has(s.cik)));
   if (!subs.length) {
     log(`${quarter}: no submission of a listed company in the forms this keeps`);
     return;
@@ -373,6 +402,11 @@ async function ingestQuarter(client, quarter, tickerCiks, totals) {
   }
 
   log(`${quarter}: ${n(todo.size)} filings to ${COMPARE ? 'compare' : 'rebuild'}; reading the dataset …`);
+  const zip = await ensureZip(client, quarter);
+  if (!zip) {
+    log(`${quarter}: the dataset went away between reading its sub.txt and asking for the rest`);
+    return;
+  }
   const tags = await readTags(zip);
   const tagOf = (tag, version) => tags.get(`${tag}/${version}`) || null;
 
@@ -455,7 +489,7 @@ if (!tickers?.length) tickers = await refreshTickers(client);
 const tickerCiks = new Set(tickers.map((t) => t.cik));
 log(`${n(tickerCiks.size)} listed companies on EDGAR's ticker table; the store has ${n(store.filingCount())} filings`);
 
-const to = opt('--quarter') || opt('--to') || quarterOf(new Date());
+const to = opt('--quarter') || opt('--to') || lastQuarter();
 const from = opt('--quarter') || opt('--from') || FIRST;
 const list = quarters(from, to);
 log(`${list.length} quarters to walk, ${list[0]} back to ${list.at(-1)}${INCLUDE_INLINE ? ' (--include-inline: Inline XBRL filings too)' : ''}`);
