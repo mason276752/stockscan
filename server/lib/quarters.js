@@ -9,6 +9,7 @@
 // quarterly columns are simply the period-end balances of each filing.
 
 import { pickFiling } from './filings.js';
+import { SIBLINGS } from './concepts.js';
 
 const QUARTERS = ['Q1', 'Q2', 'Q3'];
 const TYPES = ['balance_sheet', 'income_statement', 'comprehensive_income', 'cash_flow'];
@@ -580,17 +581,35 @@ export function yearQuarterPoints(docs, filings) {
   const concepts = new Set();
   for (const m of [...Object.values(three), ...Object.values(ytd), fyFlows || {}]) for (const c of Object.keys(m)) concepts.add(c);
 
+  // A filer may rename a line mid-year (Alphabet's dividends paid went from
+  // us-gaap:PaymentsOfDividends to us-gaap:PaymentsOfOrdinaryDividends in its
+  // 2026 Q2 10-Q). The cumulative of the name that vanished is the previous
+  // cumulative of the one that took over, so the quarter still subtracts.
+  // Only an unambiguous swap counts: exactly one interchangeable concept
+  // (concepts.js) had a cumulative and stopped being reported this period -
+  // a line that is still there is a second line, not a new name for this one.
+  const renamed = (upto, c, reportsNow) => {
+    let found = null;
+    for (const s of SIBLINGS.get(c) || []) {
+      if (cum[upto]?.[s] == null || reportsNow(s)) continue;
+      if (found != null) return null;
+      found = cum[upto][s];
+    }
+    return found;
+  };
+
   const cum = { 0: {} };
-  for (const c of concepts) {
-    let prev = 0;
-    for (let n = 1; n <= 3; n++) {
+  for (let n = 1; n <= 3; n++) {
+    cum[n] = {};
+    const p = points.find((pt) => pt.period === `Q${n}`);
+    // every concept of the quarter before is settled, so a rename can look back
+    for (const c of concepts) {
       const y = ytd[n]?.[c];
       const t = three[n]?.[c];
+      const prev = n === 1 ? 0 : (cum[n - 1][c] ?? renamed(n - 1, c, (s) => ytd[n]?.[s] != null || three[n]?.[s] != null));
       const cur = y ?? (prev != null && t != null ? prev + t : null);
-      (cum[n] ||= {})[c] = cur;
-      const p = points.find((pt) => pt.period === `Q${n}`);
+      cum[n][c] = cur;
       if (p) p.flows[c] = t ?? (cur != null && prev != null ? cur - prev : null);
-      prev = cur;
     }
   }
 
@@ -606,7 +625,7 @@ export function yearQuarterPoints(docs, filings) {
       coverShares: (docs.FY.coverShares || []).map((x) => ({ ...x, accession: filings.FY.accession, source: x.source || 'cover' })),
     };
     for (const c of Object.keys(fyFlows)) {
-      const c3 = cum[3]?.[c];
+      const c3 = cum[3]?.[c] ?? renamed(3, c, (s) => fyFlows[s] != null);
       q4.flows[c] = c3 != null ? fyFlows[c] - c3 : null;
     }
     if (docs.Q3) {

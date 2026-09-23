@@ -313,14 +313,20 @@ export async function buildValuation(company, { year, period, n = 20, adr = 1 },
   // --- absolute models -----------------------------------------------------
   const years = columns.length > 1 ? (columns.length - 1) / span : null;
   const firstCol = columns[0];
+  // per-share figures of the first column are on the share basis of its own
+  // filing: the splits since then have to be undone before they can be
+  // compared with the latest (20 years of EPS across a 20:1 split is not a
+  // 29 % a year decline). Totals need nothing.
+  const wasSplit = firstCol && latest ? splitFactor(firstCol.periodEnd, latest.periodEnd) : 1;
+  const onLatestBasis = (x) => (x == null ? null : x / wasSplit);
   const growth = latest && firstCol && years
     ? {
         years,
         revenue: cagr(firstCol.ttm.revenue, latest.ttm.revenue, years),
-        eps: cagr(firstCol.ttm.eps, latest.ttm.eps, years),
+        eps: cagr(onLatestBasis(firstCol.ttm.eps), latest.ttm.eps, years),
         fcf: cagr(firstCol.ttm.fcf, latest.ttm.fcf, years),
-        dps: cagr(firstCol.perShare.dps, latest.perShare.dps, years),
-        bvps: cagr(firstCol.perShare.bvps, latest.perShare.bvps, years),
+        dps: cagr(onLatestBasis(firstCol.perShare.dps), latest.perShare.dps, years),
+        bvps: cagr(onLatestBasis(firstCol.perShare.bvps), latest.perShare.bvps, years),
       }
     : null;
   const taxRate = latest && latest.ttm.tax != null && latest.ttm.pretax > 0 ? clamp(latest.ttm.tax / latest.ttm.pretax, 0.1, 0.3) : 0.21;

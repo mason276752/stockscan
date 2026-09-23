@@ -3,14 +3,22 @@
 // screener can compare each company with its previous period and the same
 // period a year earlier.
 //
-//   1. sweep   walk the browse universe (largest public float first), fetch
-//              each company's filing list and save its newest DEPTH filings;
-//              companies checked in the last week are skipped, so a restart
-//              resumes where it left off
-//   2. watch   poll EDGAR's daily form index for new 10-K / 10-Q / 20-F /
-//              40-F from those companies and save them as they appear - also
-//              every half hour in the middle of a sweep, so today's filings
-//              never wait for the sweep to finish
+//   1. sweep    walk the browse universe (largest public float first), fetch
+//               each company's filing list and save its newest FIRST_PASS
+//               filings, so every company is worth opening within hours of a
+//               fresh start; companies checked in the last week are skipped,
+//               so a restart resumes where it left off. It is also the safety
+//               net: whatever was filed while the server was off falls
+//               between the watch window and the backfill cursor, and the
+//               next sweep picks it up.
+//   2. watch    poll EDGAR's daily form index for new 10-K / 10-Q / 20-F /
+//               40-F from those companies and save them as they appear - also
+//               every half hour in the middle of a sweep, so today's filings
+//               never wait for the sweep to finish
+//   3. backfill the rest of the history: the same daily index read backwards,
+//               one day per step, for as long as the server runs. Nothing
+//               caps how many filings a company ends up with - the store
+//               grows towards every Inline XBRL 10-K / 10-Q there is.
 //
 // Everything runs at low priority: it waits whenever the user is asking for
 // something, and it yields to the neighbour prefetcher.
@@ -22,10 +30,26 @@ import { getUniverse } from './universe.js';
 import { scoreAccession } from './score.js';
 
 const CHECK_TTL = 7 * 24 * 3600 * 1000; // re-sweep a company after this long
-const DEPTH = 5; // filings per company: the latest, the previous, and the same quarter a year ago with room to spare
-const CHECKED_KEY = `crawl:checked:d${DEPTH}`; // a new depth starts the sweep over
+// What the sweep grabs per company on its first visit: enough to score it
+// and compare it with the previous period and the year before. It is not a
+// limit on the store - the backfill keeps adding older filings behind it.
+const FIRST_PASS = 5;
+const CHECKED_KEY = `crawl:checked:d${FIRST_PASS}`; // a new depth starts the sweep over
 const WATCH_EVERY = 30 * 60 * 1000; // daily-index poll interval
-const WATCH_DAYS = 7; // how far back the daily index is read on (re)start
+const WATCH_DAYS = 7; // how far back the daily index is read normally
+// ... and at most, when the server was off for longer than that: the watch
+// then reads every day back to the last one it did read, so a gap is filled
+// by the daily index rather than left to the next sweep. Beyond this the
+// sweep's first pass (the newest filings of every company) is what covers it.
+const WATCH_MAX_DAYS = 90;
+// The backfill walks the daily index backwards from just before the watch
+// window and stops here: EDGAR has daily indexes back to 1994, but Inline
+// XBRL (the only thing this parser reads) starts with the 2019 phase-in, so
+// earlier days hold nothing to parse. STOCKSCAN_CRAWL_FROM moves the floor
+// (a later date keeps the store smaller).
+const BACKFILL_FLOOR = (process.env.STOCKSCAN_CRAWL_FROM || '2019-01-01').slice(0, 10);
+const BACKFILL_KEY = 'crawl:backfill'; // { day } - the next (older) day to read
+const BACKFILL_SUBMISSIONS_TTL = 7 * 24 * 3600 * 1000; // an old day's filings: a filing list from this week will do
 const MAX_FAILS = 3; // give up on a filing that keeps failing to parse
 const LOG_EVERY = 10_000; // progress line during the sweep
 // Companies crawled at the same time. One filing is ~8 short SEC requests
@@ -42,6 +66,10 @@ function edgarDay(offsetDays = 0) {
   const d = new Date(Date.now() - offsetDays * 86_400_000);
   return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
+
+// YYYY-MM-DD a day earlier, and the number of days between two of them
+const prevDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+const daysBetween = (a, b) => Math.max(0, Math.round((Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000));
 
 function dailyIndexUrl(day) {
   const [y, m] = day.split('-').map(Number);
@@ -69,7 +97,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   const low = client.lowPriority();
   const state = {
     enabled,
-    phase: 'waiting', // waiting | sweep | watch
+    phase: 'waiting', // waiting | sweep | watch | backfill
     round: 0,
     total: 0,
     position: 0,
@@ -82,8 +110,13 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     startedAt: null,
     lastWatch: null,
     watched: 0, // filings picked up from the daily index
-    depth: DEPTH,
+    depth: FIRST_PASS,
     watchLog: [], // the last new filings picked up by the daily index
+    // the walk back through the daily index (phase 'backfill')
+    backfill: (() => {
+      const day = store.getKV(BACKFILL_KEY)?.value?.day || null;
+      return { day, floor: BACKFILL_FLOOR, left: day ? daysBetween(day, BACKFILL_FLOOR) : null, days: 0, saved: 0, done: !!day && day < BACKFILL_FLOOR };
+    })(),
   };
   const fails = store.getKV('crawl:fails')?.value || {};
   const inFlight = new Set(); // one label per lane, shown in the status line
@@ -167,8 +200,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         }
         try {
           const company = await getCompany(low, String(c.cik));
-          // the newest DEPTH originals (amendments rarely carry full statements)
-          const wanted = company.filings.filter((f) => !/\/A$/i.test(f.form || '')).slice(0, DEPTH);
+          // the newest FIRST_PASS originals (amendments rarely carry full statements)
+          const wanted = company.filings.filter((f) => !/\/A$/i.test(f.form || '')).slice(0, FIRST_PASS);
           let had = 0;
           for (const filing of wanted) {
             if (store.hasFiling(filing.accession)) had++;
@@ -196,7 +229,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   function logProgress() {
     const remaining = state.total - state.position;
     console.log(
-      `crawl: 已備齊 ${n(state.done)} / ${n(state.total)} 家最近 ${DEPTH} 期財報，還需處理 ${n(remaining)} 家` +
+      `crawl: 已備齊 ${n(state.done)} / ${n(state.total)} 家最近 ${FIRST_PASS} 期財報，還需處理 ${n(remaining)} 家` +
         `（本輪新存 ${n(state.saved)}、失敗 ${n(state.failed)}）${state.current ? ` 目前 ${state.current}` : ''}`,
     );
   }
@@ -209,7 +242,12 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     const known = new Set(tickers.map((t) => t.cik));
     const done = store.getKV('crawl:days')?.value || {}; // day -> true once a past day is fully processed
     const today = edgarDay();
-    for (let back = WATCH_DAYS; back >= 0; back--) {
+    // the usual few days, or everything since the last day read if the
+    // server has been away longer than that
+    const newestDone = Object.keys(done).sort().at(-1) || null;
+    const days = Math.min(WATCH_MAX_DAYS, Math.max(WATCH_DAYS, newestDone ? daysBetween(today, newestDone) : WATCH_DAYS));
+    if (days > WATCH_DAYS) console.log(`crawl: 上次讀 daily index 是 ${newestDone}，這次往回讀 ${days} 天補齊`);
+    for (let back = days; back >= 0; back--) {
       const day = edgarDay(back);
       if (done[day]) continue;
       let text;
@@ -244,11 +282,89 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
       }
       if (day < today) done[day] = true;
     }
-    for (const day of Object.keys(done)) if (day < edgarDay(WATCH_DAYS + 7)) delete done[day];
+    for (const day of Object.keys(done)) if (day < edgarDay(WATCH_MAX_DAYS + 7)) delete done[day];
     store.putKV('crawl:days', done);
     state.lastWatch = new Date().toISOString();
     state.lastWatchDay = today;
-    if (before === 'sweep') state.phase = 'sweep';
+    if (before === 'sweep' || before === 'backfill') state.phase = before;
+  }
+
+  // ---- backfill: the older filings, one EDGAR day at a time ----
+  // The same daily index the watch reads, walked backwards from just before
+  // the watch window: every 10-K / 10-Q / 20-F / 40-F of a listed company
+  // that is not on disk yet is fetched, then the cursor steps back a day and
+  // is written to the store, so a restart carries on where it stopped.
+  // Returns false when the day could not be read (the caller waits a while)
+  // or the floor is reached.
+  function backfillCursor() {
+    const saved = store.getKV(BACKFILL_KEY)?.value?.day;
+    return saved && /^\d{4}-\d{2}-\d{2}$/.test(saved) ? saved : edgarDay(WATCH_DAYS + 1);
+  }
+  function setCursor(day) {
+    store.putKV(BACKFILL_KEY, { day, updatedAt: new Date().toISOString() });
+    state.backfill.day = day;
+    state.backfill.left = daysBetween(day, BACKFILL_FLOOR);
+    state.backfill.done = day < BACKFILL_FLOOR;
+  }
+
+  async function backfillDay() {
+    const day = backfillCursor();
+    state.backfill.day = day;
+    state.backfill.left = daysBetween(day, BACKFILL_FLOOR);
+    if (day < BACKFILL_FLOOR) {
+      state.backfill.done = true;
+      return false;
+    }
+    state.phase = 'backfill';
+    await yieldToUser();
+    let text;
+    try {
+      text = await low.text(dailyIndexUrl(day));
+    } catch (err) {
+      // no index for a weekend / holiday: SEC answers 404, or 403 for some paths
+      if (err.status === 404 || err.status === 403) {
+        setCursor(prevDay(day));
+        return true;
+      }
+      console.warn(`crawl backfill ${day}: ${err.message}`);
+      return false; // a network hiccup: the same day again in a moment
+    }
+    const known = new Set((await tickerTable(client)).map((t) => t.cik));
+    const rows = parseDailyIndex(text).filter((r) => FORMS.has(r.form) && known.has(r.cik) && !store.hasFiling(r.accession));
+    // one filing list serves every filing a company sent that day
+    const byCik = new Map();
+    for (const r of rows) (byCik.get(r.cik) || byCik.set(r.cik, []).get(r.cik)).push(r.accession);
+    let saved = 0;
+    for (const [cik, accessions] of byCik) {
+      await yieldToUser();
+      try {
+        // no refresh: a list from this week already has a filing this old
+        const company = await getCompany(low, String(cik), { maxAge: BACKFILL_SUBMISSIONS_TTL });
+        const got = [];
+        for (const acc of accessions) {
+          const filing = company.filings.find((f) => f.accession === acc); // absent = not Inline XBRL, nothing to parse
+          if (filing && (await saveLatest(company, filing))) got.push(filing);
+        }
+        if (!got.length) continue;
+        saved += got.length;
+        // the filing right after each of these was scored without them (a
+        // quarter's score reads the quarter before it): redo those as well
+        const redo = new Map(got.map((f) => [f.accession, f]));
+        for (const f of got) {
+          const i = company.filings.indexOf(f); // newest first
+          if (i > 0) redo.set(company.filings[i - 1].accession, company.filings[i - 1]);
+        }
+        await scoreSaved([...redo.values()]);
+      } catch (err) {
+        state.failed++;
+        console.warn(`crawl backfill ${day} CIK ${cik}: ${err.message}`);
+      }
+    }
+    state.backfill.days++;
+    state.backfill.saved += saved;
+    setCursor(prevDay(day));
+    if (rows.length) console.log(`crawl 補舊財報 ${day}：${n(rows.length)} 份待補、新存 ${n(saved)} 份（共 ${n(store.filingCount())} 份，往回補到 ${BACKFILL_FLOOR} 還有 ${n(state.backfill.left)} 天）`);
+    return true;
   }
 
   async function run() {
@@ -261,6 +377,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         await sleep(10 * 60 * 1000);
         continue;
       }
+      // until the next sweep: watch for today's filings every WATCH_EVERY and
+      // spend the time in between walking the daily index backwards
       const until = Date.now() + CHECK_TTL;
       while (Date.now() < until) {
         try {
@@ -268,7 +386,18 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         } catch (err) {
           console.warn(`crawl watch failed: ${err.message}`);
         }
-        await sleep(WATCH_EVERY);
+        const nextWatch = Date.now() + WATCH_EVERY;
+        while (Date.now() < nextWatch && Date.now() < until) {
+          let moved = false;
+          try {
+            moved = await backfillDay();
+          } catch (err) {
+            console.warn(`crawl backfill failed: ${err.message}`);
+          }
+          // nothing to do (the floor is reached, or the day would not load):
+          // idle until the next watch
+          if (!moved) await sleep(Math.max(1000, Math.min(60_000, nextWatch - Date.now())));
+        }
       }
     }
   }
@@ -282,6 +411,11 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     async watchOnce() {
       await watch();
       return { watched: state.watched, failed: state.failed, log: state.watchLog };
+    },
+    // one step back through the daily index: for a scheduled job that fills
+    // in history a few days at a time. Returns false once the floor is reached.
+    backfillOnce() {
+      return backfillDay();
     },
     status: () => ({ ...state }),
   };

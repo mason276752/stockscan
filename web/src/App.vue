@@ -45,6 +45,8 @@ const crawlText = computed(() => {
   const saved = status.value.store.filings.toLocaleString();
   const watchNote = c.lastWatch ? t('crawl.watchNote', { time: new Date(c.lastWatch).toLocaleTimeString(dateLocale.value), watched: c.watched ? t('crawl.watched', { n: c.watched }) : '' }) : '';
   if (c.phase === 'sweep') return t('crawl.sweep', { depth: c.depth || 5, position: c.position.toLocaleString(), total: c.total.toLocaleString(), current: c.current ? ` · ${c.current}` : '', saved, watch: watchNote });
+  const b = c.backfill;
+  if (c.phase === 'backfill' && b?.day) return t(b.done ? 'crawl.backfillDone' : 'crawl.backfill', { day: b.day, floor: b.floor, left: Number(b.left || 0).toLocaleString(), current: c.current ? ` · ${c.current}` : '', saved, watch: watchNote });
   if (c.phase === 'watch') return t('crawl.watch', { saved, watch: watchNote });
   return '';
 });

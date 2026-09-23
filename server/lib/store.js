@@ -393,7 +393,7 @@ export const store = {
   // path relative to the store - for the static-site build
   allFilings() {
     need();
-    return [...filings.values()].map((f) => ({ accession: f.accession, cik: f.cik, form: f.form, reportDate: f.reportDate, version: f.version, file: path.relative(root, f.file) }));
+    return [...filings.values()].map((f) => ({ accession: f.accession, cik: f.cik, form: f.form, reportDate: f.reportDate, version: f.version, bytes: f.bytes, file: path.relative(root, f.file) }));
   },
   allScores() {
     need();

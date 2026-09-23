@@ -23,6 +23,10 @@ const division = ref('');
 const sicCode = ref('');
 const afs = ref('');
 const listedOnly = ref(true);
+// the point in time the filings are read at: '' = now (each company's newest
+// filing), a YYYY-MM-DD date = the newest one that was already filed then
+const asOf = ref('');
+const today = new Date().toISOString().slice(0, 10);
 const exDivisions = ref([]); // division ids to leave out
 const exSics = ref([]); // SIC codes to leave out, one dropdown row each
 // condition rows: { key, mode: 'now' | 'chg' | 'yoy', min, max }
@@ -51,6 +55,7 @@ function toUrlParams() {
   if (division.value) p.division = division.value;
   if (sicCode.value) p.sic = sicCode.value;
   if (afs.value) p.afs = afs.value;
+  if (asOf.value) p.asof = asOf.value;
   if (!listedOnly.value) p.listed = '0';
   if (exDivisions.value.length) p.exdiv = exDivisions.value.join(',');
   if (exSics.value.filter(Boolean).length) p.exsic = exSics.value.filter(Boolean).join(',');
@@ -70,6 +75,7 @@ function applyUrlParams(p) {
   division.value = p.division || '';
   sicCode.value = p.sic || '';
   afs.value = p.afs || '';
+  asOf.value = p.asof && p.asof < today ? p.asof : '';
   listedOnly.value = p.listed !== '0';
   exDivisions.value = p.exdiv ? String(p.exdiv).split(',').filter(Boolean) : [];
   exSics.value = p.exsic ? String(p.exsic).split(',').filter(Boolean) : [];
@@ -139,6 +145,7 @@ function basketLabel() {
   const parts = [];
   if (sicCode.value) parts.push(sicCode.value);
   else if (division.value) parts.push(pick(meta.value?.divisions?.find((d) => d.id === division.value), 'zh', 'en') || division.value);
+  if (asOf.value) parts.push(`@${asOf.value}`);
   const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${shortName(fieldOf(c.key)?.name || c.key)}${c.mode === 'chg' ? t('sr.chgShort') : c.mode === 'yoy' ? t('sr.yoyShort') : ''}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
   return [...parts, ...cond].join(' ') || t('nav.screen');
 }
@@ -170,6 +177,11 @@ function updateBasket() {
   b.prune = true;
   emit('basket');
 }
+// how far back the date may go: the static build ships the as-of index a few
+// years at a time (a server reads the whole store and says null)
+const asOfMin = computed(() => meta.value?.asof?.min || '');
+// the heading of the condition list says which filing the figures come from
+const conditionsHead = computed(() => (asOf.value ? t('sr.conditionsAsOf', { date: asOf.value }) : t('sr.conditions')));
 const fieldOf = (key) => meta.value?.fields.find((f) => f.key === key) || null;
 const fieldGroups = computed(() => {
   const out = [];
@@ -201,6 +213,7 @@ const params = computed(() => {
   if (division.value) p.division = division.value;
   if (sicCode.value) p.sic = sicCode.value;
   if (afs.value) p.afs = afs.value;
+  if (asOf.value) p.asof = asOf.value;
   if (exDivisions.value.length) p.exdiv = exDivisions.value.join(',');
   if (exSics.value.filter(Boolean).length) p.exsic = exSics.value.filter(Boolean).join(',');
   for (const c of conditions.value) {
@@ -267,7 +280,7 @@ const STAPLES = ['price', 'marketCap', 'pe', 'grossMargin', 'opMargin', 'netMarg
 const STAPLES_PHONE = ['price', 'marketCap', 'pe'];
 // small screens: the filter panel is a drawer above the results
 const filtersOpen = ref(false);
-const activeConditions = computed(() => conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).length + (division.value ? 1 : 0) + (sicCode.value ? 1 : 0) + (afs.value ? 1 : 0) + exDivisions.value.length + exSics.value.filter(Boolean).length + (text.value.trim() ? 1 : 0));
+const activeConditions = computed(() => conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).length + (asOf.value ? 1 : 0) + (division.value ? 1 : 0) + (sicCode.value ? 1 : 0) + (afs.value ? 1 : 0) + exDivisions.value.length + exSics.value.filter(Boolean).length + (text.value.trim() ? 1 : 0));
 const columns = computed(() => {
   const out = [];
   const seen = new Set();
@@ -354,6 +367,14 @@ onMounted(async () => {
       <aside v-show="!isNarrow || filtersOpen" class="panel side">
         <div class="side-head">{{ t('sr.filters') }}</div>
         <label class="frow">
+          <span>{{ t('sr.asOf') }}</span>
+          <span class="asof">
+            <input v-model="asOf" type="date" :min="asOfMin || undefined" :max="today" :title="t('sr.asOfTitle')" />
+            <button v-if="asOf" class="mini" :title="t('sr.asOfNow')" @click.prevent="asOf = ''">✕</button>
+          </span>
+        </label>
+        <p v-if="asOf" class="muted small hint">{{ t('sr.asOfHint') }}<template v-if="asOfMin"> {{ t('sr.asOfFrom', { from: asOfMin }) }}</template></p>
+        <label class="frow">
           <span>{{ t('sr.tickerName') }}</span>
           <input v-model="text" type="text" :placeholder="t('sr.tickerPlaceholder')" />
         </label>
@@ -389,7 +410,7 @@ onMounted(async () => {
           <button class="mini" @click="addExSic">{{ t('sr.addExSic') }}</button>
         </div>
 
-        <div class="side-head">{{ t('sr.conditions') }}</div>
+        <div class="side-head">{{ conditionsHead }}</div>
         <div v-for="(c, i) in conditions" :key="i" class="cond">
           <div class="cond-head">
             <select v-model="c.key" @change="modesFor(c.key).includes(c.mode) || (c.mode = 'now')">
@@ -414,14 +435,15 @@ onMounted(async () => {
           <button class="mini" @click="addCondition">{{ t('sr.addCondition') }}</button>
           <button class="mini" @click="reset">{{ t('reset') }}</button>
         </div>
-        <Note>{{ t('sr.note') }} {{ t(api.isStatic ? 'sr.noteMarketStatic' : 'sr.noteMarket', { snapshot: meta?.market?.updatedAt ? ` (${new Date(meta.market.updatedAt).toLocaleString(dateLocale)})` : '' }) }}</Note>
+        <Note>{{ t('sr.note') }} {{ t(api.isStatic ? 'sr.noteMarketStatic' : 'sr.noteMarket', { snapshot: meta?.market?.updatedAt ? ` (${new Date(meta.market.updatedAt).toLocaleString(dateLocale)})` : '' }) }}<template v-if="asOf"> {{ t('sr.noteAsOf') }}</template></Note>
       </aside>
 
       <main>
         <div class="panel meta">
           <div>
             <strong>{{ t('nav.screen') }}</strong>
-            <span v-if="result" class="muted small">{{ t('sr.matches', { total: result.total.toLocaleString(), scored: result.scored.toLocaleString(), count: result.count }) }}</span>
+            <span v-if="asOf" class="asof-tag" :title="t('sr.asOfTitle')">{{ t('sr.asOfTag', { date: asOf }) }} <button class="mini ghost" :title="t('sr.asOfNow')" @click="asOf = ''">✕</button></span>
+            <span v-if="result" class="muted small">{{ t(asOf ? 'sr.matchesAsOf' : 'sr.matches', { total: result.total.toLocaleString(), scored: result.scored.toLocaleString(), count: result.count, date: asOf }) }}</span>
           </div>
           <div class="options">
             <Loading v-if="loading" inline small :text="t('sr.searching')" />
@@ -504,6 +526,35 @@ main {
 .frow.check {
   display: flex;
   gap: 6px;
+}
+.asof {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.asof input[type='date'] {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: inherit;
+  flex: 1;
+  min-width: 0;
+}
+.hint {
+  margin: 2px 0 6px;
+  line-height: 1.5;
+}
+.asof-tag {
+  margin-left: 8px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
 }
 .frow input[type='text'],
 .frow select,

@@ -1,7 +1,12 @@
-// HTTP client for sec.gov: identifying User-Agent, <10 req/s throttle, retries,
-// and a small TTL cache so the UI can flip between filings without re-downloading.
+// HTTP client for sec.gov: identifying User-Agent, a strict gap between
+// requests, retries, and a small TTL cache so the UI can flip between
+// filings without re-downloading.
 
-const MIN_INTERVAL_MS = 110;
+// SEC allows under 10 requests a second. Every request to sec.gov goes
+// through _slot(), which starts it at least this long after the one before
+// it - measured on the monotonic clock, and re-checked after each wait so a
+// timer that fires early cannot shorten the gap.
+const MIN_INTERVAL_MS = 101;
 const MAX_IN_FLIGHT = 4;
 const IDLE_MS = 3000; // low-priority (prefetch) requests wait for this much user quiet
 
@@ -16,7 +21,7 @@ export class SecClient {
     this.userAgent = userAgent;
     this.timeoutMs = timeoutMs;
     this.queue = Promise.resolve();
-    this.lastRequest = 0;
+    this.lastRequest = -MIN_INTERVAL_MS; // monotonic (performance.now()); the first request waits for nothing
     this.inFlight = 0;
     this.waiters = [];
     this.userInFlight = 0;
@@ -33,12 +38,14 @@ export class SecClient {
     return this.userInFlight === 0 && Date.now() - this.lastUserActivity > IDLE_MS;
   }
 
-  // Serialise requests so the throttle holds even under concurrent API calls.
+  // Serialise requests so the gap holds even under concurrent API calls
+  // (MAX_IN_FLIGHT of them may be open at once; only their starts are spaced).
   _slot() {
     const run = this.queue.then(async () => {
-      const wait = MIN_INTERVAL_MS - (Date.now() - this.lastRequest);
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      this.lastRequest = Date.now();
+      for (let wait = MIN_INTERVAL_MS - (performance.now() - this.lastRequest); wait > 0; wait = MIN_INTERVAL_MS - (performance.now() - this.lastRequest)) {
+        await new Promise((r) => setTimeout(r, wait));
+      }
+      this.lastRequest = performance.now();
     });
     this.queue = run.catch(() => {});
     return run;

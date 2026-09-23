@@ -14,12 +14,18 @@ import { url } from './base';
 const utf8 = new TextDecoder();
 
 // ---- fetching ----
-// Everything but meta.json and this year's bars is immutable (a filing never
-// changes, an index or a finished year of bars is named by its content), so
-// once fetched it is kept in the browser's Cache Storage and never
-// downloaded again. Index files of earlier builds are dropped from it when
-// the current build's meta.json arrives.
-const STORE_CACHE = 'stockscan-store-v1';
+// An index or a finished year of bars is named by its content, so once
+// fetched it is kept in the browser's Cache Storage and never downloaded
+// again. Index files of earlier builds are dropped from it when the current
+// build's meta.json arrives.
+//
+// A saved filing / score keeps its name (it carries the parser / score
+// version, not the content), and the store does rewrite one in place - a
+// filing re-parsed by the same version, the cover-share enrichment that
+// filled in the share counts of old filings. So those are kept per build
+// (?v=<build time>) like this year's bars: a build later than the copy in
+// hand fetches it again instead of showing last week's parse for good.
+const STORE_CACHE = 'stockscan-store-v2'; // v1 kept the store files for ever
 const PROGRESS_MIN = 32 * 1024; // report the progress of downloads from this size
 let onProgress = null; // (path, loaded, total, done) => void
 export function setProgress(fn) {
@@ -56,17 +62,31 @@ async function bytes(path, res) {
   return out;
 }
 
-async function openCache() {
-  try {
-    return 'caches' in globalThis ? await caches.open(STORE_CACHE) : null;
-  } catch {
-    return null; // no Cache Storage (insecure origin, private mode …): plain fetches
-  }
-}
+let cacheReady = null;
+const openCache = () =>
+  (cacheReady ??= (async () => {
+    let c = null;
+    try {
+      c = 'caches' in globalThis ? await caches.open(STORE_CACHE) : null;
+    } catch {
+      return null; // no Cache Storage (insecure origin, private mode …): plain fetches
+    }
+    // the caches of an earlier scheme (their store files may be stale for ever)
+    try {
+      for (const name of await caches.keys()) if (name !== STORE_CACHE && name.startsWith('stockscan-store-')) await caches.delete(name);
+    } catch {
+      /* an old cache left behind only costs space */
+    }
+    return c;
+  })());
+
+// a site path, or an absolute URL as it is (a filing this build did not
+// carry, read from the data ref - see storeUrl)
+const at = (p) => (/^https?:\/\//.test(p) ? p : url(p));
 
 // an immutable file: from Cache Storage, else fetched and put there
 async function fetchImmutable(path) {
-  const req = url(path);
+  const req = at(path);
   const c = await openCache();
   try {
     const hit = c && (await c.match(req));
@@ -88,15 +108,15 @@ async function fetchImmutable(path) {
   return buf;
 }
 
-// a file that changes with the build (this year's bars): Cache Storage keyed
-// by the build (?v=<build time>), the copies of earlier builds dropped
+// a file that changes with the build (a saved filing / score, this year's
+// bars): Cache Storage keyed by the build (?v=<build time>); the copies of
+// earlier builds go in pruneOld, not one cache scan per miss
 async function fetchVersioned(path, v) {
-  const req = `${url(path)}?v=${encodeURIComponent(v)}`;
+  const req = `${at(path)}?v=${encodeURIComponent(v)}`;
   const c = await openCache();
   try {
     const hit = c && (await c.match(req));
     if (hit) return new Uint8Array(await hit.arrayBuffer());
-    if (c) for (const k of await c.keys()) if (k.url.startsWith(`${url(path)}?v=`) && k.url !== req) await c.delete(k);
   } catch {
     /* fetch */
   }
@@ -114,14 +134,19 @@ async function fetchVersioned(path, v) {
   return buf;
 }
 
-// index files not of this build (earlier hashes, the ?v= names of old app versions)
-async function pruneIndexes(files) {
+// what an earlier build left in the cache, in one pass when its meta.json
+// arrives: index files of other hashes, and the ?v=<build> copies of the
+// files that are kept per build (Cache Storage keys are absolute URLs)
+async function pruneOld(m) {
   const c = await openCache();
   if (!c) return;
-  const keep = new Set(Object.values(files || {}).map((f) => url(`/index/${f}`)));
+  const keep = new Set(Object.values(m.files || {}).map((f) => url(`/index/${f}`)));
+  const built = `?v=${encodeURIComponent(m.builtAt || '')}`;
   for (const k of await c.keys()) {
-    const p = new URL(k.url).pathname;
-    if (p.includes('/index/') && !keep.has(p)) await c.delete(k);
+    const u = new URL(k.url);
+    if (u.pathname.includes('/index/')) {
+      if (!keep.has(u.pathname)) await c.delete(k);
+    } else if (u.search.startsWith('?v=') && u.search !== built) await c.delete(k);
   }
 }
 
@@ -142,7 +167,7 @@ export const meta = () =>
     const res = await fetch(url(path), { cache: 'no-cache' });
     if (!res.ok) throw failed(path, res);
     const m = JSON.parse(utf8.decode(await bytes(path, res)));
-    pruneIndexes(m.files).catch(() => {});
+    pruneOld(m).catch(() => {});
     return m;
   });
 
@@ -160,6 +185,17 @@ export const companies = () => index('companies');
 export const scoresMin = () => index('scores-min');
 export const screenIndex = () => index('screen');
 export const screenHistoryIndex = () => index('screen-history');
+// the screener's as-of files, one per year of filing date: which years this
+// build published (from meta.json's file list), and one of them
+export const screenAsOfYears = () =>
+  meta().then((m) =>
+    Object.keys(m.files || {})
+      .map((k) => /^screen-asof-(\d{4})$/.exec(k)?.[1])
+      .filter(Boolean)
+      .map(Number)
+      .sort((a, b) => b - a),
+  );
+export const screenAsOfShard = (year) => index(`screen-asof-${year}`);
 export const universe = () => index('universe');
 export const browse = () => index('browse');
 export const etfs = () => index('etfs');
@@ -167,24 +203,35 @@ export const etfHoldings = (ticker) => index(`etf-${ticker}`);
 export const tvSymbols = () => index('tvsymbols');
 export const documentation = () => index('documentation');
 
+// the build a versioned file is taken from
+const build = () => meta().then((m) => m.builtAt || '');
+
 // ---- zstd ----
 // the decoder (80 KB, preloaded by index.html) is all the indexes and bars
 // need; the dictionaries (90 KB) only come when a filing / score is read
 let wasmReady = null;
 const wasm = () => (wasmReady ??= init(wasmUrl));
+// the dictionaries carry their version in the name and are never rewritten
 const dict = (kind) => once(`dict:${kind}`, () => fetchImmutable(`/data/zdict/${kind}-v1.zdict`));
 
-// a saved filing / score file -> the JSON the server would have read
+// Where a saved filing / score is: under this site, or - when the build
+// could not fit it in (`off`, see server/lib/publish.js) - in the data ref
+// on raw.githubusercontent.com, which serves it with CORS open. The path
+// below data/store is the same tree either way, so only the base differs.
+// null when the build named no data ref: nothing can read that one.
+export const storeUrl = (m, rel, off) => (off ? (m.store ? `${m.store}${rel}` : null) : `/data/store/${rel}`);
+
+// a saved filing / score file -> the JSON the server would have read (per
+// build: the store can rewrite one under the same name, see above)
 export const readZst = (kind, path) =>
   once(path, async () => {
-    const [buf, d] = await Promise.all([fetchImmutable(path), dict(kind), wasm()]);
+    const [buf, d] = await Promise.all([build().then((v) => fetchVersioned(path, v)), dict(kind), wasm()]);
     return JSON.parse(utf8.decode(decompressUsingDict(createDCtx(), buf, d, { defaultHeapSize: 8 * 1024 * 1024 })));
   });
 
 // ---- daily bars (data/bars/<source>/<SYMBOL>/…, plain zstd, no dictionary) ----
 // a finished year never changes (immutable); meta.json and head.zst change
 // with the build (versioned)
-const build = () => meta().then((m) => m.builtAt || '');
 export async function readBarsZst(path, { immutable = false } = {}) {
   const [buf] = await Promise.all([immutable ? fetchImmutable(path) : fetchVersioned(path, await build()), wasm()]);
   return JSON.parse(utf8.decode(decompress(buf, { defaultHeapSize: 2 * 1024 * 1024 })));

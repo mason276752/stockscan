@@ -105,6 +105,7 @@ export const wantsHistory = (q) => Object.keys(q).some((k) => /_(chg|yoy)_(min|m
 
 const rowTable = (rows) => ({
   length: rows.length,
+  cik: (i) => rows[i].cik,
   ticker: (i) => rows[i].ticker,
   tickers: (i) => rows[i].tickers,
   name: (i) => rows[i].name,
@@ -147,6 +148,7 @@ function columnTable(c) {
   const marketKeys = Object.keys(c.market).filter((k) => k !== 'has');
   return {
     length: c.n,
+    cik: (i) => c.cik[i],
     ticker: (i) => c.ticker[i],
     tickers: (i) => c.tickers[i],
     name: (i) => c.name[i],
@@ -175,6 +177,152 @@ function columnTable(c) {
 // history spread in) -> the table screenQuery reads
 export const screenTable = (x) => (Array.isArray(x) ? rowTable(x) : typeof x.length === 'number' && typeof x.row === 'function' ? x : columnTable(x));
 
+// ---- as of a date ----
+// The screener normally reads each company's newest filing. With a date it
+// reads the newest one that was *already filed* then (`filingDate <= asof`),
+// so a search can be run as it would have come out at an earlier point in
+// time - a filing counts from the day it reached EDGAR, not from the day
+// its quarter ended. Only the figures of the filings move: the industry /
+// filer data and the market snapshot (price, market cap, multiples) are
+// always the current ones.
+export const SCORE_HISTORY = 6; // filings per company to look back at for prev / yoy
+
+// A company's filings newest first -> the one current at `asof` (null = the
+// newest of all), the one before it and the same fiscal period a year
+// earlier, for the change filters. Amendments are skipped, as they are
+// wherever the screener compares filings; a filing with no filing date is
+// kept (nothing says it was not out yet).
+export function pickAsOf(filings, asof = null, limit = SCORE_HISTORY) {
+  const hist = [];
+  for (const f of filings) {
+    if (!f || /\/A$/i.test(f.form || '')) continue;
+    if (asof && f.filingDate && f.filingDate > asof) continue;
+    hist.push(f);
+    if (hist.length >= limit) break;
+  }
+  const cur = hist[0] || null;
+  const yoy = cur ? hist.find((x, i) => i > 0 && x.fiscalPeriod === cur.fiscalPeriod && String(Number(x.fiscalYear) + 1) === String(cur.fiscalYear)) : null;
+  return { cur, prev: hist[1] || null, yoy: yoy || null, history: hist.length };
+}
+
+// `asof` as the query carries it -> a YYYY-MM-DD date in the past, or null
+// for "now" (today or later, or anything unparseable: the newest filings)
+export function asOfDate(v) {
+  const s = String(v ?? '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && s < new Date().toISOString().slice(0, 10) ? s : null;
+}
+
+// Every scored filing as columns (index/screen-asof-<year>.json, one file
+// per year of filing date): what the browser needs to pick each company's
+// filing itself, for any date in that stretch. A filing record is ~150
+// compressed bytes, so a year of them runs to megabytes and the whole store
+// would only get bigger as the crawler fills in history - hence one file a
+// year, fetched only when a date is set and only for the years that date
+// can reach (ASOF_SHARD_YEARS). The company and market columns still come
+// from index/screen.json.
+
+// Which years a date needs: its own and the two before it. A company's
+// current filing at `asof` is at most a year old (an annual filer), and the
+// previous / year-earlier ones it is compared with are a year behind that.
+export const ASOF_SHARD_YEARS = 3;
+export const asOfShardYears = (asof, available = null) => {
+  const y = Number(String(asof || new Date().toISOString()).slice(0, 4)); // no date = now
+  const want = Number.isFinite(y) ? Array.from({ length: ASOF_SHARD_YEARS }, (_, i) => y - i) : [];
+  return available ? want.filter((x) => available.includes(x)) : want;
+};
+// the filing year a record belongs to (by filing date - the day it became
+// public - so a date never needs a shard it cannot know about)
+export const asOfShardOf = (score) => Number(String(score.filingDate || score.periodEnd || '').slice(0, 4)) || null;
+
+const ASOF_KEYS = ['cik', 'accession', 'form', 'filingDate', 'periodEnd', 'fiscalYear', 'fiscalPeriod', 'score', 'coverage'];
+export function screenAsOfColumns(scores) {
+  const n = scores.length;
+  const col = (get) => {
+    const a = new Array(n);
+    for (let i = 0; i < n; i++) a[i] = get(scores[i]) ?? null;
+    return a;
+  };
+  const valueKeys = new Set();
+  for (const s of scores) for (const k of Object.keys(s.values || {})) valueKeys.add(k);
+  return {
+    n,
+    ...Object.fromEntries(ASOF_KEYS.map((k) => [k, col((s) => s[k])])),
+    categories: col((s) => s.categories?.map((c) => c.score)),
+    values: Object.fromEntries([...valueKeys].map((k) => [k, col((s) => s.values?.[k])])),
+  };
+}
+
+// The loaded year files with each company's filings listed newest first
+// (the light fields pickAsOf reads, and which shard row each one is): built
+// once per set of loaded years, then reused for every date the page asks
+// for. The shards are not merged - a filing is addressed by (shard, row),
+// so loading another year copies nothing.
+export function screenAsOfIndex(shards) {
+  const list = Array.isArray(shards) ? shards : [shards];
+  const byCik = new Map();
+  list.forEach((cols, s) => {
+    for (let j = 0; j < cols.n; j++) {
+      const cik = cols.cik[j];
+      const of = byCik.get(cik) || byCik.set(cik, []).get(cik);
+      of.push({ s, j, form: cols.form[j], filingDate: cols.filingDate[j], periodEnd: cols.periodEnd[j], fiscalYear: cols.fiscalYear[j], fiscalPeriod: cols.fiscalPeriod[j] });
+    }
+  });
+  // newest first, as the store hands a company's scores over: by the period
+  // the filing covers, the filing date breaking a tie
+  for (const of of byCik.values()) of.sort((a, b) => (a.periodEnd < b.periodEnd ? 1 : a.periodEnd > b.periodEnd ? -1 : a.filingDate < b.filingDate ? 1 : a.filingDate > b.filingDate ? -1 : 0));
+  return { shards: list, byCik };
+}
+
+// company / market columns (index/screen.json, or any screenTable) + the
+// per-filing columns -> the table screenQuery reads, as of `asof`. Only the
+// companies that had a filing out by then are in it.
+export function screenAsOfTable(core, index, asof) {
+  const t = screenTable(core);
+  const { shards, byCik } = index;
+  const picks = [];
+  for (let i = 0; i < t.length; i++) {
+    const p = pickAsOf(byCik.get(t.cik(i)) || [], asof);
+    if (p.cur) picks.push({ i, cur: p.cur, prev: p.prev, yoy: p.yoy, history: p.history });
+  }
+  const at = (k, mode) => (mode === 'now' ? picks[k].cur : picks[k][mode === 'chg' ? 'prev' : 'yoy']);
+  const field = (r, key) => (r ? (shards[r.s][key]?.[r.j] ?? null) : null); // one column of one filing
+  const value = (r, key) => (r ? (shards[r.s].values[key]?.[r.j] ?? null) : null);
+  const valueKeys = [...new Set(shards.flatMap((c) => Object.keys(c.values)))];
+  const valuesAt = (r) => {
+    const o = {};
+    for (const key of valueKeys) o[key] = value(r, key);
+    return o;
+  };
+  const baseAt = (r) => (!r ? null : { fiscalYear: field(r, 'fiscalYear'), fiscalPeriod: field(r, 'fiscalPeriod'), periodEnd: field(r, 'periodEnd'), score: field(r, 'score'), values: valuesAt(r) });
+  return {
+    length: picks.length,
+    cik: (k) => t.cik(picks[k].i),
+    ticker: (k) => t.ticker(picks[k].i),
+    tickers: (k) => t.tickers(picks[k].i),
+    name: (k) => t.name(picks[k].i),
+    sic: (k) => t.sic(picks[k].i),
+    afs: (k) => t.afs(picks[k].i),
+    float: (k) => t.float(picks[k].i),
+    market: (k, key) => t.market(picks[k].i, key),
+    score: (k) => field(picks[k].cur, 'score'),
+    value: (k, key) => value(picks[k].cur, key),
+    baseScore: (k, mode) => field(at(k, mode), 'score'),
+    baseValue: (k, key, mode) => value(at(k, mode), key),
+    // the company half of the row as it always is, the filing half as of the date
+    row: (k) => {
+      const p = picks[k];
+      return {
+        ...t.row(p.i),
+        score: Object.fromEntries(SCORE_KEYS.map((key) => [key, field(p.cur, key)])),
+        values: valuesAt(p.cur),
+        prev: baseAt(p.prev),
+        yoy: baseAt(p.yoy),
+        history: p.history,
+      };
+    },
+  };
+}
+
 // change since the previous filing (chg) or the same period a year earlier
 // (yoy): percentage points for ratios, % growth for amounts and the score
 function changeOf(t, i, key, mode) {
@@ -193,7 +341,8 @@ const valueOf = (t, i, key, mode = 'now') => {
 // objects, the columns of screenColumns, or a screenTable of either): sic /
 // division / afs / exclusions / text, <key>[_chg|_yoy]_min|max ranges,
 // sort, limit. (history=1 is the page's hint that it shows change columns:
-// no effect here, see wantsHistory.)
+// no effect here, see wantsHistory. asof picks which filing every row is,
+// which the caller has already done in building the table: see pickAsOf.)
 export function screenQuery(rows, q) {
   const t = screenTable(rows);
   const sic = q.sic ? String(q.sic).padStart(4, '0') : null;

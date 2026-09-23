@@ -64,8 +64,9 @@ const { openStore, store } = await import('../lib/store.js');
 openStore();
 const { SCRAPE_VERSION } = await import('../lib/scrape.js');
 const { SCORE_VERSION, latestScores } = await import('../lib/score.js');
-const { filerCounts, screenColumns, screenRows, scoreBadge, sicCounts } = await import('../lib/screen.js');
+const { filerCounts, asOfShardOf, screenAsOfColumns, screenColumns, screenRows, scoreBadge, sicCounts } = await import('../lib/screen.js');
 const { fiscalLabel, filingFile, scoreFile, DEFAULT_FORMS } = await import('../lib/filings.js');
+const { PAGES_LIMIT_MB, publishBudget, publishMb } = await import('../lib/publish.js');
 const { lookupFiler, sicInfo } = await import('../lib/universe.js');
 const { POPULAR_ETFS } = await import('../lib/etf.js');
 
@@ -76,8 +77,26 @@ function copyTree(from, to) {
 }
 const dataOut = path.join(OUT, 'data');
 fs.mkdirSync(dataOut, { recursive: true });
-console.log('build-static: copying data/store …');
-copyTree(store.file, path.join(dataOut, 'store'));
+// Where a filing this site does not carry can still be read: the data ref
+// itself, served by raw.githubusercontent.com (it answers with
+// access-control-allow-origin: *, so the browser may fetch it). The store
+// is the same tree there, so the path below a filing is identical - only
+// the base changes. STOCKSCAN_DATA_URL overrides it; a checkout with no
+// GitHub remote gets none, and then the site simply has what it has.
+const DATA_REF = process.env.STOCKSCAN_DATA_REF || 'refs/data/main';
+const DATA_URL = (() => {
+  if (process.env.STOCKSCAN_DATA_URL) return process.env.STOCKSCAN_DATA_URL.replace(/\/*$/, '/');
+  let slug = process.env.GITHUB_REPOSITORY || '';
+  if (!slug) {
+    try {
+      slug = /github\.com[:/]+([^/]+\/[^/]+?)(?:\.git)?\/*$/.exec(execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: REPO }).toString().trim())?.[1] || '';
+    } catch {
+      /* not a git checkout, or no origin */
+    }
+  }
+  return slug ? `https://raw.githubusercontent.com/${slug}/${DATA_REF}/data/store/` : null;
+})();
+console.log(`build-static: older filings will be read from ${DATA_URL || '(nowhere - no GitHub remote, so only what this site carries)'}`);
 copyTree(path.join(REPO, 'server', 'data', 'zdict'), path.join(dataOut, 'zdict'));
 // the daily bars (data/bars/<source>/<SYMBOL>/{<year>.zst, head.zst, meta.json}): the
 // custom-ETF page computes its index in the browser from them. head.zst (this
@@ -101,6 +120,51 @@ if (fs.existsSync(barsDir)) {
   console.log(`build-static: bars ${bars.symbols} symbols (${bars.heads} with this year), ${(bars.bytes / 1048576).toFixed(0)} MB`);
 }
 
+const barsMb = bars.bytes / 1048576;
+
+// Of the store, the site only serves what the browser fetches by path: the
+// saved filings and their scores. (The company records, the ticker table,
+// the SIC universe and the statement documentation are all in index/*.json.zst
+// by the time the app asks for them - copying the originals too would put
+// ~90 MB on the site that nothing ever reads.)
+//
+// And not even all the filings: a GitHub Pages site may hold 1 GB in total
+// and the crawler keeps digging backwards, so the newest ones that fit in
+// the budget go and the oldest stay behind (server/lib/publish.js). The
+// screener's as-of index is built further down from *every* score the store
+// has, so the time machine still reaches back past the statements here.
+const PUBLISH_MB = publishMb(barsMb);
+const budget = publishBudget(store.allFilings(), PUBLISH_MB);
+const PUBLISH_FROM = budget.from;
+const storeOut = path.join(dataOut, 'store');
+console.log(`build-static: copying data/store (the newest ${(budget.bytes / 1048576).toFixed(0)} MB of filings, ${PUBLISH_MB} MB budget: ${PUBLISH_FROM} onwards) …`);
+fs.rmSync(storeOut, { recursive: true, force: true });
+fs.mkdirSync(storeOut, { recursive: true });
+const madeDirs = new Set();
+const copyOne = (rel) => {
+  const to = path.join(storeOut, rel);
+  const dir = path.dirname(to);
+  if (!madeDirs.has(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    madeDirs.add(dir);
+  }
+  if (LINK) fs.linkSync(path.join(store.file, rel), to);
+  else fs.copyFileSync(path.join(store.file, rel), to, fs.constants.COPYFILE_FICLONE);
+};
+const published = budget.accessions; // accessions whose statements are on the site
+const publishCount = { filings: 0, scores: 0 };
+for (const f of store.allFilings()) {
+  if (!published.has(f.accession)) continue;
+  copyOne(f.file);
+  publishCount.filings++;
+}
+for (const sc of store.allScores()) {
+  // a score is only reachable through its filing's page, so it travels with it
+  if (!published.has(sc.accession)) continue;
+  copyOne(sc.file);
+  publishCount.scores++;
+}
+console.log(`build-static: ${publishCount.filings.toLocaleString()} filings + ${publishCount.scores.toLocaleString()} scores published${budget.left ? `, ${budget.left.toLocaleString()} older filings left out (over the ${PUBLISH_MB} MB budget; they stay in the store)` : ''}`);
 // ---- 3. indexes ----
 const idx = path.join(OUT, 'index');
 fs.mkdirSync(idx, { recursive: true });
@@ -218,6 +282,8 @@ for (const [cik, list] of filingsByCik) {
     // so are the store paths when they follow the naming - file / scoreFile
     // are only spelled out when they do not, scoreFile: true when they do)
     const f = { accession: rec.accession, form, filingDate: h.filingDate || null, reportDate, primaryDocument: h.primaryDocument || null, ...label };
+    // not on this site (over the size budget): read it from the data ref instead
+    if (!published.has(rec.accession)) f.off = 1;
     if (rec.file !== filingFile(cik, f, SCRAPE_VERSION)) f.file = rec.file;
     const sf = scoreFiles.get(rec.accession);
     if (sf) f.scoreFile = sf === scoreFile(cik, f, SCORE_VERSION) ? true : sf;
@@ -251,9 +317,30 @@ write('scores-min.json', Object.fromEntries(scores.map((s) => [s.cik, scoreBadge
 // the screener rows as columns (one array per field): a quarter of the
 // JSON of the rows, parsed by the browser's worker in a third of the time;
 // the prev / yoy columns apart, so the first results need not wait for them
-const screenCols = screenColumns(screenRows(scores, byCik, market?.byTicker || null));
+const screenerRows = screenRows(scores, byCik, market?.byTicker || null);
+const screenCols = screenColumns(screenerRows);
 write('screen.json', screenCols.screen);
 write('screen-history.json', screenCols.history);
+// and every scored filing of those companies, one file per year of filing
+// date (screen-asof-2026.json …): with these the browser picks each
+// company's filing itself, so the screener can be run as of an earlier
+// date. A year is megabytes and the store keeps growing backwards, so the
+// page only fetches the years a date can reach (asOfShardYears), and only
+// once a date is set. STOCKSCAN_ASOF_YEARS caps how many years are
+// published at all - beyond that the screener's dates stop.
+const ASOF_YEARS = Math.max(1, Number(process.env.STOCKSCAN_ASOF_YEARS) || 8);
+const screened = new Set(screenerRows.map((r) => r.cik));
+const asOfByYear = new Map();
+for (const r of store.scoreIndex(SCORE_VERSION)) {
+  if (!screened.has(r.cik)) continue;
+  const s = store.scoreJson(r.accession);
+  const year = s && asOfShardOf(s);
+  if (!year) continue;
+  (asOfByYear.get(year) || asOfByYear.set(year, []).get(year)).push(s);
+}
+const asOfYears = [...asOfByYear.keys()].sort((a, b) => b - a).slice(0, ASOF_YEARS);
+for (const year of asOfYears) write(`screen-asof-${year}.json`, screenAsOfColumns(asOfByYear.get(year)));
+console.log(`build-static: screener as-of years ${asOfYears.at(-1)}–${asOfYears[0]} (${asOfYears.map((y) => `${y}: ${asOfByYear.get(y).length}`).join(', ')} filings)`);
 write('universe.json', { updatedAt: universe.updatedAt, datasets: universe.datasets, companies: universe.companies });
 // the SIC / filer-status counts of the browse pages and the screener's
 // pickers, so those need not load the 2 MB universe
@@ -294,8 +381,12 @@ write(
   'meta.json',
   {
     builtAt: new Date().toISOString(),
-    filings: store.filingCount(),
+    filings: store.filingCount(), // every filing the app can open, here or from the data ref
+    filingsOnSite: publishCount.filings, // the ones this site carries itself
+    store: DATA_URL, // where the rest come from
     scores: scores.length,
+    asOfFrom: asOfYears.length ? `${asOfYears.at(-1)}-01-01` : null,
+    filingsFrom: PUBLISH_FROM,
     companies: Object.keys(companies).length,
     scrapeVersion: SCRAPE_VERSION,
     scoreVersion: SCORE_VERSION,
@@ -313,5 +404,30 @@ if (toCompress.length) {
 
 // GitHub Pages: no Jekyll processing (paths with __ would otherwise be skipped)
 fs.writeFileSync(path.join(OUT, '.nojekyll'), '');
+
+// What the site weighs, against the 1 GB a GitHub Pages site may take. The
+// filings are the part that grows (the crawler digs backwards for ever), so
+// that is the one to cut - STOCKSCAN_PUBLISH_YEARS, fewer years.
+const PAGES_LIMIT = PAGES_LIMIT_MB;
+const mbOf = (dir) => {
+  let n = 0;
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) walk(path.join(d, e.name));
+      else n += fs.statSync(path.join(d, e.name)).size;
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return n / 1048576;
+};
+const parts = [
+  ['財報 filings', mbOf(path.join(storeOut, 'filings'))],
+  ['評分 scores', mbOf(path.join(storeOut, 'scores'))],
+  ['日線 bars', mbOf(path.join(dataOut, 'bars'))],
+  ['索引 index', mbOf(path.join(OUT, 'index'))],
+];
+const total = mbOf(OUT);
+console.log(`build-static: site ${total.toFixed(0)} MB / ${PAGES_LIMIT} MB (${parts.map(([k, v]) => `${k} ${v.toFixed(0)}`).join(', ')}, 其他 ${(total - parts.reduce((n, [, v]) => n + v, 0)).toFixed(0)} MB)`);
+if (total > PAGES_LIMIT * 0.85) console.warn(`build-static: WARNING 接近 GitHub Pages 的 1 GB 上限——把 STOCKSCAN_PUBLISH_MB 調小（目前 ${PUBLISH_MB} MB）`);
 console.log(`build-static: done in ${((Date.now() - t0) / 1000).toFixed(0)} s -> ${OUT}`);
 process.exit(0);

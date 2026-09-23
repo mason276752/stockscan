@@ -48,6 +48,11 @@ on:
         required: false
         type: boolean
         default: false
+      rescore_all:
+        description: 'Recompute every score at the current version, keeping only the filings whose numbers changed'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -113,6 +118,15 @@ jobs:
       - name: Enrich historical cover shares
         if: github.event_name == 'workflow_dispatch' && inputs.enrich_cover_shares
         run: npm run enrich:cover-shares
+
+      # Opt-in roll-out of a scoring change that touches few filings: every
+      # saved filing is scored again at the current SCORE_VERSION and only
+      # the ones whose numbers moved are written back (~2 min for 30,000
+      # filings), so the data ref carries those files and not all 30,000 -
+      # which is what a version bump would cost. Before the push step below.
+      - name: Rescore every filing in place
+        if: github.event_name == 'workflow_dispatch' && inputs.rescore_all
+        run: npm run rescore -- --all
 
       # this year's bars (head.zst of every symbol): restored from the last
       # run's cache, topped up from TradingView on scheduled / manual runs

@@ -13,6 +13,7 @@
     "postinstall": "npm --prefix web install",
     "build:static": "node server/tools/build-static.mjs",
     "data:pull": "sh scripts/pull-data.sh",
+    "data:push": "node server/tools/push-data.mjs",
     "fetch:new": "node server/tools/fetch-new.mjs",
     "rescore": "node server/tools/rescore.mjs",
     "enrich:cover-shares": "node server/tools/enrich-cover-shares.mjs",

@@ -18,7 +18,7 @@ import { buildQuarterly } from '../../server/lib/quarters.js';
 import { buildIndicators } from '../../server/lib/indicators.js';
 import { filingFile, filingUrls, pickFiling, scoreFile } from '../../server/lib/filings.js';
 import { ITEMS, SCORE_VERSION, scoreFilingOf } from '../../server/lib/scoreModel.js';
-import { SCREEN_FIELDS, browseCompanies, screenQuery, screenTable, searchRows, wantsHistory } from '../../server/lib/screen.js';
+import { SCREEN_FIELDS, asOfDate, asOfShardYears, browseCompanies, screenAsOfIndex, screenAsOfTable, screenQuery, screenTable, searchRows, wantsHistory } from '../../server/lib/screen.js';
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
 import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
 import { basketRequest, runBasket } from '../../server/lib/basket.js';
@@ -58,10 +58,13 @@ async function companyOf(id) {
   return c;
 }
 
-// a saved filing, as the server hands it out
+// a saved filing, as the server hands it out. One this build did not carry
+// (f.off) comes from the data ref instead - same file, one hop further.
 async function loadFiling(f) {
   if (!f?.file) throw new Error(t('static.notSaved', { what: f?.accession || t('static.thisFiling') }));
-  const [rec, docs] = await Promise.all([data.readZst('filings', `/data/store/${f.file}`), data.documentation()]);
+  const where = data.storeUrl(await data.meta(), f.file, f.off);
+  if (!where) throw new Error(t('static.offSite', { what: `${f.fiscalYear || ''} ${f.fiscalPeriod || ''}`.trim() || f.accession }));
+  const [rec, docs] = await Promise.all([data.readZst('filings', where), data.documentation()]);
   return applyZh(reclassify(fatten(rec.data, docs)));
 }
 
@@ -70,6 +73,30 @@ async function loadFiling(f) {
 // them (screen-history.json spread in); each built once
 const screenTables = {};
 const screenRows = (history) => (screenTables[history ? 'full' : 'core'] ??= (history ? Promise.all([data.screenIndex(), data.screenHistoryIndex()]) : Promise.all([data.screenIndex()])).then(([core, hist]) => screenTable(hist ? { ...core, prev: hist.prev, yoy: hist.yoy } : core)));
+// as of a date: the scored filings of the years that date can reach (one
+// index/screen-asof-<year>.json each, megabytes apiece - only fetched once a
+// date is set), grouped by company once per set of years, then each date
+// picks the filing every company had out by then. They carry their own prev
+// / yoy, so the history file is not needed as well.
+let asOfGroups = null; // { key: the loaded years, ready: Promise<{ core, index }> }
+let asOfLast = null; // the table of the date last asked for (a filter change keeps the date)
+const screenAsOfRows = async (asof) => {
+  const published = await data.screenAsOfYears();
+  const years = asOfShardYears(asof, published);
+  if (!years.length) throw new Error(t('static.asofRange', { from: `${published.at(-1) ?? '—'}-01-01` }));
+  const key = years.join(',');
+  if (asOfGroups?.key !== key) {
+    const ready = Promise.all([screenRows(false), ...years.map((y) => data.screenAsOfShard(y))]).then(([core, ...shards]) => ({ core, index: screenAsOfIndex(shards) }));
+    ready.catch(() => {
+      if (asOfGroups?.key === key) asOfGroups = null; // a failed download can be retried
+    });
+    asOfGroups = { key, ready };
+    asOfLast = null;
+  }
+  const { core, index } = await asOfGroups.ready;
+  if (asOfLast?.asof !== asof) asOfLast = { asof, table: screenAsOfTable(core, index, asof) };
+  return asOfLast.table;
+};
 
 const api = {
   meta: () => data.meta(),
@@ -147,12 +174,14 @@ const api = {
     return { static: true, meta: m, store: { filings: m.filings, scores: m.scores }, crawler: { enabled: false } };
   },
   async screenFields() {
-    const m = await data.meta();
-    return { fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS, market: m.market };
+    const [m, years] = await Promise.all([data.meta(), data.screenAsOfYears()]);
+    // the screener's date can go back as far as the oldest as-of file
+    return { fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS, market: m.market, asof: { min: years.length ? `${years.at(-1)}-01-01` : null } };
   },
   async screen(params) {
-    const [rows, m] = await Promise.all([screenRows(wantsHistory(params)), data.meta()]);
-    return { ...screenQuery(rows, params), scored: rows.length, market: m.market };
+    const asof = asOfDate(params.asof);
+    const [rows, m] = await Promise.all([asof ? screenAsOfRows(asof) : screenRows(wantsHistory(params)), data.meta()]);
+    return { ...screenQuery(rows, params), scored: rows.length, asof, market: m.market };
   },
   async scores(ciks) {
     const all = await data.scoresMin();
@@ -164,7 +193,8 @@ const api = {
     const c = await companyOf(cik);
     const f = c.filings.find((x) => x.accession === accession);
     if (!f) throw new Error(`Filing ${accession} not found`);
-    if (f.scoreFile) return (await data.readZst('scores', `/data/store/${f.scoreFile}`)).score;
+    const where = f.scoreFile && data.storeUrl(await data.meta(), f.scoreFile, f.off);
+    if (where) return (await data.readZst('scores', where)).score;
     const s = await scoreFilingOf(loadFiling, c, f);
     if (!s) throw new Error('Cannot score this filing');
     return s;

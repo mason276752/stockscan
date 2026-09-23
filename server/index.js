@@ -14,7 +14,7 @@ import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
 import { serverValuation } from './lib/valuationServer.js';
 import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession, scoreUnscored } from './lib/score.js';
-import { SCREEN_FIELDS, browseCompanies, filerCounts, scoreBadge, screenQuery, screenRows, sicCounts, wantsMarket } from './lib/screen.js';
+import { SCREEN_FIELDS, asOfDate, browseCompanies, filerCounts, scoreBadge, screenQuery, screenRows, sicCounts, wantsMarket } from './lib/screen.js';
 import { marketSnapshot, marketStatus } from './lib/market.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
 import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
@@ -346,7 +346,18 @@ app.get(
 
 // ---------- screener ----------
 
-app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS, market: marketStatus() }));
+// asof.min: how far back the screener's date may go - the oldest filing the
+// store has a score for (the crawler digs backwards, so this moves with it).
+// The static build answers with the oldest as-of index file it published.
+let asOfMinMemo = null;
+function asOfMin() {
+  if (asOfMinMemo && Date.now() - asOfMinMemo.at < 60_000) return asOfMinMemo.min;
+  let min = null;
+  for (const r of store.scoreIndex(SCORE_VERSION)) if (r.report_date && (!min || r.report_date < min)) min = r.report_date;
+  asOfMinMemo = { at: Date.now(), min };
+  return min;
+}
+app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, divisions: SIC.divisions, filer: FILER_STATUS, market: marketStatus(), asof: { min: asOfMin() } }));
 
 // GET /api/screen?sic=7372&division=D&afs=LAF&exdiv=H,I&exsic=6770,2834&score_min=60&grossMargin_min=40
 //     &roe_chg_min=2&revenueAnn_yoy_min=10&price_max=50&marketCap_min=1000&sort=score&dir=desc&limit=200
@@ -355,6 +366,9 @@ app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, d
 //    <key>_min / _max filter the value; <key>_chg_* the change since the
 //    previous filing; <key>_yoy_* the change since the same period a year
 //    earlier - percentage points for ratios, % growth for amounts and the score.
+//    asof=YYYY-MM-DD screens on the filing each company had out on that date
+//    instead of its newest one (companies with none by then drop out); the
+//    market snapshot stays the current one either way.
 // the rows are built once per (scores, universe, market snapshot) - each of
 // those is memoised by its module, so the same objects come back until one
 // is refreshed
@@ -364,12 +378,13 @@ app.get(
   wrap(async (req, res) => {
     const u = await getUniverse(client);
     const market = await marketSnapshot({ wait: wantsMarket(req.query) });
-    const scores = latestScores();
+    const asof = asOfDate(req.query.asof);
+    const scores = latestScores(asof);
     if (!screenMemo || screenMemo.u !== u || screenMemo.market !== market || screenMemo.scores !== scores) {
       const byCik = new Map(u.companies.map((c) => [c.cik, c]));
       screenMemo = { u, market, scores, rows: screenRows(scores, byCik, market?.byTicker || null) };
     }
-    res.json({ ...screenQuery(screenMemo.rows, req.query), scored: scores.length, market: marketStatus() });
+    res.json({ ...screenQuery(screenMemo.rows, req.query), scored: scores.length, asof, market: marketStatus() });
   }),
 );
 

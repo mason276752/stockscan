@@ -6,8 +6,9 @@ import { store } from './store.js';
 import { reclassify } from './statementTypes.js';
 import { fiscalLabel } from './filings.js';
 import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.js';
+import { SCORE_HISTORY, pickAsOf } from './screen.js';
 
-export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf };
+export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf, SCORE_HISTORY };
 
 // A company's saved filings around `reportDate` as scoreFilingOf wants them
 // (the fiscal labels come from the saved headers, relabelled from the
@@ -38,6 +39,15 @@ const loadSaved = (f) => {
   return reclassify(data);
 };
 
+// The score of a saved filing, computed from the store alone (no cache).
+async function computeScore(accession, header) {
+  const h = header || store.filingHeader(accession);
+  if (!h) return null;
+  const company = savedCompany(h.cik, h.periodEnd);
+  const filing = company.filings.find((f) => f.accession === accession);
+  return filing ? await scoreFilingOf(loadSaved, company, filing) : scoreFiling(loadSaved({ accession }));
+}
+
 // Score of a saved filing, cached by accession. A score that had to do
 // without a neighbouring filing (`basis.partial`: typically the oldest one
 // saved of a company) is cached like any other - the screener still wants
@@ -48,9 +58,7 @@ export async function scoreAccession(accession, { redoPartial = false } = {}) {
   if (hit && !(redoPartial && hit.basis?.partial)) return hit;
   const h = store.filingHeader(accession);
   if (!h) return null;
-  const company = savedCompany(h.cik, h.periodEnd);
-  const filing = company.filings.find((f) => f.accession === accession);
-  const s = filing ? await scoreFilingOf(loadSaved, company, filing) : scoreFiling(loadSaved({ accession }));
+  const s = await computeScore(accession, h);
   if (s) store.putScore(accession, h.cik, h.periodEnd, SCORE_VERSION, s);
   return s;
 }
@@ -80,44 +88,90 @@ export async function scoreUnscored({ budgetMs = 50, log = () => {} } = {}) {
   return todo.length;
 }
 
+// Recompute every saved filing's score at the current SCORE_VERSION and
+// write back only the ones that really changed (`node server/tools/rescore.mjs
+// --all`). This is how a scoring change that touches few filings reaches the
+// data ref without a version bump: a bump renames all 30,000 score files and
+// the ref has to carry every one of them again, while an in-place rewrite of
+// the handful that moved is a commit of a few kilobytes. Same numbers either
+// way - what the version buys is that a store nobody ran this over is
+// recomputed lazily, so bump it when the change is broad.
+export async function rescoreAll({ budgetMs = 50, log = () => {}, cik = null, limit = 0, dryRun = false, onProgress = null } = {}) {
+  let todo = store.allFilings();
+  if (cik) todo = todo.filter((f) => Number(f.cik) === Number(cik));
+  if (limit) todo = todo.slice(0, limit);
+  log(`rescoring ${todo.length} saved filings (${dryRun ? 'dry run: nothing is written' : 'writing only what changes'})`);
+  const out = { scanned: 0, changed: 0, failed: 0 };
+  let t0 = Date.now();
+  for (const f of todo) {
+    out.scanned++;
+    try {
+      const h = store.filingHeader(f.accession);
+      const s = h && (await computeScore(f.accession, h));
+      if (s) {
+        const prev = store.getScore(f.accession, SCORE_VERSION);
+        if (!prev || JSON.stringify(prev) !== JSON.stringify(s)) {
+          if (!dryRun) store.putScore(f.accession, h.cik, h.periodEnd, SCORE_VERSION, s);
+          out.changed++;
+        }
+      }
+    } catch (err) {
+      out.failed++;
+      console.warn(`rescore ${f.accession}: ${err.message}`);
+    }
+    if (onProgress && out.scanned % 500 === 0) onProgress(out);
+    if (Date.now() - t0 > budgetMs) {
+      await new Promise((r) => setTimeout(r, 5));
+      t0 = Date.now();
+    }
+  }
+  log(`rescored ${out.scanned}: ${out.changed} changed${out.failed ? `, ${out.failed} failed` : ''}`);
+  return out;
+}
+
 // Latest score of every company (for the screener), each with the previous
 // filing's values (`prev`) and the same period a year earlier (`yoy`) for
 // change filters. Cached for a minute; decoded score JSON is kept per
 // accession so a refresh only decodes what is new.
-// a company's scores newest first -> the newest with `prev` / `yoy` attached
-export function withHistory(scores) {
-  const hist = scores.filter((x) => x && !/\/A$/i.test(x.form || ''));
-  if (!hist.length) return null;
-  const cur = hist[0];
-  const prev = hist[1] || null;
-  const yoy = hist.find((x, i) => i > 0 && x.fiscalPeriod === cur.fiscalPeriod && String(Number(x.fiscalYear) + 1) === String(cur.fiscalYear)) || null;
+// a company's scores newest first -> the one current at `asof` (null = the
+// newest of all) with `prev` / `yoy` attached
+export function withHistory(scores, asof = null) {
+  const { cur, prev, yoy, history } = pickAsOf(scores, asof);
+  if (!cur) return null;
   const brief = (x) => ({ accession: x.accession, fiscalYear: x.fiscalYear, fiscalPeriod: x.fiscalPeriod, periodEnd: x.periodEnd, score: x.score, values: x.values });
-  return { ...cur, prev: prev ? brief(prev) : null, yoy: yoy ? brief(yoy) : null, history: hist.length };
+  return { ...cur, prev: prev ? brief(prev) : null, yoy: yoy ? brief(yoy) : null, history };
 }
-export const SCORE_HISTORY = 6; // filings per company to look at for prev / yoy
-let latestAllMemo = null;
 const decoded = new Map(); // accession -> score
 function scoreOf(accession) {
   if (!decoded.has(accession)) decoded.set(accession, store.scoreJson(accession));
   return decoded.get(accession);
 }
-export function latestScores() {
+// Every company's current score as of a date (null = now), for the
+// screener. Without a date only the newest SCORE_HISTORY filings of a
+// company are decoded; with one every saved filing may be the current one,
+// so all of them are (the decoded cache above makes the next date cheap).
+// One row set per date is memoised, a few dates at a time.
+const latestMemo = new Map(); // asof ('' = now) -> { n, at, rows }
+export function latestScores(asof = null) {
+  const key = asof || '';
   const n = store.scoreCount(SCORE_VERSION);
-  if (latestAllMemo && latestAllMemo.n === n && Date.now() - latestAllMemo.at < 60_000) return latestAllMemo.rows;
+  const hit = latestMemo.get(key);
+  if (hit && hit.n === n && Date.now() - hit.at < 60_000) return hit.rows;
   const byCik = new Map();
   for (const r of store.scoreIndex(SCORE_VERSION)) {
     if (!r.report_date) continue;
     const list = byCik.get(r.cik) || [];
-    if (list.length < SCORE_HISTORY) list.push(r.accession);
+    if (asof || list.length < SCORE_HISTORY) list.push(r.accession);
     byCik.set(r.cik, list);
   }
   const rows = [];
   for (const [, accs] of byCik) {
-    const row = withHistory(accs.map(scoreOf));
+    const row = withHistory(accs.map(scoreOf), asof);
     if (row) rows.push(row);
   }
   if (decoded.size > 60_000) decoded.clear();
-  latestAllMemo = { n, at: Date.now(), rows };
+  if (latestMemo.size > 4) latestMemo.clear();
+  latestMemo.set(key, { n, at: Date.now(), rows });
   return rows;
 }
 
