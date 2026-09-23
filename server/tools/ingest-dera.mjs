@@ -51,6 +51,7 @@ const DATASETS = 'https://www.sec.gov/files/dera/data/financial-statement-data-s
 const ZIPS = process.env.STOCKSCAN_DERA || path.join(REPO, 'data', 'dera');
 const FIRST = '2009q1'; // the first quarter SEC published
 const COMPANY_TTL = 30 * 24 * 3600 * 1000; // a submissions record this run may reuse
+const EDGAR_LANES = Math.max(1, Number(process.env.STOCKSCAN_CRAWL_PARALLEL) || 6); // companies asked for at once
 const ZIP_RETRIES = 4;
 const ZIP_BACKOFF_MS = 120_000;
 
@@ -295,23 +296,29 @@ async function readTags(zip) {
 async function edgarIndex(client, ciks, stats) {
   const byAccession = new Map();
   const snapByCik = new Map();
+  let next = 0;
   let done = 0;
-  for (const cik of ciks) {
-    if (++done % 500 === 0) log(`  EDGAR filing lists ${n(done)} / ${n(ciks.length)} companies (${secs()} s)`);
-    let company;
-    try {
-      company = await getCompany(client, cik, {
-        inlineOnly: false,
-        maxAge: COMPANY_TTL,
-      });
-    } catch (err) {
-      stats.noCompany++;
-      if (err.status !== 404) console.warn(`ingest-dera: CIK ${cik}: ${err.message}`);
-      continue;
+  // A company with a long history takes several requests one after another,
+  // and a lane spends nearly all of that waiting on the network - so a few
+  // lanes fill the client's ten requests a second instead of one lane leaving
+  // most of it unused (crawler.js runs its companies the same way, for the
+  // same reason). The spacing between requests is the client's and does not
+  // change.
+  const lane = async () => {
+    for (let i = next++; i < ciks.length; i = next++) {
+      const cik = ciks[i];
+      try {
+        const company = await getCompany(client, cik, { inlineOnly: false, maxAge: COMPANY_TTL });
+        for (const f of company.filings) byAccession.set(f.accession, f);
+        snapByCik.set(cik, dateSnapper(company.filings.map((f) => f.reportDate)));
+      } catch (err) {
+        stats.noCompany++;
+        if (err.status !== 404) console.warn(`ingest-dera: CIK ${cik}: ${err.message}`);
+      }
+      if (++done % 500 === 0) log(`  EDGAR filing lists ${n(done)} / ${n(ciks.length)} companies (${secs()} s)`);
     }
-    for (const f of company.filings) byAccession.set(f.accession, f);
-    snapByCik.set(cik, dateSnapper(company.filings.map((f) => f.reportDate)));
-  }
+  };
+  await Promise.all(Array.from({ length: EDGAR_LANES }, lane));
   return { byAccession, snapByCik };
 }
 
