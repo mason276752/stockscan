@@ -48,6 +48,8 @@ const DATASETS = 'https://www.sec.gov/files/dera/data/financial-statement-data-s
 const ZIPS = process.env.STOCKSCAN_DERA || path.join(REPO, 'data', 'dera');
 const FIRST = '2009q1'; // the first quarter SEC published
 const COMPANY_TTL = 30 * 24 * 3600 * 1000; // a submissions record this run may reuse
+const ZIP_RETRIES = 4;
+const ZIP_BACKOFF_MS = 120_000;
 
 const args = process.argv.slice(2);
 const opt = (name, dflt = null) => {
@@ -179,20 +181,27 @@ async function ensureZip(client, quarter) {
   if (fs.existsSync(file) && fs.statSync(file).size > 1024) return file;
   fs.mkdirSync(ZIPS, { recursive: true });
   const url = `${DATASETS}${quarter}.zip`;
-  let res;
-  try {
-    // 60-90 MB a quarter, so straight to disk - and patient, because a run
-    // that has been pulling from sec.gov for a while gets 429s back
-    res = await client.fetch(url, { retries: 8 });
-  } catch (err) {
-    if (err.status === 404) return null; // not published (a quarter still open)
-    throw err;
-  }
   const tmp = `${file}.${process.pid}.tmp`;
-  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
-  fs.renameSync(tmp, file);
-  log(`${quarter}: downloaded ${(fs.statSync(file).size / 1048576).toFixed(1)} MB`);
-  return file;
+  // 60-90 MB a quarter, so straight to disk. sec.gov starts answering 429 to
+  // a run that has been pulling zips from it for a while - not for a second
+  // or two, for minutes - so the wait between tries is minutes as well; the
+  // client's own retries are far too quick for this.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await client.fetch(url, { retries: 3 });
+      await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
+      fs.renameSync(tmp, file);
+      log(`${quarter}: downloaded ${(fs.statSync(file).size / 1048576).toFixed(1)} MB`);
+      return file;
+    } catch (err) {
+      fs.rmSync(tmp, { force: true });
+      if (err.status === 404) return null; // not published (a quarter still open)
+      if (attempt >= ZIP_RETRIES) throw err;
+      const wait = ZIP_BACKOFF_MS * (attempt + 1);
+      log(`${quarter}: ${err.message} - waiting ${(wait / 60000).toFixed(0)} min, then trying again`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 // sub.txt is small enough to read whole.

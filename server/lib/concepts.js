@@ -4,8 +4,12 @@
 // a line mid-year). Its own module so both can have it without a cycle.
 
 // Concept fallbacks (US-GAAP first, then IFRS). Lists are tried in order.
+// Some entries are the pre-2014 spellings of a figure (SalesRevenueGoodsNet
+// for what is now Revenues): they are only reached when none of the current
+// ones is in the filing, and they are what the filings the quarterly
+// datasets reach back into are tagged with (server/lib/dera.js).
 export const C = {
-  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers', 'ifrs-full:RevenueFromSaleOfGoods', 'ifrs-full:RevenueFromRenderingOfServices', 'ifrs-full:RevenueAndOperatingIncome', 'ifrs-full:InsuranceRevenue', 'ifrs-full:RevenueFromRenderingOfTelecommunicationServices', 'ifrs-full:RevenueFromRenderingOfTransportServices', 'ifrs-full:RevenueFromRenderingOfCargoAndMailTransportServices', 'us-gaap:RegulatedOperatingRevenue', 'us-gaap:RegulatedOperatingRevenueGas', 'us-gaap:RegulatedOperatingRevenueElectric', 'us-gaap:OilAndGasRevenue', 'us-gaap:OperatingLeaseLeaseIncome', 'us-gaap:FeeIncome'],
+  revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:SalesRevenueGoodsNet', 'us-gaap:SalesRevenueServicesNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers', 'ifrs-full:RevenueFromSaleOfGoods', 'ifrs-full:RevenueFromRenderingOfServices', 'ifrs-full:RevenueAndOperatingIncome', 'ifrs-full:InsuranceRevenue', 'ifrs-full:RevenueFromRenderingOfTelecommunicationServices', 'ifrs-full:RevenueFromRenderingOfTransportServices', 'ifrs-full:RevenueFromRenderingOfCargoAndMailTransportServices', 'us-gaap:RegulatedOperatingRevenue', 'us-gaap:RegulatedOperatingRevenueGas', 'us-gaap:RegulatedOperatingRevenueElectric', 'us-gaap:OilAndGasRevenue', 'us-gaap:OperatingLeaseLeaseIncome', 'us-gaap:FeeIncome'],
   // banks: net revenue = net interest income + non-interest income
   netInterestIncome: ['us-gaap:InterestIncomeExpenseNet', 'us-gaap:InterestIncomeExpenseAfterProvisionForLoanLoss', 'ifrs-full:InterestRevenueExpense'],
   interestIncome: ['us-gaap:InterestAndDividendIncomeOperating', 'us-gaap:InterestIncomeOperating', 'ifrs-full:RevenueFromInterest'],
