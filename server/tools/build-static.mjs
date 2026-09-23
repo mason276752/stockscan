@@ -343,7 +343,12 @@ for (const r of store.scoreIndex(SCORE_VERSION)) {
   const s = store.scoreJson(r.accession);
   const year = s && asOfShardOf(s);
   if (!year) continue;
-  (asOfByYear.get(year) || asOfByYear.set(year, []).get(year)).push(s);
+  // every score of every year is held at once here, and `items` (the
+  // seventeen benchmark rows, with their names and thresholds) is most of a
+  // score's bytes and none of it travels in a shard - so it goes now rather
+  // than sitting in memory a hundred thousand times over
+  const { items, ...row } = s;
+  (asOfByYear.get(year) || asOfByYear.set(year, []).get(year)).push(row);
 }
 const asOfYears = [...asOfByYear.keys()].sort((a, b) => b - a).slice(0, ASOF_YEARS);
 for (const year of asOfYears) write(`screen-asof-${year}.json`, screenAsOfColumns(asOfByYear.get(year)));
