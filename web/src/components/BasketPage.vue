@@ -100,9 +100,13 @@ watch(minPrice, (v) => localStorage.setItem('stockscan.rule.minprice', v));
 const ruleRebalance = ref(localStorage.getItem('stockscan.rule.rebalance') ?? 'monthly');
 const weighting = ref(localStorage.getItem('stockscan.rule.weighting') ?? 'equal');
 const maxWeight = ref(localStorage.getItem('stockscan.rule.maxweight') ?? '10');
+// a special rebalance: rebuild between the scheduled ones when the weights
+// have run past what they are allowed to be (Nasdaq-100 does the same)
+const special = ref(localStorage.getItem('stockscan.rule.special') !== '0');
 watch(ruleRebalance, (v) => localStorage.setItem('stockscan.rule.rebalance', v));
 watch(weighting, (v) => localStorage.setItem('stockscan.rule.weighting', v));
 watch(maxWeight, (v) => localStorage.setItem('stockscan.rule.maxweight', v));
+watch(special, (v) => localStorage.setItem('stockscan.rule.special', v ? '1' : '0'));
 
 const quotes = ref(null); // /api/quotes/status
 const advanced = ref(false); // TradingView Advanced Charts loaded
@@ -305,6 +309,7 @@ async function run(force = false) {
         rebalance: ruleRebalance.value,
         weighting: weighting.value,
         maxWeight: Number(maxWeight.value) > 0 ? Math.min(1, Number(maxWeight.value) / 100) : 0.1,
+        special: special.value,
       }
     : { constituents: included.map((c) => ({ ticker: c.ticker, cik: c.cik, weight: Number(c.weight) })), range: range.value, ...w, rebalance: b.rebalance, benchmark: benchmark.value || null };
   const key = JSON.stringify(body);
@@ -327,7 +332,7 @@ async function run(force = false) {
     // bars stream in one constituent at a time: progress shows as they land, the
     // chart (the previous one stays up meanwhile) is replaced once by the final index
     await (rule ? api.ruleEtfStream : api.basketStream)(
-      rule ? { params: body.params, range: body.range, from: body.from, to: body.to, benchmark: body.benchmark, minPrice: body.minPrice, rebalance: body.rebalance, weighting: body.weighting, maxWeight: body.maxWeight } : body,
+      rule ? { params: body.params, range: body.range, from: body.from, to: body.to, benchmark: body.benchmark, minPrice: body.minPrice, rebalance: body.rebalance, weighting: body.weighting, maxWeight: body.maxWeight, special: body.special } : body,
       (ev) => {
         if (id !== seq) return;
         if (ev.type === 'schedule') schedule.value = ev;
@@ -377,7 +382,7 @@ onMounted(async () => {
   await loadQuotes();
   run();
 });
-watch([current, range, ruleRange, benchmark, hidden, ruleRebalance, weighting], () => run());
+watch([current, range, ruleRange, benchmark, hidden, ruleRebalance, weighting, special], () => run());
 // dates are typed in (a half-typed year is a window of its own): wait
 let dateTimer = null;
 watch([from, to], () => {
@@ -615,8 +620,10 @@ const sourceText = computed(() => {
             <select v-if="isRule" v-model="weighting" class="small" :title="t('rule.weightingTitle')">
               <option value="equal">{{ t('rule.equal') }}</option>
               <option value="cap">{{ t('rule.byCap') }}</option>
+              <option value="ndx">{{ t('rule.ndx') }}</option>
             </select>
             <label v-if="isRule && weighting === 'cap'" class="minprice small" :title="t('rule.maxWeightTitle')">{{ t('rule.maxWeight') }} <input v-model="maxWeight" type="number" min="1" max="100" step="1" /></label>
+            <label v-if="isRule && weighting !== 'equal'" class="minprice small" :title="t('rule.specialTitle')"><input v-model="special" type="checkbox" /> {{ t('rule.special') }}</label>
             <label v-if="isRule" class="minprice small" :title="t('rule.minPriceTitle')">{{ t('rule.minPrice') }} <input v-model="minPrice" type="number" min="0" step="0.5" /></label>
             <select v-model="benchmark" class="small" :title="t('bk.benchmarkTitle')">
               <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label() }}</option>

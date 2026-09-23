@@ -600,6 +600,8 @@ export default {
   'bkNote.ruleCash': 'On {days} trading days nothing passed the filters: the index is flat (in cash) over them',
   'bkNote.ruleCheap': '{n} companies passed the filters but were under ${price} on the rebalance day, so the index did not buy them ({list}) - one tick on those is tens of percent and would swamp the index',
   'bkNote.ruleWild': '{n} constituents moved more than fourfold in a day while held ({list}) - almost always a split the price source never adjusted for, so the index on those days is that artefact and not a return',
+  'bkNote.ruleSpecial': '{n} special rebalances were triggered by the weights running away (rebuilds outside the schedule)',
+  'bkNote.ruleLimitsSkipped': 'Nasdaq-100 writes its three stages for a hundred names. This index holds too few for {n} of them to be arithmetically possible (over sixteen names the average weight is 6.25%, so "everything above 4.5% together under 48%" can never hold), so they are not applied - only the 24% to 20% single-name line does anything here',
   'bkNote.ruleNoShares': '{n} companies carry no usable share count in their filings (mostly banks, funds and trusts); under market-value weighting they take the median market value of the rest ({list})',
   'bkNote.ruleNeverTraded': '{symbol} had no quotes on the days it was in, so the index never actually bought it',
   // rule ETF (RuleEtfPanel.vue, BasketPage.vue)
@@ -614,6 +616,9 @@ export default {
   'rule.windowTitle': 'This window only: what it holds on the first day was decided by filings before it, the changes after it are replayed as usual, and a company the window never holds is left out',
   'rule.equal': 'equal weight',
   'rule.byCap': 'by market value',
+  'rule.ndx': 'by market value (QQQ rules)',
+  'rule.special': 'special rebalance',
+  'rule.specialTitle': 'Between rebalance days, rebuild at the next open whenever the weights at the close have run past what they are allowed to be (Nasdaq-100 calls this a Special Rebalance). A plain ceiling counts as breached at 1.2x the ceiling - the same gap Nasdaq leaves between its 24% trigger and the 20% it resets to, so the book is not turned over daily; the QQQ rules use their own 24% / 48% / 40% lines',
   'rule.weightingTitle': 'Equal weight gives every name the same money. By market value splits it by what each is worth on the rebalance day - the diluted share count of the filing that was current then, times that day\'s price, both knowable on the day - with a ceiling on any one name, the excess spread over the rest; a ceiling of 100 is plain market-value weighting. A company whose filings never carried a share count (about a fifth of them: banks, funds and trusts) is weighted as the median of the rest rather than dropped',
   'rule.maxWeight': 'Max weight %',
   'rule.maxWeightTitle': 'The most of the index any one name may be under market-value weighting. The excess is spread over the rest in proportion to what they already have, again until everyone is inside it. 100 = no ceiling (plain market value)',

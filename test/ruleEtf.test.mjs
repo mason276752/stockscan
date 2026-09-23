@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { screenAsOfColumns, screenAsOfIndex } from '../server/lib/screen.js';
-import { capWeights, marketWeights, rebalanceSessions, replaySchedule, ruleRequest, ruleSeries, windowSchedule } from '../server/lib/ruleEtf.js';
+import { NDX_CONSTRAINTS, breachesConstraints, capWeights, constrainWeights, marketWeights, rebalanceSessions, replaySchedule, ruleRequest, ruleSeries, singleCap, windowSchedule } from '../server/lib/ruleEtf.js';
 
 // --- the pieces a replay reads: the company half (index/screen.json) and
 // every scored filing (index/screen-asof-<year>.json) ---
@@ -339,8 +339,61 @@ test('the weight ceiling is spread over the rest, and an impossible one is ignor
   assert.deepEqual(w4(capWeights([0.7, 0.2, 0.1], 0.4)), [0.4, 0.4, 0.2]);
   assert.deepEqual(w4(capWeights([0.5, 0.5], 1)), [0.5, 0.5]);
   assert.deepEqual(w4(capWeights([0.7, 0.2, 0.1], 0.1)), [0.3333, 0.3333, 0.3333], 'a tenth each over three names cannot add to one');
-  assert.deepEqual(w4(marketWeights([100, 50, 0], 1)), [0.4, 0.2, 0.4]);
-  assert.deepEqual(w4(marketWeights([0, 0], 1)), [0.5, 0.5], 'nobody has a share count: equal weight');
+  assert.deepEqual(w4(marketWeights([100, 50, 0], null)), [0.4, 0.2, 0.4]);
+  assert.deepEqual(w4(marketWeights([0, 0], null)), [0.5, 0.5], 'nobody has a share count: equal weight');
+});
+
+// --- Nasdaq-100's constraints ---
+const pct = (xs) => xs.map((x) => Math.round(x * 1e4) / 100);
+const hundred = (top) => [...top, ...Array(100 - top.length).fill((1 - top.reduce((a, b) => a + b, 0)) / (100 - top.length))];
+
+test('the three stages hold together over an index the size they were written for', () => {
+  const before = hundred([0.3, 0.14, 0.1, 0.08, 0.06]);
+  assert.equal(breachesConstraints(before, NDX_CONSTRAINTS), true, '30% in one name is past the 24% trigger');
+  const after = constrainWeights(before, NDX_CONSTRAINTS);
+  assert.equal(Math.round(after.reduce((a, b) => a + b, 0) * 1e6) / 1e6, 1, 'the weights still add to one');
+  assert.ok(Math.max(...after) <= 0.2 + 1e-9, 'stage 1: nobody above 20%');
+  assert.equal(pct([after.filter((x) => x > 0.045).reduce((a, b) => a + b, 0)])[0] < 48, true, 'stage 2: the >4.5% group is under 48%');
+  assert.deepEqual(pct([[...after].sort((a, b) => b - a).slice(0, 5).reduce((a, b) => a + b, 0)]), [38.5], 'security stage 2: the five largest are brought to 38.5%');
+  for (let i = 1; i < 5; i++) assert.ok(after[i - 1] >= after[i], 'and the rank order is kept');
+  assert.equal(breachesConstraints(after, NDX_CONSTRAINTS), false, 'nothing is left breached');
+});
+
+test('a target no small index could meet settles at the lowest level the rest can absorb', () => {
+  // twelve names cannot all be under 4.5%, and five of twelve cannot hold 38.5%
+  const w = constrainWeights(Array.from({ length: 12 }, (_, i) => (i === 0 ? 0.45 : 0.55 / 11)), NDX_CONSTRAINTS);
+  assert.equal(Math.round(w.reduce((a, b) => a + b, 0) * 1e6) / 1e6, 1);
+  assert.ok(Math.max(...w) <= 0.2 + 1e-9, 'the one constraint that is meetable still is');
+  assert.ok(w.every((x) => x > 0), 'and nobody is squeezed to nothing');
+});
+
+test('a plain ceiling is watched a fifth above itself, the way Nasdaq watches 24 against 20', () => {
+  const c = singleCap(0.1);
+  assert.deepEqual(c.single, { over: 0.1, to: 0.1, watch: 0.12 });
+  const ten = (head) => [head, ...Array(9).fill((1 - head) / 9)];
+  assert.equal(breachesConstraints(ten(0.11), c), false, 'drifting to 11% is not worth a trade');
+  assert.equal(breachesConstraints(ten(0.13), c), true, '13% is');
+});
+
+test('a name that runs away is rebuilt before the next scheduled rebalance', () => {
+  const shares = [{ date: '2019-01-01', value: 100 }];
+  const days = ['2020-01-02', '2020-01-03', '2020-01-06', '2020-01-07', '2020-01-08', '2020-02-03'];
+  const px = [10, 10, 100, 100, 100, 100];
+  const a = { symbol: 'A', source: 'test', shares, days: days.map((date, i) => ({ date, open: px[i], high: px[i], low: px[i], close: px[i], volume: 100 })) };
+  const b = { symbol: 'B', source: 'test', shares, days: days.map((date) => ({ date, open: 10, high: 10, low: 10, close: 10, volume: 100 })) };
+  const opts = { weighting: 'cap', maxWeight: 0.6, from: null };
+  const r = ruleSeries([a, b], [ev('2020-01-01', ['A', 'B'])], opts);
+  assert.deepEqual(r.counts.map((c) => [c.date, !!c.special]), [
+    ['2020-01-02', false], // the month's own rebalance
+    ['2020-01-07', true], // A was 91% of the index at the close of the 6th
+    ['2020-02-03', false],
+  ]);
+  assert.equal(r.specials, 1);
+  assert.equal(r.notes.find((n) => n.code === 'ruleSpecial')?.n, 1);
+  // and with it turned off the ceiling is only restored in February
+  const off = ruleSeries([a, b], [ev('2020-01-01', ['A', 'B'])], { ...opts, special: false });
+  assert.deepEqual(off.counts.map((c) => c.date), ['2020-01-02', '2020-02-03']);
+  assert.equal(off.specials, 0);
 });
 
 test('rebalance sessions are the first of each period', () => {

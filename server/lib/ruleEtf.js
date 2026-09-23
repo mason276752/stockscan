@@ -69,7 +69,7 @@ const WILD = 4; // a one-day move of this many times, while held: a split nobody
 // when the portfolio is rebuilt: the first session of each period ('filing'
 // is the old behaviour - the day after every filing that changes the list)
 export const REBALANCE = ['monthly', 'quarterly', 'yearly', 'filing'];
-export const WEIGHTING = ['equal', 'cap'];
+export const WEIGHTING = ['equal', 'cap', 'ndx'];
 export const MAX_WEIGHT = 0.1; // no one name above a tenth of a market-value weighted index
 const SHARE_KEY = 'sharesDiluted'; // the screener value the market value is built on (millions of shares)
 
@@ -202,6 +202,128 @@ export function windowSchedule(schedule, { from = null, to = null } = {}) {
 }
 
 // ---- 1c. weights ----
+// Nasdaq-100 states its "modified market capitalization" weighting as a set
+// of constraints applied in stages and then repeated until they all hold
+// (indexes.nasdaq.com/docs/Methodology_NDX.pdf). Each stage is a level that
+// triggers it and a lower one the breach is brought down to; the gap between
+// the two is what stops a special rebalance firing every other day:
+//
+//   single  no company above `over` (24%); if one is, nobody ends above `to` (20%)
+//   cohort  the companies above `above` (4.5%) may not add to `over` (48%)
+//           together; if they do, that group is brought down to `to` (40%)
+//   top     the `n` (5) largest may not add to `over` (40%); if they do, they
+//           are brought to `to` (38.5%) and everyone else capped at `cap` (4.4%)
+//
+// `watch` is what the special rebalance looks at between rebalances, when it
+// is not the trigger itself (a plain ceiling has no gap of its own).
+export const NDX_CONSTRAINTS = {
+  single: { over: 0.24, to: 0.2 },
+  cohort: { above: 0.045, over: 0.48, to: 0.4 },
+  top: { n: 5, over: 0.4, to: 0.385, cap: 0.044 },
+};
+// a plain ceiling, watched a fifth above it - the same gap Nasdaq leaves
+// between its 24% trigger and the 20% it resets to
+export const singleCap = (maxWeight) => ({ single: { over: maxWeight, to: maxWeight, watch: Math.min(1, maxWeight * 1.2) } });
+
+const total = (xs) => xs.reduce((a, b) => a + b, 0);
+// `v` scaled to add up to `t`, with no entry above `ceiling`
+function spread(v, t, ceiling) {
+  const s = total(v);
+  const base = s > 0 ? v.map((x) => x / s) : v.map(() => 1 / v.length);
+  return capWeights(base, ceiling / t).map((x) => x * t);
+}
+// Bring the group marked in `inGroup` down to `t` of the index, the rest
+// taking what is left - each of them capped so none ends above the smallest
+// inside the group, which is what keeps the rank order.
+//
+// Nasdaq writes these numbers for a hundred names. Over fewer they can be
+// arithmetically impossible: twelve names cannot all be under 4.5%, and a
+// group of k out of n cannot hold less than k/n while nobody outside it may
+// be bigger than the smallest inside. So the target is the lowest level the
+// rest of the index can actually absorb, and the stage settles there.
+function groupTo(w, inGroup, target, ceiling = Infinity) {
+  const gi = [];
+  const oi = [];
+  w.forEach((_, i) => (inGroup[i] ? gi : oi).push(i));
+  if (!gi.length || !oi.length) return w;
+  const t = Math.max(target, gi.length / w.length, Number.isFinite(ceiling) ? 1 - oi.length * ceiling : 0);
+  if (!(t < total(gi.map((i) => w[i])) - 1e-12)) return w;
+  const out = [...w];
+  const inside = spread(
+    gi.map((i) => w[i]),
+    t,
+    Infinity,
+  );
+  gi.forEach((i, j) => (out[i] = inside[j]));
+  const outside = spread(
+    oi.map((i) => w[i]),
+    1 - t,
+    Math.min(ceiling, Math.min(...inside)),
+  );
+  oi.forEach((i, j) => (out[i] = outside[j]));
+  return out;
+}
+const topIndexes = (w, n) =>
+  w
+    .map((x, i) => i)
+    .sort((a, b) => w[b] - w[a])
+    .slice(0, n);
+
+// Which stages can be met at all. Nasdaq's numbers are written for a hundred
+// names; over sixteen holdings everybody is above 4.5% and the five largest
+// are half the index whatever anyone does. A line nothing can get under is
+// not applied and not watched - watching it would rebuild the book daily.
+export function liveStages(w, c) {
+  const n = w.length;
+  const k = c.cohort ? w.filter((x) => x > c.cohort.above + 1e-12).length : 0;
+  return {
+    single: !!c.single && c.single.to >= 1 / n - 1e-12,
+    cohort: !!c.cohort && k > 0 && k / n < c.cohort.over,
+    top: !!c.top && c.top.n < n && Math.max(c.top.n / n, 1 - (n - c.top.n) * c.top.cap) < c.top.over,
+  };
+}
+
+// the weights every stage of `c` is happy with (nothing to satisfy: unchanged)
+export function constrainWeights(w, c) {
+  if (!c || !w.length) return w;
+  let out = w;
+  for (let pass = 0; pass < 12; pass++) {
+    const before = out;
+    const live = liveStages(out, c);
+    // the single ceiling always applies - capWeights settles at equal weight
+    // when the ceiling is below one; it is only the *watching* of it that a
+    // ceiling nothing can get under has to be spared
+    if (c.single && Math.max(...out) > c.single.over + 1e-12) out = capWeights(out, c.single.to);
+    if (live.cohort) {
+      const inGroup = out.map((x) => x > c.cohort.above + 1e-12);
+      if (total(out.filter((_, i) => inGroup[i])) >= c.cohort.over - 1e-12) out = groupTo(out, inGroup, c.cohort.to);
+    }
+    if (live.top) {
+      const top = topIndexes(out, c.top.n);
+      if (total(top.map((i) => out[i])) >= c.top.over - 1e-12) {
+        const inGroup = out.map(() => false);
+        for (const i of top) inGroup[i] = true;
+        out = groupTo(out, inGroup, c.top.to, c.top.cap);
+      }
+    }
+    if (out.every((x, i) => Math.abs(x - before[i]) < 1e-12)) break;
+  }
+  return out;
+}
+
+// Is the index concentrated enough to rebuild before the next scheduled
+// rebalance? Nasdaq calls this a Special Rebalance and reads it off the
+// close, so the earliest it can be traded on is the next open.
+export function breachesConstraints(w, c) {
+  if (!c || w.length < 2) return false;
+  const live = liveStages(w, c);
+  const level = (x) => x.watch ?? x.over;
+  if (live.single && Math.max(...w) > level(c.single) + 1e-12) return true;
+  if (live.cohort && total(w.filter((x) => x > c.cohort.above + 1e-12)) >= level(c.cohort) - 1e-12) return true;
+  if (live.top && total(topIndexes(w, c.top.n).map((i) => w[i])) >= level(c.top) - 1e-12) return true;
+  return false;
+}
+
 // No name above `cap`: the excess is spread over the rest in proportion to
 // what they already have, again until everyone is inside it. A cap below an
 // equal weight cannot be met by anyone, so it is not asked for.
@@ -222,19 +344,19 @@ export function capWeights(w, cap) {
   return out;
 }
 
-// Target weights for the names being bought. `cap(j)` is a name's market
-// value on the day, or 0 when its filings never carried a share count -
-// those take the median of the rest, so a fifth of the market (banks, funds)
-// is neither dropped nor guessed at.
-export function marketWeights(values, maxWeight) {
+// Target weights for the names being bought, from their market values on the
+// day put through `constraints`. A value of 0 is a company whose filings
+// never carried a share count - it takes the median of the rest, so a fifth
+// of the market (banks, funds) is neither dropped nor guessed at.
+export function marketWeights(values, constraints) {
   const known = values.filter((x) => x > 0).sort((a, b) => a - b);
   if (!known.length) return values.map(() => 1 / values.length);
   const mid = known[Math.floor(known.length / 2)];
   const v = values.map((x) => (x > 0 ? x : mid));
-  const total = v.reduce((a, b) => a + b, 0);
-  return capWeights(
-    v.map((x) => x / total),
-    maxWeight,
+  const t = total(v);
+  return constrainWeights(
+    v.map((x) => x / t),
+    constraints,
   );
 }
 
@@ -264,7 +386,7 @@ export function rebalanceSessions(dates, every) {
 // Int32Array of indexes into each member's own days - a Map per member of
 // 900 names over 1,800 sessions is 1.6 M entries and hundreds of MB, this
 // is 6 MB. -1 = no price that day (not listed yet, or no longer).
-export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, from = null, to = null, rebalance = 'monthly', weighting = 'equal', maxWeight = MAX_WEIGHT } = {}) {
+export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, from = null, to = null, rebalance = 'monthly', weighting = 'equal', maxWeight = MAX_WEIGHT, constraints = null, special = true } = {}) {
   const notes = [];
   const rows = members.filter((m) => m.days?.length);
   for (const m of members) if (!m.days?.length) notes.push({ code: 'ruleNoBars', symbol: m.symbol });
@@ -313,6 +435,11 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
   const counts = []; // { date, n } whenever the number of holdings changes
   const per = rows.map(() => ({ days: 0, ret: 1, spells: 0, first: null, last: null, prevClose: 0, in: false, cheap: 0, wild: null }));
   const on = rebalanceSessions(dates, rebalance);
+  // what the weights must satisfy: nothing under equal weight, a plain
+  // ceiling under 'cap', Nasdaq-100's three stages under 'ndx'
+  const limits = weighting === 'equal' ? null : constraints || (weighting === 'ndx' ? NDX_CONSTRAINTS : singleCap(maxWeight));
+  let forced = false; // a special rebalance, read off last night's close
+  let specials = 0;
   // share count of member i as of session k, from the newest filing on or
   // before the day (0 = its filings never carried one). k only ever moves
   // forward, so each member keeps a pointer rather than a search.
@@ -323,6 +450,7 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
     return sharePtr[i] > 0 ? list[sharePtr[i] - 1].value : 0;
   };
   const noShares = new Set();
+  const skipped = new Set(); // constraint stages this index is too small to meet
   // what the portfolio is worth at this session's open (a holding with no
   // price left is worth its last close)
   const valueAt = (k) => {
@@ -360,7 +488,7 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
     // out only on a day the portfolio could be traded on. On a fixed
     // schedule that is once a month rather than once a session; 'filing'
     // has to look every day, because a difference is what it trades on.
-    const trading = !on || !!on[k];
+    const trading = !on || !!on[k] || forced;
     let now = null;
     if (trading) {
       now = [];
@@ -385,17 +513,21 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
       units = new Float64Array(rows.length);
       if (now.length) {
         let w;
-        if (weighting === 'cap') {
+        if (limits) {
           const caps = now.map((i) => sharesAt(i, k) * px(i, k, 'open'));
           now.forEach((i, j) => caps[j] > 0 || noShares.add(rows[i].symbol));
-          w = marketWeights(caps, maxWeight);
+          w = marketWeights(caps, limits);
+          const live = liveStages(w, limits);
+          for (const stage of ['cohort', 'top']) if (limits[stage] && !live[stage]) skipped.add(stage);
         } else w = now.map(() => 1 / now.length);
         now.forEach((i, j) => {
           units[i] = (V * w[j]) / px(i, k, 'open');
         });
       } else value = V;
       active = now;
-      counts.push({ date: d, n: now.length });
+      if (forced) specials++;
+      forced = false;
+      counts.push({ date: d, n: now.length, ...(on && !on[k] ? { special: true } : {}) });
     } else if (stopped.length) {
       // sold at the last close, the money spread over the rest in proportion
       // to what they are worth - it is not redeployed until the next rebalance
@@ -429,6 +561,13 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
     // the index starts the day it first holds something, not the day the
     // first filing qualified (that name may not have been trading yet)
     if (bars.length || active.length) bars.push(bar);
+    // Nasdaq reads its Special Rebalance off the close, so the earliest this
+    // can be acted on is tomorrow's open - which is also the only price this
+    // index is allowed to trade at.
+    if (special && limits && on && active.length > 1 && bar.close > 0) {
+      const held = active.map((i) => (units[i] * px(i, k, 'close')) / bar.close);
+      if (breachesConstraints(held, limits)) forced = true;
+    }
     for (const i of active) {
       const p = per[i];
       const close = px(i, k, 'close');
@@ -471,7 +610,9 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
     delisted: gone[i],
   }));
   for (const c of constituents) if (!c.days && !c.cheap) notes.push({ code: 'ruleNeverTraded', symbol: c.symbol });
-  return { bars, start: bars[0].time, end, notes, constituents, counts, holding: counts.at(-1)?.n ?? 0, minPrice, rebalance, weighting, maxWeight, rebalances: on ? counts.length : null, stats: stats(bars) };
+  if (specials) notes.push({ code: 'ruleSpecial', n: specials });
+  if (skipped.size) notes.push({ code: 'ruleLimitsSkipped', n: skipped.size, list: [...skipped].join(', ') });
+  return { bars, start: bars[0].time, end, notes, constituents, counts, holding: counts.at(-1)?.n ?? 0, minPrice, rebalance, weighting, maxWeight, special, specials, constraints: limits, rebalances: on ? counts.length : null, stats: stats(bars) };
 }
 
 // POST /api/basket/rule's body -> the query to replay, and the window to
@@ -495,6 +636,7 @@ export function ruleRequest(body, today = new Date().toISOString().slice(0, 10))
     rebalance: REBALANCE.includes(body?.rebalance) ? body.rebalance : 'monthly',
     weighting: WEIGHTING.includes(body?.weighting) ? body.weighting : 'equal',
     maxWeight: Number.isFinite(maxWeight) && maxWeight > 0 && maxWeight <= 1 ? maxWeight : MAX_WEIGHT,
+    special: body?.special !== false,
   };
 }
 
@@ -537,7 +679,7 @@ export async function runRuleEtf(schedule, req, fetchBars, { emit = null, signal
   const series = ruleSeries(
     out.filter((m) => m && wanted.has(m.symbol)).map((m) => ({ ...m, shares: shares.get(m.symbol) || [] })),
     schedule.events,
-    { minPrice: req.minPrice, from: req.from, to: req.to, rebalance: req.rebalance, weighting: req.weighting, maxWeight: req.maxWeight },
+    { minPrice: req.minPrice, from: req.from, to: req.to, rebalance: req.rebalance, weighting: req.weighting, maxWeight: req.maxWeight, special: req.special },
   );
   const failed = out.filter((m) => m?.error && wanted.has(m.symbol)).map((m) => ({ ticker: m.symbol, error: m.error }));
   return {
