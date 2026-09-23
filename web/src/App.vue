@@ -400,11 +400,12 @@ watch([company, filing, tab, indMode, view, page, browseParams, screenParams], (
   lastScreen = screenNow;
 });
 
-// a basket copied from the screener: reopen the screener with its filters,
-// tagged with the basket so "update this ETF" is offered there
+// a basket copied from the screener (or a rule ETF, whose filters *are* the
+// fund): reopen the screener with its filters, tagged with the basket so
+// "update this ETF" / "update the rule" is offered there
 function editScreen(basket) {
   const src = basket?.source;
-  if (!src || src.type !== 'screen') return;
+  if (!src || (src.type !== 'screen' && src.type !== 'rule')) return;
   // baskets saved before the URL form was kept only have API params: the screener rebuilds those itself
   screenParams.value = { ...(src.url || {}), basket: basket.id };
   page.value = 'screen';

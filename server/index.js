@@ -13,7 +13,7 @@ import { buildQuarterly } from './lib/quarters.js';
 import { buildIndicators } from './lib/indicators.js';
 import { currentView } from './lib/current.js';
 import { serverValuation } from './lib/valuationServer.js';
-import { ITEMS as SCORE_ITEMS, SCORE_VERSION, latestScore, latestScores, scoreAccession, scoreUnscored } from './lib/score.js';
+import { ITEMS as SCORE_ITEMS, SCORE_VERSION, asOfIndex, latestScore, latestScores, scoreAccession, scoreUnscored } from './lib/score.js';
 import { SCREEN_FIELDS, asOfDate, browseCompanies, filerCounts, scoreBadge, screenQuery, screenRows, sicCounts, wantsMarket } from './lib/screen.js';
 import { marketSnapshot, marketStatus } from './lib/market.js';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.js';
@@ -21,6 +21,7 @@ import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 import { liveHoldings } from './lib/liveHoldings.js';
 import { dailyBars } from './lib/bars.js';
 import { basketRequest, runBasket as runBasketWith } from './lib/basket.js';
+import { RULE_MAX_MEMBERS, replaySchedule, ruleRequest, runRuleEtf } from './lib/ruleEtf.js';
 import { barStore, openBarStore } from './lib/barStore.js';
 import { createBarCrawler } from './lib/barCrawler.js';
 import { ibConnect, ibStatus } from './lib/ib.js';
@@ -373,18 +374,22 @@ app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, d
 // those is memoised by its module, so the same objects come back until one
 // is refreshed
 let screenMemo = null;
+async function screenerRows(asof, wait) {
+  const u = await getUniverse(client);
+  const market = await marketSnapshot({ wait });
+  const scores = latestScores(asof);
+  if (!screenMemo || screenMemo.u !== u || screenMemo.market !== market || screenMemo.scores !== scores) {
+    const byCik = new Map(u.companies.map((c) => [c.cik, c]));
+    screenMemo = { u, market, scores, rows: screenRows(scores, byCik, market?.byTicker || null) };
+  }
+  return { rows: screenMemo.rows, scores };
+}
 app.get(
   '/api/screen',
   wrap(async (req, res) => {
-    const u = await getUniverse(client);
-    const market = await marketSnapshot({ wait: wantsMarket(req.query) });
     const asof = asOfDate(req.query.asof);
-    const scores = latestScores(asof);
-    if (!screenMemo || screenMemo.u !== u || screenMemo.market !== market || screenMemo.scores !== scores) {
-      const byCik = new Map(u.companies.map((c) => [c.cik, c]));
-      screenMemo = { u, market, scores, rows: screenRows(scores, byCik, market?.byTicker || null) };
-    }
-    res.json({ ...screenQuery(screenMemo.rows, req.query), scored: scores.length, asof, market: marketStatus() });
+    const { rows, scores } = await screenerRows(asof, wantsMarket(req.query));
+    res.json({ ...screenQuery(rows, req.query), scored: scores.length, asof, market: marketStatus() });
   }),
 );
 
@@ -475,6 +480,61 @@ app.post(
   }),
 );
 
+// ---- rule ETF: the screener's filters replayed through history ----
+// Nobody picks these constituents: the filters do, at every filing date from
+// the oldest one on record (ruleEtf.js). The schedule comes from the whole
+// store - every scored filing as the as-of index (score.js asOfIndex) - and
+// the index itself from the daily bars of whoever it ever held.
+async function ruleSchedule(body) {
+  const req = ruleRequest(body);
+  const { rows } = await screenerRows(null, false);
+  const schedule = replaySchedule(rows, asOfIndex(), req.params);
+  // too many to chart: the page words this one itself (rule.tooMany), so it
+  // travels as numbers beside the English fallback
+  if (schedule.members.length > RULE_MAX_MEMBERS) {
+    throw Object.assign(new Error(`these filters held ${schedule.members.length} different companies over their history - more than the ${RULE_MAX_MEMBERS} this can chart. Tighten them.`), { status: 400, tooMany: { n: schedule.members.length, max: RULE_MAX_MEMBERS } });
+  }
+  return { req, schedule };
+}
+const ruleExtra = () => ({ ib: ibStatus().connected, tv: tvStatus().connected });
+
+// POST /api/basket/rule { params: { <the screener query> }, benchmark }
+//  -> index bars (base 100), stats, every add / drop with its date, and the
+//     members with the stretches they were held for
+app.post(
+  '/api/basket/rule',
+  wrap(async (req, res) => {
+    const { req: request, schedule } = await ruleSchedule(req.body || {});
+    res.json(await runRuleEtf(schedule, request, (t) => dedupe(`bars:${t}`, () => dailyBars(t)), { extra: ruleExtra() }));
+  }),
+);
+
+// POST /api/basket/rule/stream - the same, streamed as NDJSON like
+// /api/basket/stream: { type: 'schedule' } as soon as the replay is done
+// (the page can list the changes while the bars are still coming), then one
+// { type: 'member' } per name, then the final { type: 'series' }.
+app.post(
+  '/api/basket/rule/stream',
+  wrap(async (req, res) => {
+    res.status(200).set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    const ac = new AbortController();
+    res.on('close', () => ac.abort());
+    const emit = (ev) => {
+      if (!res.writableEnded && !ac.signal.aborted) res.write(`${JSON.stringify(ev)}\n`);
+    };
+    try {
+      const { req: request, schedule } = await ruleSchedule(req.body || {});
+      emit({ type: 'schedule', members: schedule.members.length, events: schedule.events.length, skipped: schedule.skipped, tested: schedule.tested, first: schedule.first, last: schedule.last });
+      const r = await runRuleEtf(schedule, request, (t) => dedupe(`bars:${t}`, () => dailyBars(t)), { emit, signal: ac.signal, extra: ruleExtra() });
+      if (r) emit({ type: 'series', ...r });
+    } catch (err) {
+      emit({ type: 'error', error: err.message, tooMany: err.tooMany });
+    }
+    res.end();
+  }),
+);
+
 // GET /api/status -> local store and prefetch queue
 app.get('/api/status', (_req, res) => {
   res.json({ store: { file: store.file, ...store.size(), bars: barStore.stats() }, prefetch: prefetcher.status(), crawler: crawler.status(), barCrawler: barCrawler.status(), clientIdle: client.idle, tv: tvStatus(), ib: ibStatus() });
@@ -493,7 +553,7 @@ if (fs.existsSync(dist)) {
 app.use((err, _req, res, _next) => {
   const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
   if (status === 500) console.error(err);
-  res.status(status).json({ error: err.message });
+  res.status(status).json({ error: err.message, ...(err.tooMany ? { tooMany: err.tooMany } : {}) });
 });
 
 // the prefix: /stockscan -> /stockscan/ (relative asset URLs need the slash), everything below it -> app

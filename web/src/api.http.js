@@ -48,6 +48,8 @@ export const api = {
   bars: (symbol) => get(`/api/bars/${encodeURIComponent(symbol)}`),
   basket: (body) => post('/api/basket', body),
   basketStream: (body, onEvent, signal) => stream('/api/basket/stream', body, onEvent, signal),
+  ruleEtf: (body) => post('/api/basket/rule', body),
+  ruleEtfStream: (body, onEvent, signal) => stream('/api/basket/rule/stream', body, onEvent, signal),
 };
 
 // POST returning NDJSON: one JSON object per line, handed to onEvent as each

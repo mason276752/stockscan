@@ -337,14 +337,14 @@ const valueOf = (t, i, key, mode = 'now') => {
   return key === 'score' ? t.score(i) : t.value(i, key);
 };
 
-// The query of GET /api/screen applied to the rows (an array of screenRow
-// objects, the columns of screenColumns, or a screenTable of either): sic /
-// division / afs / exclusions / text, <key>[_chg|_yoy]_min|max ranges,
-// sort, limit. (history=1 is the page's hint that it shows change columns:
-// no effect here, see wantsHistory. asof picks which filing every row is,
-// which the caller has already done in building the table: see pickAsOf.)
-export function screenQuery(rows, q) {
-  const t = screenTable(rows);
+// The row half of a query - sic / division / afs / exclusions / text and
+// the <key>[_chg|_yoy]_min|max ranges - as a predicate over a screenTable,
+// so that whoever needs to ask "does this row pass?" outside screenQuery
+// (the rule ETF replays it at every filing date, ruleEtf.js) asks the one
+// implementation. `market: false` leaves the market-snapshot conditions out
+// and lists them in `skipped`: the snapshot is today's, so it cannot answer
+// for a past date.
+export function screenFilter(q, { market = true } = {}) {
   const sic = q.sic ? String(q.sic).padStart(4, '0') : null;
   const sic2 = q.sic2 ? String(q.sic2).padStart(2, '0') : null;
   const division = q.division ? SIC.divisions.find((d) => d.id === String(q.division).toUpperCase()) : null;
@@ -362,35 +362,49 @@ export function screenQuery(rows, q) {
   const text = String(q.q || '').trim().toUpperCase();
   const listedOnly = q.listed !== '0';
   const ranges = [];
+  const skipped = [];
   for (const [k, v] of Object.entries(q)) {
     const m = /^(.+?)(?:_(chg|yoy))?_(min|max)$/.exec(k);
     if (!m || v === '' || !Number.isFinite(Number(v))) continue;
     const f = fieldOf(m[1]);
     if (!f) continue;
     if (m[2] && f.market) continue; // no history for market fields
+    if (f.market && !market) {
+      if (!skipped.includes(m[1])) skipped.push(m[1]);
+      continue;
+    }
     ranges.push({ key: m[1], mode: m[2] || 'now', op: m[3], value: Number(v) });
   }
-  const out = [];
-  for (let i = 0; i < t.length; i++) {
-    if (listedOnly && !t.ticker(i)) continue;
+  const test = (t, i) => {
+    if (listedOnly && !t.ticker(i)) return false;
     const code = t.sic(i) || '0000';
-    if (sic && code !== sic) continue;
-    if (sic2 && !code.startsWith(sic2)) continue;
-    if (division && !(code.slice(0, 2) >= division.from && code.slice(0, 2) <= division.to)) continue;
-    if (exDiv.some((d) => code.slice(0, 2) >= d.from && code.slice(0, 2) <= d.to)) continue;
-    if (exSic.some((x) => code.startsWith(x))) continue;
-    if (afs && (t.afs(i) || 'UNKNOWN') !== afs) continue;
-    if (text && !(t.name(i).toUpperCase().includes(text) || (t.tickers(i) || []).some((x) => x.startsWith(text)))) continue;
-    let ok = true;
+    if (sic && code !== sic) return false;
+    if (sic2 && !code.startsWith(sic2)) return false;
+    if (division && !(code.slice(0, 2) >= division.from && code.slice(0, 2) <= division.to)) return false;
+    if (exDiv.some((d) => code.slice(0, 2) >= d.from && code.slice(0, 2) <= d.to)) return false;
+    if (exSic.some((x) => code.startsWith(x))) return false;
+    if (afs && (t.afs(i) || 'UNKNOWN') !== afs) return false;
+    if (text && !(t.name(i).toUpperCase().includes(text) || (t.tickers(i) || []).some((x) => x.startsWith(text)))) return false;
     for (const x of ranges) {
       const v = valueOf(t, i, x.key, x.mode);
-      if (v == null || (x.op === 'min' ? v < x.value : v > x.value)) {
-        ok = false;
-        break;
-      }
+      if (v == null || (x.op === 'min' ? v < x.value : v > x.value)) return false;
     }
-    if (ok) out.push(i);
-  }
+    return true;
+  };
+  return { test, ranges, skipped };
+}
+
+// The query of GET /api/screen applied to the rows (an array of screenRow
+// objects, the columns of screenColumns, or a screenTable of either):
+// screenFilter's conditions, then sort and limit. (history=1 is the page's
+// hint that it shows change columns: no effect here, see wantsHistory. asof
+// picks which filing every row is, which the caller has already done in
+// building the table: see pickAsOf.)
+export function screenQuery(rows, q) {
+  const t = screenTable(rows);
+  const { test } = screenFilter(q);
+  const out = [];
+  for (let i = 0; i < t.length; i++) if (test(t, i)) out.push(i);
   const sortKey = String(q.sort || 'score');
   const sortMode = ['chg', 'yoy'].includes(String(q.sortmode || '')) ? String(q.sortmode) : 'now';
   const dir = q.dir === 'asc' ? 1 : -1;

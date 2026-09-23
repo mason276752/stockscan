@@ -33,8 +33,8 @@ worker.onerror = (e) => {
   pending.clear();
 };
 
-// call api[method](...args) in the worker; streamed events (basketStream)
-// arrive on onEvent, signal cancels the call there
+// call api[method](...args) in the worker; streamed events (basketStream,
+// ruleEtfStream) arrive on onEvent, signal cancels the call there
 function call(method, args = [], { onEvent = null, signal = null } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason || new DOMException('aborted', 'AbortError'));
@@ -104,4 +104,6 @@ export const api = {
   bars: forward('bars'),
   basket: forward('basket'),
   basketStream: (body, onEvent, signal) => call('basketStream', [body], { onEvent, signal }),
+  ruleEtf: forward('ruleEtf'),
+  ruleEtfStream: (body, onEvent, signal) => call('ruleEtfStream', [body], { onEvent, signal }),
 };

@@ -4,7 +4,7 @@ import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import SicPicker from './SicPicker.vue';
 import { isWatched, toggleWatch } from '../watchlist';
-import { applySource, basketOf, createBasket, setSource } from '../baskets';
+import { applySource, basketOf, createBasket, createRuleBasket, setSource } from '../baskets';
 import { bigMoney, dateLocale, isZh, pick, t, tr } from '../i18n';
 import { sicInfo } from '../../../server/lib/sic.js';
 import { isNarrow, isPhone } from '../viewport';
@@ -153,6 +153,20 @@ function basketSource(n) {
   const { basket, ...url } = toUrlParams(); // the filters as the URL carries them: what "edit" reopens
   return { type: 'screen', params: { ...params.value }, url, n: n < basketable.value.length ? n : null, label: basketLabel() };
 }
+// The rule ETF (mode 'rule') keeps the filters and nothing else: no list of
+// companies, because the list is whoever passes them on the day. The date,
+// the sort and the limit are left out - the replay walks every date itself
+// and holds everyone who passes, in no particular order.
+const ruleSource = () => {
+  const { basket, asof, ...url } = toUrlParams();
+  const { asof: _asof, sort, dir, sortmode, limit, history, ...rest } = params.value;
+  return { type: 'rule', params: rest, url, label: basketLabel() };
+};
+function makeRuleBasket() {
+  const src = ruleSource();
+  createRuleBasket(src.label, src);
+  emit('basket');
+}
 const now = () => ({ at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）' }); // tr() words it
 function makeBasket() {
   const n = Number(basketN.value) > 0 ? Math.floor(Number(basketN.value)) : basketable.value.length;
@@ -167,6 +181,13 @@ function makeBasket() {
 function updateBasket() {
   const b = editing.value;
   if (!b) return;
+  // a rule ETF has no list to resync: the new filters are the new fund
+  if (b.mode === 'rule') {
+    const src = ruleSource();
+    setSource(b.id, src, b.name === b.source?.label ? src.label : null);
+    emit('basket');
+    return;
+  }
   const n = Number(basketN.value) > 0 ? Math.floor(Number(basketN.value)) : basketable.value.length;
   const rows = basketable.value.slice(0, n);
   if (!rows.length) return;
@@ -449,10 +470,17 @@ onMounted(async () => {
             <Loading v-if="loading" inline small :text="t('sr.searching')" />
             <span class="copy" :title="editing ? t('sr.updateTitle', { name: editing.name }) : t('sr.makeBasketTitle')">
               <span v-if="editing" class="editing">{{ t('sr.editing', { name: editing.name }) }} <button class="mini ghost" :title="t('sr.stopEditing')" @click="stopEditing">✕</button></span>
-              {{ t('top') }} <input v-model="basketN" type="number" min="1" class="n" :placeholder="String(basketable.length)" /> {{ t('sr.companiesUnit') }}
-              <button v-if="editing" class="small primary" :disabled="!basketable.length" @click="updateBasket">{{ t('sr.updateBasket') }}</button>
-              <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ t(editing ? 'sr.newBasket' : 'sr.makeBasket', { which: Number(basketN) > 0 ? t('sr.topN', { n: Math.min(Number(basketN), basketable.length) }) : t('sr.allN', { n: basketable.length }) }) }}</button>
+              <template v-if="editing?.mode === 'rule'">
+                <button class="small primary" @click="updateBasket">{{ t('sr.updateRule') }}</button>
+              </template>
+              <template v-else>
+                {{ t('top') }} <input v-model="basketN" type="number" min="1" class="n" :placeholder="String(basketable.length)" /> {{ t('sr.companiesUnit') }}
+                <button v-if="editing" class="small primary" :disabled="!basketable.length" @click="updateBasket">{{ t('sr.updateBasket') }}</button>
+                <button class="small" :disabled="!basketable.length" @click="makeBasket">{{ t(editing ? 'sr.newBasket' : 'sr.makeBasket', { which: Number(basketN) > 0 ? t('sr.topN', { n: Math.min(Number(basketN), basketable.length) }) : t('sr.allN', { n: basketable.length }) }) }}</button>
+              </template>
             </span>
+            <!-- a rule ETF can be worth charting even when nothing passes today: it may have held plenty in 2021 -->
+            <button v-if="editing?.mode !== 'rule'" class="small" :disabled="!result" :title="t('sr.makeRuleTitle')" @click="makeRuleBasket">{{ t('sr.makeRule') }}</button>
             <a v-if="!api.isStatic" :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
           </div>
         </div>

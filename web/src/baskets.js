@@ -1,6 +1,13 @@
 // Custom ETFs ("baskets") kept in localStorage (per browser).
-//   [{ id, name, createdAt, rebalance: 'none' | 'daily', prune, source, sync, excluded,
+//   [{ id, name, createdAt, mode, rebalance: 'none' | 'daily', prune, source, sync, excluded,
 //      constituents: [{ ticker, cik, name, weight, origin, manualWeight, sourceWeight, gone }] }]
+// mode 'manual' (the default): the list below is the ETF, and the user owns
+// it - add, remove, weigh as they like.
+// mode 'rule': there is no list. The ETF is a set of screener filters
+// (`source.params`) replayed through history - it holds, at equal weight,
+// whoever passes them on the day, and every change comes from a filing
+// (server/lib/ruleEtf.js). `constituents` stays empty and nothing about the
+// holdings can be edited; editing the filters is editing the ETF.
 // weight is a percentage (the page keeps them summing to 100; 0 leaves the
 // stock out of the index while keeping it in the list).
 // prune: drop delisted names as soon as the first price data shows which
@@ -55,6 +62,7 @@ const clean = (b) => {
     id: String(b.id || newId()),
     name: String(b.name || 'ETF'),
     createdAt: b.createdAt || new Date().toISOString(),
+    mode: b.mode === 'rule' ? 'rule' : 'manual',
     rebalance: b.rebalance === 'daily' ? 'daily' : 'none',
     prune: !!b.prune,
     source: b.source && typeof b.source === 'object' && b.source.type ? b.source : null,
@@ -103,6 +111,16 @@ export function createBasket(name, companies = [], { rebalance = 'none', prune =
   });
   if (source) normalizeWeights(b.constituents);
   for (const c of b.constituents) if (source) c.sourceWeight = c.weight;
+  baskets.items.unshift(b);
+  baskets.current = b.id;
+  return b;
+}
+
+// A rule ETF: the filters are the fund. Nothing is held yet - what it holds
+// on any day comes out of the replay, so there is no constituent list to
+// create and none to keep in step.
+export function createRuleBasket(name, source) {
+  const b = clean({ id: newId(), name, mode: 'rule', source, constituents: [] });
   baskets.items.unshift(b);
   baskets.current = b.id;
   return b;

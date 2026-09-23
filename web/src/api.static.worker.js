@@ -22,6 +22,7 @@ import { SCREEN_FIELDS, asOfDate, asOfShardYears, browseCompanies, screenAsOfInd
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
 import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
 import { basketRequest, runBasket } from '../../server/lib/basket.js';
+import { RULE_MAX_MEMBERS, replaySchedule, ruleRequest, runRuleEtf } from '../../server/lib/ruleEtf.js';
 import { buildValuation } from '../../server/lib/valuation.js';
 import * as data from './staticData';
 import { translate } from './locales/translate.js';
@@ -97,6 +98,21 @@ const screenAsOfRows = async (asof) => {
   if (asOfLast?.asof !== asof) asOfLast = { asof, table: screenAsOfTable(core, index, asof) };
   return asOfLast.table;
 };
+
+// A rule ETF replays the filters at every filing date, so it needs every
+// as-of year at once - not the three a single date reaches. That is the
+// whole published index (a few MB, cached like the rest), loaded once.
+let ruleGroups = null;
+const ruleIndex = () =>
+  (ruleGroups ??= Promise.all([data.screenAsOfYears(), screenRows(false)])
+    .then(async ([years, core]) => {
+      if (!years.length) throw new Error(t('static.ruleNoIndex'));
+      return { core, index: screenAsOfIndex(await Promise.all(years.map((y) => data.screenAsOfShard(y)))), years };
+    })
+    .catch((err) => {
+      ruleGroups = null; // a failed download can be retried
+      throw err;
+    }));
 
 const api = {
   meta: () => data.meta(),
@@ -294,6 +310,23 @@ const api = {
     const m = await data.meta();
     return runBasket(req, (t) => api.bars(t), { emit: onEvent, interim: body?.interim ? 1200 : 0, signal, listingOf, extra: { static: true, ib: false, tv: false, asOf: m.builtAt } });
   },
+  // a rule ETF: the same replay the server does, over the as-of index files
+  // the build shipped (ruleEtf.js). The bars are the ones beside them, so
+  // the whole thing runs here - with no server there is no other way.
+  async ruleEtf(body) {
+    return this.ruleEtfStream(body, null);
+  },
+  async ruleEtfStream(body, onEvent, signal) {
+    const req = ruleRequest(body);
+    const { core, index, years } = await ruleIndex();
+    const schedule = replaySchedule(core, index, req.params);
+    if (schedule.members.length > RULE_MAX_MEMBERS) throw new Error(t('rule.tooMany', { n: schedule.members.length, max: RULE_MAX_MEMBERS }));
+    onEvent?.({ type: 'schedule', members: schedule.members.length, events: schedule.events.length, skipped: schedule.skipped, tested: schedule.tested, first: schedule.first, last: schedule.last });
+    const m = await data.meta();
+    const r = await runRuleEtf(schedule, req, (t) => api.bars(t), { emit: onEvent, signal, extra: { static: true, ib: false, tv: false, asOf: m.builtAt, from: `${years.at(-1)}-01-01` } });
+    if (r) onEvent?.({ type: 'series', ...r });
+    return r;
+  },
 };
 
 const WARM = {
@@ -321,11 +354,12 @@ data.setProgress((path, loaded, total, done) => {
 
 // ---- the message loop ----
 // page -> worker  { id, method, args, locale }   call api[method](...args)
-//                 { id, abort: true }            cancel that call (basketStream)
+//                 { id, abort: true }            cancel that call (a streaming one)
 // worker -> page  { id, result } | { id, error: { message, status } }
-//                 { id, event }                  a streamed event (basketStream's onEvent)
-// basketStream's onEvent / signal arguments are made here: its args are
-// [body, { stream: true }] and the events go back as they happen.
+//                 { id, event }                  a streamed event (the method's onEvent)
+// A streaming method (STREAMED) is called with its onEvent / signal made
+// here: the page sends only the body, and the events go back as they happen.
+const STREAMED = new Set(['basketStream', 'ruleEtfStream']);
 const inflight = new Map(); // id -> AbortController
 self.onmessage = async ({ data: msg }) => {
   if (msg.abort) return inflight.get(msg.id)?.abort();
@@ -337,7 +371,7 @@ self.onmessage = async ({ data: msg }) => {
     const fn = api[method];
     if (typeof fn !== 'function') throw new Error(`unknown method ${method}`);
     const emit = (event) => self.postMessage({ id, event });
-    const result = await (method === 'basketStream' ? api.basketStream(args[0], emit, ctrl.signal) : fn.apply(api, args));
+    const result = await (STREAMED.has(method) ? fn.call(api, args[0], emit, ctrl.signal) : fn.apply(api, args));
     self.postMessage({ id, result: result === undefined ? null : result });
   } catch (err) {
     self.postMessage({ id, error: { message: err?.message || String(err), status: err?.status ?? null } });

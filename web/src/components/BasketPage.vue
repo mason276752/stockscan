@@ -4,9 +4,10 @@ import { api } from '../api';
 import { url } from '../base';
 import CompanySearch from './CompanySearch.vue';
 import KlineChart from './KlineChart.vue';
+import RuleEtfPanel from './RuleEtfPanel.vue';
 import TvEmbedChart from './TvEmbedChart.vue';
 import Icon from './Icon.vue';
-import { addConstituent, applySource, basketOf, baskets, createBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, renameConstituent, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
+import { addConstituent, applySource, basketOf, baskets, createBasket, createRuleBasket, equalWeights, normalizeWeights, removeBasket, removeConstituent, removeConstituents, renameConstituent, restoreExcluded, revertWeight, setManualWeight } from '../baskets';
 import { watchlist } from '../watchlist';
 import { dateLocale, t, tr } from '../i18n';
 import Note from './Note.vue';
@@ -44,6 +45,20 @@ watch(chartSource, (v) => localStorage.setItem('stockscan.basket.chart', v));
 watch(range, (v) => localStorage.setItem('stockscan.basket.range', v));
 watch(benchmark, (v) => localStorage.setItem('stockscan.basket.bench', v));
 watch(colors, (v) => localStorage.setItem('stockscan.kcolors', v));
+
+// A rule ETF (mode 'rule') has no constituent list: the screener filters it
+// was made from are replayed through history and whoever passes them that
+// day is held, at equal weight (server/lib/ruleEtf.js). So the weights, the
+// add / remove buttons and the rebalance choice are not shown for one - the
+// only thing to edit is the filters.
+const isRule = computed(() => current.value?.mode === 'rule');
+const schedule = ref(null); // the replay's summary, before the bars land
+// A screen on the statements alone admits shells quoted at $0.000001, where
+// one tick is a 100% move and a few of them at equal weight are the whole
+// index. Under this price a name is held by the rules but not bought (0 =
+// buy whatever they picked); kept per browser, like the other chart choices.
+const minPrice = ref(localStorage.getItem('stockscan.rule.minprice') ?? '1');
+watch(minPrice, (v) => localStorage.setItem('stockscan.rule.minprice', v));
 
 const quotes = ref(null); // /api/quotes/status
 const advanced = ref(false); // TradingView Advanced Charts loaded
@@ -220,18 +235,22 @@ let lastKey = '';
 let seq = 0;
 async function run(force = false) {
   const b = current.value;
-  if (!b || !b.constituents.length) {
+  const rule = b?.mode === 'rule';
+  if (!b || (!rule && !b.constituents.length)) {
     result.value = null;
     lastKey = '';
     return;
   }
-  const included = b.constituents.filter(inIndex);
-  if (!included.length) {
+  const included = rule ? [] : b.constituents.filter(inIndex);
+  if (!rule && !included.length) {
     result.value = null;
     lastKey = '';
     return;
   }
-  const body = { constituents: included.map((c) => ({ ticker: c.ticker, cik: c.cik, weight: Number(c.weight) })), range: range.value, rebalance: b.rebalance, benchmark: benchmark.value || null };
+  // the rule ETF has no range: it runs from the first filing that passed
+  const body = rule
+    ? { rule: true, params: b.source?.params || {}, benchmark: benchmark.value || null, minPrice: Number(minPrice.value) >= 0 ? Number(minPrice.value) : 1 }
+    : { constituents: included.map((c) => ({ ticker: c.ticker, cik: c.cik, weight: Number(c.weight) })), range: range.value, rebalance: b.rebalance, benchmark: benchmark.value || null };
   const key = JSON.stringify(body);
   if (!force && key === lastKey) return;
   lastKey = key;
@@ -244,17 +263,19 @@ async function run(force = false) {
   loading.value = true;
   error.value = null;
   progress.value = null;
+  if (rule) schedule.value = null;
   aborter?.abort(); // a superseded request stops the server's work too
   aborter = new AbortController();
   try {
     let r = null;
     // bars stream in one constituent at a time: progress shows as they land, the
     // chart (the previous one stays up meanwhile) is replaced once by the final index
-    await api.basketStream(
-      body,
+    await (rule ? api.ruleEtfStream : api.basketStream)(
+      rule ? { params: body.params, benchmark: body.benchmark, minPrice: body.minPrice } : body,
       (ev) => {
         if (id !== seq) return;
-        if (ev.type === 'start') progress.value = { done: 0, total: ev.total, current: null, members: [] };
+        if (ev.type === 'schedule') schedule.value = ev;
+        else if (ev.type === 'start') progress.value = { done: 0, total: ev.total, current: null, members: [] };
         else if (ev.type === 'member') {
           const p = progress.value || { done: 0, total: ev.total, current: null, members: [] };
           p.done = ev.done;
@@ -265,7 +286,7 @@ async function run(force = false) {
           progress.value = { ...p };
         } else if (ev.type === 'series') {
           if (!ev.partial) r = ev;
-        } else if (ev.type === 'error') throw new Error(ev.error);
+        } else if (ev.type === 'error') throw new Error(ev.tooMany ? t('rule.tooMany', ev.tooMany) : ev.error);
       },
       aborter.signal,
     );
@@ -273,7 +294,7 @@ async function run(force = false) {
     if (!r) throw new Error(t('bk.disconnected'));
     result.value = r;
     // a basket copied from an ETF / list: names that no longer trade go now that the prices show which they are
-    if (b.prune) {
+    if (!rule && b.prune) {
       b.prune = false;
       const gone = r.constituents.filter((c) => c.delisted).map((c) => c.symbol);
       for (const f of r.failed || []) gone.push(f.ticker); // no price data anywhere: not tradeable either
@@ -301,9 +322,17 @@ onMounted(async () => {
   run();
 });
 watch([current, range, benchmark, hidden], () => run());
+let priceTimer = null;
+watch(minPrice, () => {
+  clearTimeout(priceTimer);
+  if (isRule.value) priceTimer = setTimeout(run, 500);
+});
+// "edit filters" replaces a rule ETF's source: that is a different fund
+watch(() => isRule.value && JSON.stringify(current.value?.source?.params || {}), () => isRule.value && run());
 watch(current, () => {
   pruned.value = '';
   syncMsg.value = '';
+  schedule.value = null;
 });
 // weights are typed in: wait for the typing to stop before refetching
 let editTimer = null;
@@ -338,7 +367,8 @@ function finishSideRename() {
   sideRename.value = null;
 }
 function duplicate(b) {
-  createBasket(t('bk.copyOf', { name: b.name }), b.constituents.map((c) => ({ ...c })), { rebalance: b.rebalance });
+  if (b.mode === 'rule') createRuleBasket(t('bk.copyOf', { name: b.name }), { ...b.source });
+  else createBasket(t('bk.copyOf', { name: b.name }), b.constituents.map((c) => ({ ...c })), { rebalance: b.rebalance });
 }
 // every stock of a watchlist group (or the whole list) into a new basket
 const groupOptions = computed(() => [['all', `${t('bk.wholeWatchlist')} (${watchlist.items.length})`], ...watchlist.groups.map((g) => [g, `${g} (${watchlist.items.filter((x) => x.groups.includes(g)).length})`])]);
@@ -429,7 +459,7 @@ const tvCompare = computed(() => {
   return p ? `${sig(100 / p)}*${tvSymbol(benchmark.value)}` : tvSymbol(benchmark.value);
 });
 // wait for the first stats result so the coefficients are right from the start (or for its failure: then plain weights)
-const useTv = computed(() => chartSource.value === 'widget' && tvIncluded.value.length > 0 && !tvTooMany.value && (result.value || error.value || noBars.value));
+const useTv = computed(() => !isRule.value && chartSource.value === 'widget' && tvIncluded.value.length > 0 && !tvTooMany.value && (result.value || error.value || noBars.value));
 
 const upColor = computed(() => (colors.value === 'us' ? 'var(--up)' : 'var(--down)'));
 const downColor = computed(() => (colors.value === 'us' ? 'var(--down)' : 'var(--up)'));
@@ -457,7 +487,7 @@ const sourceText = computed(() => {
             <input v-model="sideRename.to" type="text" class="rename" @keyup.enter="finishSideRename" @keyup.esc="sideRename = null" @blur="finishSideRename" @click.stop />
           </template>
           <template v-else>
-            <span class="bname">{{ b.name }}</span> <span class="muted">{{ b.constituents.length }}</span>
+            <span class="bname">{{ b.name }}</span> <span v-if="b.mode === 'rule'" class="tag rule" :title="t('rule.tagTitle')">{{ t('rule.tag') }}</span> <span v-else class="muted">{{ b.constituents.length }}</span>
             <span class="tools">
               <button class="mini icon" :title="t('rename')" @click.stop="startSideRename(b)"><Icon name="pencil" :size="13" /></button>
               <button class="mini icon" :title="t('delete')" @click.stop="remove(b)"><Icon name="x" :size="13" /></button>
@@ -493,22 +523,26 @@ const sourceText = computed(() => {
               <strong @dblclick="renaming = true">{{ current.name }}</strong>
               <button class="mini ghost icon" :title="t('rename')" @click="renaming = true"><Icon name="pencil" :size="14" /></button>
             </template>
-            <span class="muted small">{{ t('bk.names', { n: current.constituents.length }) }}</span>
+            <span v-if="isRule" class="tag rule" :title="t('rule.tagTitle')">{{ t('rule.tag') }}</span>
+            <span class="muted small">{{ isRule ? t('rule.holdsNow', { n: result?.holding ?? 0, ever: result?.members?.length ?? 0 }) : t('bk.names', { n: current.constituents.length }) }}</span>
             <span v-if="result?.start" class="muted small">{{ result.start }} ～ {{ result.end }}{{ t('bk.startIs100') }}</span>
             <Loading v-if="loading" inline small :text="progress ? t('bk.fetching', { done: progress.done, total: progress.total }) : t('bk.computing')" />
           </div>
           <div class="options">
-            <span class="seg">
+            <span v-if="!isRule" class="seg">
               <button v-for="[k, n] in RANGES" :key="k" class="small" :class="{ active: range === k }" @click="range = k">{{ t('chart.years', { n }) }}</button>
             </span>
-            <select v-model="current.rebalance" class="small" :title="t('bk.rebalanceTitle')">
+            <span v-else class="muted small" :title="t('rule.wholeSpanTitle')">{{ t('rule.wholeSpan') }}</span>
+            <select v-if="!isRule" v-model="current.rebalance" class="small" :title="t('bk.rebalanceTitle')">
               <option value="none">{{ t('bk.buyHold') }}</option>
               <option value="daily">{{ t('bk.dailyRebalance') }}</option>
             </select>
+            <span v-else class="muted small" :title="t('rule.equalTitle')">{{ t('rule.equal') }}</span>
+            <label v-if="isRule" class="minprice small" :title="t('rule.minPriceTitle')">{{ t('rule.minPrice') }} <input v-model="minPrice" type="number" min="0" step="0.5" /></label>
             <select v-model="benchmark" class="small" :title="t('bk.benchmarkTitle')">
               <option v-for="[k, label] in BENCHMARKS" :key="k" :value="k">{{ label() }}</option>
             </select>
-            <select v-if="!noBars" v-model="chartSource" class="small" :title="t(isStatic ? 'bk.chartSourceTitleStatic' : 'bk.chartSourceTitle')">
+            <select v-if="!noBars && !isRule" v-model="chartSource" class="small" :title="t(isStatic ? 'bk.chartSourceTitleStatic' : 'bk.chartSourceTitle')">
               <option value="own">{{ t('bk.chartOwn') }}</option>
               <option value="widget">{{ t('bk.chartWidget') }}</option>
             </select>
@@ -525,24 +559,26 @@ const sourceText = computed(() => {
         <p v-if="pruned" class="muted small note infobox">{{ pruned }} <button class="mini ghost" @click="pruned = ''">✕</button></p>
         <div v-if="current.source" class="panel srcbar">
           <div class="small">
-            <b>{{ t('bk.source') }}</b> {{ sourceLabel(current.source) }}
-            <span v-if="current.sync" class="muted">· {{ tr(current.sync.sourceName) }}<template v-if="current.sync.asOf">{{ t('bk.asOf', { date: current.sync.asOf }) }}</template> · {{ t('bk.lastSync', { time: new Date(current.sync.at).toLocaleString(dateLocale.value) }) }}</span>
+            <b>{{ isRule ? t('rule.filters') : t('bk.source') }}</b> {{ isRule ? current.source.label || t('nav.screen') : sourceLabel(current.source) }}
+            <span v-if="isRule" class="muted">· {{ t('rule.filtersHint') }}</span>
+            <span v-if="!isRule && current.sync" class="muted">· {{ tr(current.sync.sourceName) }}<template v-if="current.sync.asOf">{{ t('bk.asOf', { date: current.sync.asOf }) }}</template> · {{ t('bk.lastSync', { time: new Date(current.sync.at).toLocaleString(dateLocale.value) }) }}</span>
             <span v-if="manualCount" class="muted">· {{ t('bk.manualCount', { n: manualCount }) }}</span>
             <span v-if="current.excluded?.length" class="muted">· {{ t('bk.excludedCount', { n: current.excluded.length }) }}</span>
           </div>
           <div class="options">
             <span v-if="syncMsg" class="small" :class="{ warn: syncFailed }">{{ syncMsg }}</span>
-            <button v-if="current.source.type === 'screen'" class="small" :title="t('bk.editFiltersTitle')" @click="emit('screen', current)">{{ t('bk.editFilters') }}</button>
-            <button class="small" :disabled="syncing" :title="t('bk.resyncTitle')" @click="resync"><Loading v-if="syncing" inline small :text="t('bk.syncing')" /><template v-else>{{ t('bk.resync') }}</template></button>
+            <button v-if="current.source.type === 'screen' || isRule" class="small" :title="t(isRule ? 'rule.editFiltersTitle' : 'bk.editFiltersTitle')" @click="emit('screen', current)">{{ t('bk.editFilters') }}</button>
+            <button v-if="!isRule" class="small" :disabled="syncing" :title="t('bk.resyncTitle')" @click="resync"><Loading v-if="syncing" inline small :text="t('bk.syncing')" /><template v-else>{{ t('bk.resync') }}</template></button>
           </div>
         </div>
-        <p v-if="!current.constituents.length" class="empty muted">{{ t('bk.empty') }}</p>
+        <p v-if="!isRule && !current.constituents.length" class="empty muted">{{ t('bk.empty') }}</p>
 
         <div v-if="loading && !useTv" class="panel progressbox" :class="{ overlay: result?.bars?.length }">
           <div class="pbar" :class="{ indeterminate: !progress }">
             <div class="fill" :style="{ width: progress ? `${Math.round((progress.done / Math.max(progress.total, 1)) * 100)}%` : '30%' }"></div>
           </div>
           <div class="ptext small">
+            <div v-if="schedule" class="muted">{{ t('rule.replayed', { tested: (schedule.tested || 0).toLocaleString(), members: schedule.members, events: schedule.events, from: schedule.first || '—' }) }}</div>
             <template v-if="progress">
               <b>{{ progress.done }} / {{ progress.total }}</b> {{ t('bk.barsArrived') }}<template v-if="progress.done < progress.total">{{ t(isStatic ? 'bk.barsFetchingStatic' : 'bk.barsFetching') }}</template><template v-else>{{ t('bk.barsComputing') }}</template>…
               <span class="chips">
@@ -573,7 +609,9 @@ const sourceText = computed(() => {
         </div>
         <p v-if="chartSource === 'widget' && tvTooMany" class="muted small note warnbox">{{ t('bk.tooMany', { n: tvIncluded.length }) }}</p>
 
-        <div v-if="current" class="panel editor">
+        <RuleEtfPanel v-if="isRule" :result="result" :label="current.source?.label || ''" @open="emit('open', $event)" />
+
+        <div v-if="current && !isRule" class="panel editor">
           <div class="add">
             <CompanySearch @select="addFromSearch" />
             <span class="muted small">{{ addMsg || t('bk.addHint') }}</span>
@@ -581,7 +619,7 @@ const sourceText = computed(() => {
           </div>
         </div>
 
-        <div v-for="g in groups" :key="g.key" class="panel wrap">
+        <div v-for="g in (isRule ? [] : groups)" :key="g.key" class="panel wrap">
           <div v-if="g.title" class="ghead"><b>{{ g.title }}</b> <span class="muted small">{{ t('bk.names', { n: g.rows.length }) }} · {{ g.hint }}</span></div>
           <table>
             <thead>
@@ -644,7 +682,7 @@ const sourceText = computed(() => {
             </tfoot>
           </table>
         </div>
-        <div v-if="delisted.length" class="panel wrap excluded delisted">
+        <div v-if="delisted.length && !isRule" class="panel wrap excluded delisted">
           <div class="ghead">
             <b class="warn">{{ t('bk.delistedHead') }}</b> <span class="muted small">{{ t('bk.names', { n: delisted.length }) }} · {{ t('bk.delistedHint') }}</span>
             <button class="mini" :title="t('bk.removeAllTitle')" @click="removeDelisted">{{ t('bk.removeAll') }}</button>
@@ -675,7 +713,7 @@ const sourceText = computed(() => {
             </tbody>
           </table>
         </div>
-        <div v-if="current.source && current.excluded?.length" class="panel wrap excluded">
+        <div v-if="!isRule && current.source && current.excluded?.length" class="panel wrap excluded">
           <div class="ghead">
             <b>{{ t('bk.excludedHead') }}</b> <span class="muted small">{{ t('bk.names', { n: current.excluded.length }) }} · {{ t('bk.excludedHint') }}</span>
             <button class="mini" @click="restore()">{{ t('bk.restoreAll') }}</button>
@@ -932,6 +970,23 @@ button.danger:hover {
   padding: 0 4px;
   margin-left: 4px;
   vertical-align: middle;
+}
+.minprice input {
+  width: 64px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font: inherit;
+  color: inherit;
+}
+.minprice {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tag.rule {
+  color: var(--pos);
+  border-color: var(--pos);
 }
 .tag.manual {
   color: var(--warn-text);

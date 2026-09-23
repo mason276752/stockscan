@@ -6,7 +6,7 @@ import { store } from './store.js';
 import { reclassify } from './statementTypes.js';
 import { fiscalLabel } from './filings.js';
 import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.js';
-import { SCORE_HISTORY, pickAsOf } from './screen.js';
+import { SCORE_HISTORY, pickAsOf, screenAsOfColumns, screenAsOfIndex } from './screen.js';
 
 export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf, SCORE_HISTORY };
 
@@ -173,6 +173,26 @@ export function latestScores(asof = null) {
   if (latestMemo.size > 4) latestMemo.clear();
   latestMemo.set(key, { n, at: Date.now(), rows });
   return rows;
+}
+
+// Every saved score as the as-of index the screener's time machine reads
+// (screen.js): each company's filings newest first, the values addressed by
+// (shard, row). The static build ships the same thing as one file per
+// filing year; here it is one shard over the whole store, rebuilt only when
+// the store has grown. This is what a rule ETF replays (ruleEtf.js) - it
+// asks for every filing at once, not for one date.
+let asOfMemo = null;
+export function asOfIndex() {
+  const n = store.scoreCount(SCORE_VERSION);
+  if (asOfMemo?.n === n) return asOfMemo.index;
+  const all = [];
+  for (const r of store.scoreIndex(SCORE_VERSION)) {
+    if (!r.report_date) continue;
+    const s = scoreOf(r.accession);
+    if (s) all.push(s);
+  }
+  asOfMemo = { n, index: screenAsOfIndex([screenAsOfColumns(all)]) };
+  return asOfMemo.index;
 }
 
 // Latest saved filing of a company and its score (null when nothing is saved yet).
