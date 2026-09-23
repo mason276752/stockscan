@@ -25,6 +25,7 @@
 
 import { store } from './store.js';
 import { getCompany, tickerTable, DEFAULT_FORMS } from './edgar.js';
+import { filingPeriodKey } from './filings.js';
 import { ensureStored } from './scrape.js';
 import { getUniverse } from './universe.js';
 import { scoreAccession } from './score.js';
@@ -57,6 +58,21 @@ const LOG_EVERY = 10_000; // progress line during the sweep
 // on the network; a few lanes fill the client's 10 req/s allowance instead.
 const LANES = Math.max(1, Number(process.env.STOCKSCAN_CRAWL_PARALLEL) || 4);
 const DAILY_INDEX = 'https://www.sec.gov/Archives/edgar/daily-index';
+
+// a company's filings -> every version of its `n` newest periods (an
+// amendment shares its original's period, so the two count once)
+function newestPeriods(filings, n) {
+  const byPeriod = new Map();
+  for (const f of filings) {
+    const key = filingPeriodKey(f);
+    const rec = byPeriod.get(key) || byPeriod.set(key, { end: f.periodEnd || f.reportDate || '', versions: [] }).get(key);
+    rec.versions.push(f);
+  }
+  return [...byPeriod.values()]
+    .sort((a, b) => (a.end < b.end ? 1 : a.end > b.end ? -1 : 0))
+    .slice(0, n)
+    .flatMap((r) => r.versions);
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const FORMS = new Set(DEFAULT_FORMS.map((f) => f.toUpperCase()));
@@ -200,8 +216,12 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         }
         try {
           const company = await getCompany(low, String(c.cik));
-          // the newest FIRST_PASS originals (amendments rarely carry full statements)
-          const wanted = company.filings.filter((f) => !/\/A$/i.test(f.form || '')).slice(0, FIRST_PASS);
+          // the newest FIRST_PASS periods, every version of each: a period
+          // that was amended is read as its amendment (filings.js
+          // collapseAmendments), so the 10-K/A has to be on disk beside the
+          // 10-K - and when the amendment turns out to be Part III only,
+          // the original beside it is what answers.
+          const wanted = newestPeriods(company.filings, FIRST_PASS);
           let had = 0;
           for (const filing of wanted) {
             if (store.hasFiling(filing.accession)) had++;

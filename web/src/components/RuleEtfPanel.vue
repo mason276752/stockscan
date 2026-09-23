@@ -68,7 +68,9 @@ const members = computed(() => {
 
 const pct = (v) => (v == null || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
 const cls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '');
-const spanText = (m) => m.spans.map((s) => `${s.from} ～ ${s.to || t('rule.now')}`).join(t('sep'));
+// an open-ended stretch runs to today, or to the end of the window when one was asked for
+const openEnd = computed(() => (props.result?.window?.to ? props.result.end || props.result.window.to : t('rule.now')));
+const spanText = (m) => m.spans.map((s) => `${s.from} ～ ${s.to || openEnd.value}`).join(t('sep'));
 </script>
 
 <template>
@@ -79,7 +81,7 @@ const spanText = (m) => m.spans.map((s) => `${s.from} ～ ${s.to || t('rule.now'
         <span class="mono small filters">{{ label }}</span>
       </div>
       <div class="figs">
-        <div><span class="muted small">{{ t('rule.span') }}</span><b class="mono">{{ result.start || '—' }} ～ {{ result.end || '—' }}</b></div>
+        <div :title="result.window?.from || result.window?.to ? t('rule.windowTitle') : ''"><span class="muted small">{{ t('rule.span') }}</span><b class="mono">{{ result.start || '—' }} ～ {{ result.end || '—' }}<span v-if="result.window?.from || result.window?.to" class="muted small"> {{ t('rule.windowed') }}</span></b></div>
         <div :title="picked !== held ? t('rule.pickedTitle', { n: picked }) : ''"><span class="muted small">{{ t('rule.holdingNow') }}</span><b class="mono">{{ held }}<span v-if="picked !== held" class="muted small"> / {{ picked }}</span></b></div>
         <div><span class="muted small">{{ t('rule.everHeld') }}</span><b class="mono">{{ result.members.length }}</b></div>
         <div :title="t('rule.avgHeldTitle')"><span class="muted small">{{ t('rule.avgHeld') }}</span><b class="mono">{{ avgHeld == null ? '—' : avgHeld.toFixed(1) }}</b></div>
@@ -109,7 +111,7 @@ const spanText = (m) => m.spans.map((s) => `${s.from} ～ ${s.to || t('rule.now'
         </thead>
         <tbody>
           <tr v-for="e in shownLog" :key="e.date">
-            <td class="mono">{{ e.date }}</td>
+            <td class="mono">{{ e.date }}<span v-if="e.opening" class="muted small opening">{{ t('rule.opening') }}</span></td>
             <td class="add">
               <span v-for="s in e.add" :key="s" class="chip in" :title="nameOf[s]" @click="emit('open', { ticker: s })">{{ s }}</span>
               <span v-if="!e.add.length" class="muted">—</span>
@@ -286,6 +288,9 @@ td.drop {
 .chip.in {
   color: var(--pos);
   border-color: var(--pos);
+}
+.opening {
+  margin-left: 6px;
 }
 .chip.out {
   color: var(--neg);

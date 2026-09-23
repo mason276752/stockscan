@@ -39,7 +39,7 @@
 // basket.js already calls illiquid - and the ones this kept out are named
 // in the result. Set it to 0 to buy whatever the filters picked.
 
-import { stats } from './basket.js';
+import { RANGES, dateWindow, stats, yearsBefore } from './basket.js';
 import { pickAsOf, screenFilter, screenTable } from './screen.js';
 
 export const RULE_MAX_MEMBERS = 900; // names ever held: beyond this the bars alone are a download of tens of MB
@@ -47,7 +47,6 @@ const GONE_DAYS = 14; // no bar for this long while the others trade: delisted, 
 export const MIN_PRICE = 1; // a share under a dollar is not bought (quote noise swamps an equal-weight index)
 const WILD = 4; // a one-day move of this many times, while held: a split nobody adjusted, or a quote nobody could trade on
 
-const isAmend = (form) => /\/A$/i.test(form || '');
 const daysBefore = (date, n) => new Date(Date.parse(date) - n * 86400000).toISOString().slice(0, 10);
 
 // ---- 1. the membership timeline ----
@@ -93,10 +92,12 @@ export function replaySchedule(core, index, q) {
     if (!list?.length) continue;
     const ticker = t.ticker(i);
     if (!ticker) continue; // nothing to hold
-    // the days this company's answer could change: its own filing dates (a
-    // filing with no date cannot start anything - it is counted as always
-    // having been out, which is what pickAsOf does with it)
-    const dates = [...new Set(list.filter((f) => f.filingDate && !isAmend(f.form)).map((f) => f.filingDate))].sort();
+    // The days this company's answer could change: its own filing dates -
+    // an amendment among them, because a restatement changes the numbers
+    // the filters read (pickAsOf). A filing with no date cannot start
+    // anything; it counts as always having been out, which is what pickAsOf
+    // does with it.
+    const dates = [...new Set(list.filter((f) => f.filingDate).map((f) => f.filingDate))].sort();
     if (!dates.length) continue;
     view.i = i;
     let held = false;
@@ -130,6 +131,44 @@ export function replaySchedule(core, index, q) {
   return { members, events, skipped, tested, first: events[0]?.date || null, last: events.at(-1)?.date || null };
 }
 
+// ---- 1b. the same schedule, seen through a window ----
+// The filters decide the same things whatever window is looked at, so a
+// window only changes what is *shown and bought*: everything decided on or
+// before `from` becomes one opening position on that day, nothing after `to`
+// has happened yet, and a company the window never holds stops being a
+// member at all - which is what keeps its bars from being fetched and lets a
+// screen too wide for RULE_MAX_MEMBERS over its whole history still fit
+// inside a few years of it.
+export function windowSchedule(schedule, { from = null, to = null } = {}) {
+  if (!from && !to) return schedule;
+  const open = new Set(); // held by the rules when the window opens
+  const events = [];
+  for (const e of schedule.events) {
+    if (to && e.date > to) break;
+    if (from && e.date <= from) {
+      for (const x of e.drop) open.delete(x);
+      for (const x of e.add) open.add(x);
+      continue;
+    }
+    events.push(e);
+  }
+  // `n` is the running count of the whole replay, which is the same count
+  // inside the window - the rules held what they held
+  if (open.size) events.unshift({ date: from, add: [...open], drop: [], n: open.size, opening: true });
+  const kept = new Set(events.flatMap((e) => e.add));
+  const members = [];
+  for (const m of schedule.members) {
+    if (!kept.has(m.ticker)) continue;
+    // the stretches it was held for, clipped to the window: a `to` of null
+    // means it was still in when the window closed
+    const spans = m.spans
+      .filter((sp) => (!to || sp.from <= to) && (!sp.to || !from || sp.to > from))
+      .map((sp) => ({ from: from && sp.from < from ? from : sp.from, to: sp.to && (!to || sp.to <= to) ? sp.to : null }));
+    if (spans.length) members.push({ ...m, spans });
+  }
+  return { ...schedule, members, events, first: events[0]?.date || null, last: events.at(-1)?.date || null };
+}
+
 // ---- 2. the index ----
 // members: [{ symbol, days }] (the bars fetched for the schedule's members);
 // events: replaySchedule's, by ticker. Equal weight over whoever is held and
@@ -139,15 +178,16 @@ export function replaySchedule(core, index, q) {
 // Int32Array of indexes into each member's own days - a Map per member of
 // 900 names over 1,800 sessions is 1.6 M entries and hundreds of MB, this
 // is 6 MB. -1 = no price that day (not listed yet, or no longer).
-export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE } = {}) {
+export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, from = null, to = null } = {}) {
   const notes = [];
   const rows = members.filter((m) => m.days?.length);
   for (const m of members) if (!m.days?.length) notes.push({ code: 'ruleNoBars', symbol: m.symbol });
   if (!rows.length || !events.length) return { bars: [], start: null, end: null, notes: [...notes, { code: rows.length ? 'ruleNoEvents' : 'noPrices' }], constituents: [], counts: [], stats: null };
 
   // the trading calendar: every date any member traded after the first change
-  const start = events[0].date;
-  const dates = [...new Set(rows.flatMap((m) => m.days.map((d) => d.date)))].filter((d) => d > start).sort();
+  // (inside the window, when one was asked for)
+  const start = from && from > events[0].date ? from : events[0].date;
+  const dates = [...new Set(rows.flatMap((m) => m.days.map((d) => d.date)))].filter((d) => d > start && (!to || d <= to)).sort();
   if (dates.length < 2) return { bars: [], start, end: null, notes: [...notes, { code: 'tooFewDays' }], constituents: [], counts: [], stats: null };
   const n = dates.length;
 
@@ -297,17 +337,24 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE }
   return { bars, start: bars[0].time, end, notes, constituents, counts, holding: counts.at(-1)?.n ?? 0, minPrice, stats: stats(bars) };
 }
 
-// POST /api/basket/rule's body -> the query to replay
-export function ruleRequest(body) {
+// POST /api/basket/rule's body -> the query to replay, and the window to
+// replay it into: from / to as typed, or a 1y / 3y / 5y / 10y preset counted
+// back from the window's end (`range` unset or 'all' = the whole history,
+// which is what a rule ETF does by default).
+export function ruleRequest(body, today = new Date().toISOString().slice(0, 10)) {
   const params = body?.params && typeof body.params === 'object' ? body.params : null;
   if (!params) throw Object.assign(new Error('params (the screener query) is required'), { status: 400 });
   const minPrice = body.minPrice === undefined || body.minPrice === null || body.minPrice === '' ? MIN_PRICE : Number(body.minPrice);
-  return { params, benchmark: body.benchmark ? String(body.benchmark).trim().toUpperCase() : null, minPrice: Number.isFinite(minPrice) && minPrice >= 0 ? minPrice : MIN_PRICE };
+  let { from, to } = dateWindow(body);
+  if (!from && RANGES[body?.range]) from = yearsBefore(to || today, RANGES[body.range]);
+  return { params, from, to, range: from || to ? body?.range || 'custom' : 'all', benchmark: body.benchmark ? String(body.benchmark).trim().toUpperCase() : null, minPrice: Number.isFinite(minPrice) && minPrice >= 0 ? minPrice : MIN_PRICE };
 }
 
 // Fetch the bars of every name the schedule ever holds (a few at a time) and
 // build the index. `emit` reports progress the way runBasket does, so the
-// page can show the same bar.
+// page can show the same bar. The schedule is expected to have been put
+// through windowSchedule already (the caller checks RULE_MAX_MEMBERS against
+// the window's own member count), so only the series is windowed here.
 export async function runRuleEtf(schedule, req, fetchBars, { emit = null, signal = null, extra = {} } = {}) {
   // one fetch per symbol: two companies can file under the same ticker (a
   // CIK that was reassigned), and they share the one price series
@@ -338,13 +385,14 @@ export async function runRuleEtf(schedule, req, fetchBars, { emit = null, signal
   const series = ruleSeries(
     out.filter((m) => m && wanted.has(m.symbol)),
     schedule.events,
-    { minPrice: req.minPrice },
+    { minPrice: req.minPrice, from: req.from, to: req.to },
   );
   const failed = out.filter((m) => m?.error && wanted.has(m.symbol)).map((m) => ({ ticker: m.symbol, error: m.error }));
   return {
     rule: true,
     ...extra,
     ...series,
+    window: { from: req.from || null, to: req.to || null },
     members: schedule.members,
     events: schedule.events,
     skipped: schedule.skipped,

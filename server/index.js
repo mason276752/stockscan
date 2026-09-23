@@ -21,7 +21,7 @@ import { POPULAR_ETFS, etfHoldings, etfList } from './lib/etf.js';
 import { liveHoldings } from './lib/liveHoldings.js';
 import { dailyBars } from './lib/bars.js';
 import { basketRequest, runBasket as runBasketWith } from './lib/basket.js';
-import { RULE_MAX_MEMBERS, replaySchedule, ruleRequest, runRuleEtf } from './lib/ruleEtf.js';
+import { RULE_MAX_MEMBERS, replaySchedule, ruleRequest, runRuleEtf, windowSchedule } from './lib/ruleEtf.js';
 import { barStore, openBarStore } from './lib/barStore.js';
 import { createBarCrawler } from './lib/barCrawler.js';
 import { ibConnect, ibStatus } from './lib/ib.js';
@@ -101,6 +101,20 @@ function dedupe(key, fn) {
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+// The company as EDGAR lists it, with one thing added: an amendment whose
+// saved score has no coverage is the Part III-only kind, with no statements
+// in it. It corrects nothing, so it is flagged and whoever picks a period's
+// filing keeps the original (filings.js collapseAmendments).
+async function companyOf(id, opts) {
+  const c = await getCompany(client, id, opts);
+  for (const f of c.filings) {
+    if (!/\/A$/i.test(f.form || '')) continue;
+    const s = store.getScore(f.accession, SCORE_VERSION);
+    if (s && !(Number(s.coverage) > 0)) f.thin = 1;
+  }
+  return c;
+}
+
 // Scrape a filing and, with ?view=current, reduce it to its own period
 // (needs the previous 10-Q for year-to-date-only statements).
 async function filingResponse(req, company, filing) {
@@ -151,7 +165,7 @@ app.get(
   '/api/company/:id',
   wrap(async (req, res) => {
     const forms = req.query.form ? String(req.query.form).split(',') : DEFAULT_FORMS;
-    const company = await getCompany(client, req.params.id, { forms, refresh: req.query.refresh === '1' });
+    const company = await companyOf(req.params.id, { forms, refresh: req.query.refresh === '1' });
     // industry / filer status from the browse universe when it is already built
     res.json({ ...company, sicZh: sicInfo(company.sic)?.zh || null, filer: lookupFiler(company.cik) });
   }),
@@ -162,7 +176,7 @@ app.get(
   '/api/company/:id/statements',
   wrap(async (req, res) => {
     const forms = req.query.form ? String(req.query.form).split(',') : DEFAULT_FORMS;
-    const company = await getCompany(client, req.params.id, { forms });
+    const company = await companyOf(req.params.id, { forms });
     const filing = pickFiling(company.filings, { year: req.query.year, period: req.query.period });
     if (!filing) {
       return res.status(404).json({
@@ -181,7 +195,7 @@ app.get(
   wrap(async (req, res) => {
     const year = Number(req.query.year);
     if (!year) return res.status(400).json({ error: 'year query parameter required' });
-    const company = await getCompany(client, req.params.id);
+    const company = await companyOf(req.params.id);
     res.json(await dedupe(`q4:${company.cik}:${year}`, () => buildQuarterly((f) => scrapeFiling(client, f, company), company, year)));
     prefetcher.schedule(company, pickFiling(company.filings, { year, period: 'FY' }));
   }),
@@ -201,7 +215,7 @@ app.get(
     const mode = ['year', 'same'].includes(req.query.mode) ? req.query.mode : 'quarter';
     const n = Math.min(mode === 'quarter' ? 40 : 10, Math.max(1, Number(req.query.n) || (mode === 'quarter' ? 20 : 5)));
     const basis = req.query.basis === 'ttm' ? 'ttm' : 'x4';
-    const company = await getCompany(client, req.params.id);
+    const company = await companyOf(req.params.id);
     res.json(
       await dedupe(`ind:${company.cik}:${year}:${period}:${n}:${basis}:${mode}`, () => buildIndicators((f) => scrapeFiling(client, f, company), company, { year, period, n, basis, mode })),
     );
@@ -219,7 +233,7 @@ app.get(
     if (!year || !/^(Q[1-4]|FY)$/.test(period)) return res.status(400).json({ error: 'year and period (Q1-Q4 or FY) required' });
     const n = Math.min(40, Math.max(4, Number(req.query.n) || 20));
     const adr = Math.max(0.0001, Number(req.query.adr) || 1); // ordinary shares per listed share (ADR ratio)
-    const company = await getCompany(client, req.params.id);
+    const company = await companyOf(req.params.id);
     res.json(await dedupe(`val:${company.cik}:${year}:${period}:${n}:${adr}`, () => serverValuation(client, company, { year, period, n, adr })));
   }),
 );
@@ -229,7 +243,7 @@ app.get(
 app.get(
   '/api/filing/:cik/:accession',
   wrap(async (req, res) => {
-    const company = await getCompany(client, req.params.cik);
+    const company = await companyOf(req.params.cik);
     let filing = company.filings.find((f) => f.accession === req.params.accession);
     if (!filing) {
       // Not in the list (odd form type): look it up from the folder index.
@@ -250,7 +264,7 @@ app.get(
   wrap(async (req, res) => {
     if (!req.query.url) return res.status(400).json({ error: 'url query parameter required' });
     const base = filingFromUrl(String(req.query.url));
-    const company = await getCompany(client, String(base.cik));
+    const company = await companyOf(String(base.cik));
     const filing = company.filings.find((f) => f.accession === base.accession) || base;
     res.json(await filingResponse(req, company, filing));
   }),
@@ -334,7 +348,7 @@ app.get(
   wrap(async (req, res) => {
     let s = await scoreAccession(req.params.accession);
     if (!s) {
-      const company = await getCompany(client, req.params.cik);
+      const company = await companyOf(req.params.cik);
       const filing = company.filings.find((f) => f.accession === req.params.accession);
       if (!filing) return res.status(404).json({ error: `Filing ${req.params.accession} not found` });
       await dedupe(filing.accession, () => scrapeFiling(client, filing, company));
@@ -446,7 +460,7 @@ app.get(
 const basketEnv = () => ({ listingOf, extra: { ib: ibStatus().connected, tv: tvStatus().connected } });
 const runBasket = (req, opts = {}) => runBasketWith(req, (ticker) => dedupe(`bars:${ticker}`, () => dailyBars(ticker)), { ...opts, ...basketEnv() });
 
-// POST /api/basket { constituents: [{ ticker, cik, weight }], range, rebalance, benchmark }
+// POST /api/basket { constituents: [{ ticker, cik, weight }], range | from + to, rebalance, benchmark }
 //  -> index bars (base 100), stats, per-constituent returns, benchmark overlay
 app.post(
   '/api/basket',
@@ -488,7 +502,9 @@ app.post(
 async function ruleSchedule(body) {
   const req = ruleRequest(body);
   const { rows } = await screenerRows(null, false);
-  const schedule = replaySchedule(rows, asOfIndex(), req.params);
+  // the replay is the whole history either way (what the rules held when a
+  // window opens is only knowable from before it); the window then trims it
+  const schedule = windowSchedule(replaySchedule(rows, asOfIndex(), req.params), req);
   // too many to chart: the page words this one itself (rule.tooMany), so it
   // travels as numbers beside the English fallback
   if (schedule.members.length > RULE_MAX_MEMBERS) {
@@ -498,7 +514,7 @@ async function ruleSchedule(body) {
 }
 const ruleExtra = () => ({ ib: ibStatus().connected, tv: tvStatus().connected });
 
-// POST /api/basket/rule { params: { <the screener query> }, benchmark }
+// POST /api/basket/rule { params: { <the screener query> }, range | from + to, benchmark }
 //  -> index bars (base 100), stats, every add / drop with its date, and the
 //     members with the stretches they were held for
 app.post(

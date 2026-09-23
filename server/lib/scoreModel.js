@@ -22,6 +22,7 @@
 // once they are.
 
 import { C, ROWS, adequacyOver, first, loadPoints, quarterInputs, quarterKeys, ratios } from './indicators.js';
+import { filingPeriodKey } from './filings.js';
 import { balancesAt, costOfRevenueFromHeading, factsAt, months, noCostOfRevenue, statementOf } from './quarters.js';
 
 export const SCORE_VERSION = 17;
@@ -218,7 +219,15 @@ export function scoreFiling(data, { partial = false } = {}) {
 // quarterly filer's quarter needs the one before (opening balances) and,
 // for Q4, the year's 10-Qs (Q4 flows = full year − nine months). When those
 // are not there the filing is scored alone and marked partial.
+// Score one saved filing against its neighbouring quarters. The filing
+// being scored serves its own period, whatever else was filed for it: the
+// other versions of that period (its original, or a later amendment) are
+// taken out of the list first, so `loadPoints` cannot answer with one of
+// them - scoring a filing means scoring the numbers in *that* filing. Every
+// other period still resolves to its amended version (filings.js).
 export async function scoreFilingOf(load, company, filing) {
+  const own = filingPeriodKey(filing);
+  company = { ...company, filings: company.filings.filter((f) => f.accession === filing.accession || filingPeriodKey(f) !== own) };
   const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
   const year = Number(filing.fiscalYear);
   const q = filing.fiscalPeriod === 'FY' ? 4 : Number(String(filing.fiscalPeriod || '').slice(1));

@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { t } from '../i18n';
+import { collapseAmendments } from '../../../server/lib/filings.js';
 
 const props = defineProps({
   filings: { type: Array, required: true },
@@ -12,14 +13,15 @@ const PERIODS = ['Q1', 'Q2', 'Q3', 'FY'];
 const canDerive = (slots) => PERIODS.every((p) => slots[p]);
 
 // fiscal year -> { Q1: filing, Q2: ..., FY: ... }  (newest year first)
+// A period that was amended shows its amendment - the numbers the company
+// now stands behind - unless that one has no statements in it (`thin`, the
+// Part III-only kind), when the original is all there is to show.
 const years = computed(() => {
   const map = new Map();
-  for (const f of props.filings) {
+  for (const f of collapseAmendments(props.filings)) {
     if (!f.fiscalYear) continue;
     if (!map.has(f.fiscalYear)) map.set(f.fiscalYear, {});
-    const slot = map.get(f.fiscalYear);
-    // amendments (10-K/A) come later; keep the original unless nothing else
-    if (!slot[f.fiscalPeriod] || !f.form.endsWith('/A')) slot[f.fiscalPeriod] = f;
+    map.get(f.fiscalYear)[f.fiscalPeriod] ??= f;
   }
   return [...map.entries()].sort((a, b) => b[0] - a[0]);
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { screenAsOfColumns, screenAsOfIndex } from '../server/lib/screen.js';
-import { replaySchedule, ruleSeries } from '../server/lib/ruleEtf.js';
+import { replaySchedule, ruleRequest, ruleSeries, windowSchedule } from '../server/lib/ruleEtf.js';
 
 // --- the pieces a replay reads: the company half (index/screen.json) and
 // every scored filing (index/screen-asof-<year>.json) ---
@@ -201,4 +201,78 @@ test('a schedule with no prices at all says so instead of throwing', () => {
   assert.deepEqual(r.bars, []);
   assert.equal(r.stats, null);
   assert.ok(r.notes.some((n) => n.code === 'ruleNoBars'));
+});
+
+// --- a window over the same replay ---
+test('a window starts the index at 100 on its own first session, holding what the rules held then', () => {
+  // A from the start, B from the 3rd: a window opening on the 3rd holds both
+  // from the 6th's open, and the index is 100 on its first session
+  const events = [ev('2020-01-01', ['A']), ev('2020-01-03', ['B'])];
+  const full = { members: [{ ticker: 'A', spans: [{ from: '2020-01-01', to: null }] }, { ticker: 'B', spans: [{ from: '2020-01-03', to: null }] }], events, skipped: [], tested: 2, first: '2020-01-01', last: '2020-01-03' };
+  const w = windowSchedule(full, { from: '2020-01-03' });
+  assert.deepEqual(w.events, [{ date: '2020-01-03', add: ['A', 'B'], drop: [], n: 2, opening: true }], 'everything decided by then is one opening position');
+  const r = ruleSeries([A, B], w.events, { from: '2020-01-03' });
+  assert.deepEqual(
+    r.bars.map((b) => [b.time, b.close]),
+    [
+      ['2020-01-06', 150], // 50 into A at 20, 50 into B at 5; B doubles
+      ['2020-01-07', 150],
+    ],
+  );
+  assert.equal(r.start, '2020-01-06');
+  assert.equal(r.bars[0].open, 100, 'the window opens at 100, whatever the index did before it');
+});
+
+test('a window ends where it is told: nothing after it is replayed', () => {
+  const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-03', ['B'])], { to: '2020-01-06' });
+  assert.deepEqual(r.bars.map((b) => b.time), ['2020-01-02', '2020-01-03', '2020-01-06']);
+  assert.equal(r.end, '2020-01-06');
+  assert.equal(r.constituents.find((c) => c.symbol === 'B').days, 1, "and a constituent's return is what it did inside the window");
+});
+
+test('a window drops the companies it never holds, so their bars are never fetched', () => {
+  const events = [ev('2020-01-01', ['A'], [], 1), ev('2020-01-02', [], ['A'], 0), ev('2020-01-06', ['B'], [], 1)];
+  const full = {
+    members: [
+      { ticker: 'A', spans: [{ from: '2020-01-01', to: '2020-01-02' }] },
+      { ticker: 'B', spans: [{ from: '2020-01-06', to: null }] },
+    ],
+    events,
+    skipped: [],
+    tested: 3,
+    first: '2020-01-01',
+    last: '2020-01-06',
+  };
+  const w = windowSchedule(full, { from: '2020-01-03' });
+  assert.deepEqual(w.members.map((m) => m.ticker), ['B'], 'A was already out when the window opened');
+  assert.deepEqual(w.events, [ev('2020-01-06', ['B'], [], 1)]);
+  // and one that closes before a name is picked does not know about it either
+  const early = windowSchedule(full, { to: '2020-01-05' });
+  assert.deepEqual(early.members.map((m) => m.ticker), ['A']);
+});
+
+test('the stretches a member was held for are clipped to the window', () => {
+  const full = {
+    members: [{ ticker: 'A', spans: [{ from: '2019-01-01', to: '2020-06-01' }, { from: '2021-01-01', to: null }] }],
+    events: [ev('2019-01-01', ['A']), ev('2020-06-01', [], ['A']), ev('2021-01-01', ['A'])],
+    skipped: [],
+    tested: 3,
+  };
+  const w = windowSchedule(full, { from: '2020-01-01', to: '2020-12-31' });
+  assert.deepEqual(w.members[0].spans, [{ from: '2020-01-01', to: '2020-06-01' }], 'the stretch that started before the window starts with it, the one after it never happened');
+  const open = windowSchedule(full, { from: '2021-06-01' });
+  assert.deepEqual(open.members[0].spans, [{ from: '2021-06-01', to: null }], 'still held when the window closes');
+});
+
+test('a range preset is counted back from the end of the window, and no window is the whole history', () => {
+  const q = { params: { score_min: 60 } };
+  assert.deepEqual(ruleRequest({ ...q, range: '3y' }, '2026-09-23').from, '2023-09-23');
+  assert.deepEqual(ruleRequest({ ...q, range: '1y', to: '2020-12-31' }, '2026-09-23').from, '2019-12-31');
+  const all = ruleRequest(q, '2026-09-23');
+  assert.equal(all.from, null);
+  assert.equal(all.range, 'all');
+  const typed = ruleRequest({ ...q, from: '2020-12-31', to: '2019-01-01' }, '2026-09-23');
+  assert.deepEqual([typed.from, typed.to], ['2019-01-01', '2020-12-31'], 'a window typed back to front is turned round');
+  const schedule = { members: [], events: [] };
+  assert.equal(windowSchedule(schedule, all), schedule, 'no window: the schedule is handed back as it is');
 });

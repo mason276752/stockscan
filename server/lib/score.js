@@ -7,6 +7,7 @@ import { reclassify } from './statementTypes.js';
 import { fiscalLabel } from './filings.js';
 import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.js';
 import { SCORE_HISTORY, pickAsOf, screenAsOfColumns, screenAsOfIndex } from './screen.js';
+import { collapseAmendments } from './filings.js';
 
 export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf, SCORE_HISTORY };
 
@@ -157,16 +158,21 @@ export function latestScores(asof = null) {
   const n = store.scoreCount(SCORE_VERSION);
   const hit = latestMemo.get(key);
   if (hit && hit.n === n && Date.now() - hit.at < 60_000) return hit.rows;
+  // the index comes sorted by company, newest period first. Without a date
+  // only the newest SCORE_HISTORY *periods* are decoded - every version of
+  // them, since an amendment shares its original's period end and pickAsOf
+  // has to see both to choose.
   const byCik = new Map();
   for (const r of store.scoreIndex(SCORE_VERSION)) {
     if (!r.report_date) continue;
-    const list = byCik.get(r.cik) || [];
-    if (asof || list.length < SCORE_HISTORY) list.push(r.accession);
-    byCik.set(r.cik, list);
+    const rec = byCik.get(r.cik) || byCik.set(r.cik, { accs: [], periods: new Set() }).get(r.cik);
+    if (!asof && rec.periods.size >= SCORE_HISTORY && !rec.periods.has(r.report_date)) continue;
+    rec.periods.add(r.report_date);
+    rec.accs.push(r.accession);
   }
   const rows = [];
-  for (const [, accs] of byCik) {
-    const row = withHistory(accs.map(scoreOf), asof);
+  for (const [, rec] of byCik) {
+    const row = withHistory(rec.accs.map(scoreOf), asof);
     if (row) rows.push(row);
   }
   if (decoded.size > 60_000) decoded.clear();
@@ -195,10 +201,20 @@ export function asOfIndex() {
   return asOfMemo.index;
 }
 
-// Latest saved filing of a company and its score (null when nothing is saved yet).
+// Latest saved filing of a company and its score (null when nothing is
+// saved yet). A period that was amended is read as its amendment, unless
+// that one has no statements in it (filings.js collapseAmendments).
+const thinSaved = (r) => {
+  const s = store.getScore(r.accession, SCORE_VERSION);
+  return s ? !(Number(s.coverage) > 0) : false; // not scored yet: nothing says it is empty
+};
 export async function latestScore(cik) {
-  const rows = store.filingIndex(cik).filter((r) => r.report_date && !/\/A$/i.test(r.form || ''));
+  const rows = store
+    .filingIndex(cik)
+    .filter((r) => r.report_date)
+    .map((r) => ({ ...r, periodEnd: r.report_date }));
   if (!rows.length) return null;
   rows.sort((a, b) => (a.report_date < b.report_date ? 1 : a.report_date > b.report_date ? -1 : 0));
-  return scoreAccession(rows[0].accession);
+  const pick = collapseAmendments(rows, thinSaved)[0];
+  return pick ? scoreAccession(pick.accession) : null;
 }

@@ -282,6 +282,10 @@ for (const [cik, list] of filingsByCik) {
     // so are the store paths when they follow the naming - file / scoreFile
     // are only spelled out when they do not, scoreFile: true when they do)
     const f = { accession: rec.accession, form, filingDate: h.filingDate || null, reportDate, primaryDocument: h.primaryDocument || null, ...label };
+    // an amendment the parser found nothing to score in is the Part III-only
+    // kind: it corrects nothing, so the browser keeps the original for that
+    // period (filings.js collapseAmendments)
+    if (/\/A$/i.test(form) && !(Number(store.getScore(rec.accession, SCORE_VERSION)?.coverage) > 0)) f.thin = 1;
     // not on this site (over the size budget): read it from the data ref instead
     if (!published.has(rec.accession)) f.off = 1;
     if (rec.file !== filingFile(cik, f, SCRAPE_VERSION)) f.file = rec.file;

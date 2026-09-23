@@ -21,6 +21,7 @@ const RANGES = [
   ['5y', 5],
   ['10y', 10],
 ];
+const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
 const BENCHMARKS = [
   ['SPY', () => 'S&P 500 (SPY)'],
   ['QQQ', () => 'Nasdaq 100 (QQQ)'],
@@ -30,6 +31,37 @@ const BENCHMARKS = [
 ];
 
 const range = ref(localStorage.getItem('stockscan.basket.range') || '3y');
+// a rule ETF's default is its whole history, so it keeps its own choice
+const ruleRange = ref(localStorage.getItem('stockscan.rule.range') || 'all');
+// 'custom': the window typed in the two date boxes (either one alone is
+// enough - "from here on", "up to here"), shared by both kinds of ETF
+const from = ref(localStorage.getItem('stockscan.basket.from') || '');
+const to = ref(localStorage.getItem('stockscan.basket.to') || '');
+let lastPreset = { basket: range.value === 'custom' ? '3y' : range.value, rule: ruleRange.value === 'custom' ? 'all' : ruleRange.value };
+const activeRange = computed({
+  get: () => (isRule.value ? ruleRange.value : range.value),
+  set: (v) => {
+    const kind = isRule.value ? 'rule' : 'basket';
+    if (v === 'custom') {
+      // switching to a custom window starts from the one on screen, so the
+      // dates are something to nudge, not something to type from scratch
+      if (!isDate(from.value) && !isDate(to.value) && result.value?.start) {
+        from.value = result.value.start;
+        to.value = result.value.end;
+      }
+    } else lastPreset[kind] = v;
+    if (isRule.value) ruleRange.value = v;
+    else range.value = v;
+  },
+});
+// ✕ next to the dates: back to the preset the custom window came from
+function clearWindow() {
+  from.value = '';
+  to.value = '';
+  activeRange.value = lastPreset[isRule.value ? 'rule' : 'basket'];
+}
+// what the request carries: only a real window, and only when it is asked for
+const window_ = computed(() => (activeRange.value === 'custom' ? { from: isDate(from.value) ? from.value : null, to: isDate(to.value) ? to.value : null } : { from: null, to: null }));
 const benchmark = ref(localStorage.getItem('stockscan.basket.bench') ?? 'SPY');
 const colors = ref(localStorage.getItem('stockscan.kcolors') || 'tw');
 // chart: 'own'    = Advanced Charts / Lightweight Charts on the bars the server fetched
@@ -43,6 +75,9 @@ const noBars = ref(isStatic); // settled by quotesStatus()
 const chartSource = ref(isStatic || localStorage.getItem('stockscan.basket.chart') === 'widget' ? 'widget' : 'own');
 watch(chartSource, (v) => localStorage.setItem('stockscan.basket.chart', v));
 watch(range, (v) => localStorage.setItem('stockscan.basket.range', v));
+watch(ruleRange, (v) => localStorage.setItem('stockscan.rule.range', v));
+watch(from, (v) => localStorage.setItem('stockscan.basket.from', v || ''));
+watch(to, (v) => localStorage.setItem('stockscan.basket.to', v || ''));
 watch(benchmark, (v) => localStorage.setItem('stockscan.basket.bench', v));
 watch(colors, (v) => localStorage.setItem('stockscan.kcolors', v));
 
@@ -247,10 +282,12 @@ async function run(force = false) {
     lastKey = '';
     return;
   }
-  // the rule ETF has no range: it runs from the first filing that passed
+  // a rule ETF's default range is 'all': the whole replay, from the first
+  // filing that passed. Both kinds take the same window otherwise.
+  const w = window_.value;
   const body = rule
-    ? { rule: true, params: b.source?.params || {}, benchmark: benchmark.value || null, minPrice: Number(minPrice.value) >= 0 ? Number(minPrice.value) : 1 }
-    : { constituents: included.map((c) => ({ ticker: c.ticker, cik: c.cik, weight: Number(c.weight) })), range: range.value, rebalance: b.rebalance, benchmark: benchmark.value || null };
+    ? { rule: true, params: b.source?.params || {}, range: ruleRange.value, ...w, benchmark: benchmark.value || null, minPrice: Number(minPrice.value) >= 0 ? Number(minPrice.value) : 1 }
+    : { constituents: included.map((c) => ({ ticker: c.ticker, cik: c.cik, weight: Number(c.weight) })), range: range.value, ...w, rebalance: b.rebalance, benchmark: benchmark.value || null };
   const key = JSON.stringify(body);
   if (!force && key === lastKey) return;
   lastKey = key;
@@ -271,7 +308,7 @@ async function run(force = false) {
     // bars stream in one constituent at a time: progress shows as they land, the
     // chart (the previous one stays up meanwhile) is replaced once by the final index
     await (rule ? api.ruleEtfStream : api.basketStream)(
-      rule ? { params: body.params, benchmark: body.benchmark, minPrice: body.minPrice } : body,
+      rule ? { params: body.params, range: body.range, from: body.from, to: body.to, benchmark: body.benchmark, minPrice: body.minPrice } : body,
       (ev) => {
         if (id !== seq) return;
         if (ev.type === 'schedule') schedule.value = ev;
@@ -321,7 +358,13 @@ onMounted(async () => {
   await loadQuotes();
   run();
 });
-watch([current, range, benchmark, hidden], () => run());
+watch([current, range, ruleRange, benchmark, hidden], () => run());
+// dates are typed in (a half-typed year is a window of its own): wait
+let dateTimer = null;
+watch([from, to], () => {
+  clearTimeout(dateTimer);
+  dateTimer = setTimeout(run, 600);
+});
 let priceTimer = null;
 watch(minPrice, () => {
   clearTimeout(priceTimer);
@@ -529,10 +572,17 @@ const sourceText = computed(() => {
             <Loading v-if="loading" inline small :text="progress ? t('bk.fetching', { done: progress.done, total: progress.total }) : t('bk.computing')" />
           </div>
           <div class="options">
-            <span v-if="!isRule" class="seg">
-              <button v-for="[k, n] in RANGES" :key="k" class="small" :class="{ active: range === k }" @click="range = k">{{ t('chart.years', { n }) }}</button>
+            <span class="seg">
+              <button v-if="isRule" class="small" :class="{ active: activeRange === 'all' }" :title="t('rule.wholeSpanTitle')" @click="activeRange = 'all'">{{ t('rule.wholeSpan') }}</button>
+              <button v-for="[k, n] in RANGES" :key="k" class="small" :class="{ active: activeRange === k }" @click="activeRange = k">{{ t('chart.years', { n }) }}</button>
+              <button class="small" :class="{ active: activeRange === 'custom' }" :title="t('bk.customTitle')" @click="activeRange = 'custom'">{{ t('bk.custom') }}</button>
             </span>
-            <span v-else class="muted small" :title="t('rule.wholeSpanTitle')">{{ t('rule.wholeSpan') }}</span>
+            <span v-if="activeRange === 'custom'" class="dates small">
+              <input v-model="from" type="date" :max="to || undefined" :title="t('bk.fromDate')" />
+              <span class="muted">～</span>
+              <input v-model="to" type="date" :min="from || undefined" :title="t('bk.toDate')" />
+              <button class="mini ghost" :title="t('bk.clearDates')" @click="clearWindow">✕</button>
+            </span>
             <select v-if="!isRule" v-model="current.rebalance" class="small" :title="t('bk.rebalanceTitle')">
               <option value="none">{{ t('bk.buyHold') }}</option>
               <option value="daily">{{ t('bk.dailyRebalance') }}</option>
@@ -606,6 +656,10 @@ const sourceText = computed(() => {
             {{ noBars ? t('bk.widgetStatic') : t('bk.widgetStats', { src: result ? `: ${result.source}` : t('bk.widgetWaiting') }) }}{{ current.rebalance === 'daily' ? t('bk.widgetRebalance') : '' }}
           </p>
           <p v-for="(n, i) in result?.notes || []" :key="i" class="muted small note">※ {{ t(`bkNote.${n.code}`, n) }}</p>
+        </div>
+        <div v-else-if="result && !loading" class="panel nowindow">
+          <p class="muted">{{ t('bk.nothingInWindow') }}</p>
+          <p v-for="(n, i) in result.notes || []" :key="i" class="muted small note">※ {{ t(`bkNote.${n.code}`, n) }}</p>
         </div>
         <p v-if="chartSource === 'widget' && tvTooMany" class="muted small note warnbox">{{ t('bk.tooMany', { n: tvIncluded.length }) }}</p>
 
@@ -983,6 +1037,28 @@ button.danger:hover {
 .minprice {
   color: var(--muted);
   white-space: nowrap;
+}
+.dates {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.dates input {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+}
+.nowindow {
+  margin-bottom: 12px;
+  text-align: center;
+}
+.nowindow .note {
+  text-align: left;
 }
 .tag.rule {
   color: var(--pos);

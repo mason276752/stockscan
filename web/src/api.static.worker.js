@@ -22,7 +22,7 @@ import { SCREEN_FIELDS, asOfDate, asOfShardYears, browseCompanies, screenAsOfInd
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.js';
 import { adjusted, decodeBars } from '../../server/lib/barFormat.js';
 import { basketRequest, runBasket } from '../../server/lib/basket.js';
-import { RULE_MAX_MEMBERS, replaySchedule, ruleRequest, runRuleEtf } from '../../server/lib/ruleEtf.js';
+import { RULE_MAX_MEMBERS, replaySchedule, ruleRequest, runRuleEtf, windowSchedule } from '../../server/lib/ruleEtf.js';
 import { buildValuation } from '../../server/lib/valuation.js';
 import * as data from './staticData';
 import { translate } from './locales/translate.js';
@@ -319,7 +319,7 @@ const api = {
   async ruleEtfStream(body, onEvent, signal) {
     const req = ruleRequest(body);
     const { core, index, years } = await ruleIndex();
-    const schedule = replaySchedule(core, index, req.params);
+    const schedule = windowSchedule(replaySchedule(core, index, req.params), req);
     if (schedule.members.length > RULE_MAX_MEMBERS) throw new Error(t('rule.tooMany', { n: schedule.members.length, max: RULE_MAX_MEMBERS }));
     onEvent?.({ type: 'schedule', members: schedule.members.length, events: schedule.events.length, skipped: schedule.skipped, tested: schedule.tested, first: schedule.first, last: schedule.last });
     const m = await data.meta();

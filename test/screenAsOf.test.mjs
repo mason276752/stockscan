@@ -21,7 +21,7 @@ const score = (cik, accession, form, filingDate, periodEnd, fiscalYear, fiscalPe
 const SCORES = {
   1: [
     score(1, 'a4', '10-Q', '2026-05-01', '2026-03-31', '2026', 'Q1', 80),
-    score(1, 'a3x', '10-K/A', '2026-02-15', '2025-12-31', '2025', 'FY', 75), // amended: never the current one
+    score(1, 'a3x', '10-K/A', '2026-02-15', '2025-12-31', '2025', 'FY', 75), // the 2025 FY as the company restated it
     score(1, 'a3', '10-K', '2026-02-01', '2025-12-31', '2025', 'FY', 70),
     score(1, 'a2', '10-Q', '2025-05-01', '2025-03-31', '2025', 'Q1', 60),
     score(1, 'a1', '10-K', '2025-02-01', '2024-12-31', '2024', 'FY', 50),
@@ -45,21 +45,30 @@ test('as-of date: only a past YYYY-MM-DD, else now', () => {
   assert.equal(asOfDate(undefined), null);
 });
 
-test('the current filing is the newest one already filed, amendments aside', () => {
+test('the current filing is the newest one already filed, read as its amendment', () => {
   const at = (asof) => pickAsOf(SCORES[1], asof);
   assert.equal(at(null).cur.accession, 'a4');
   assert.equal(at('2026-05-01').cur.accession, 'a4', 'the filing date itself counts');
-  assert.equal(at('2026-04-30').cur.accession, 'a3', 'a4 was not out yet');
-  assert.equal(at('2026-02-20').cur.accession, 'a3', 'the amendment is skipped');
+  assert.equal(at('2026-04-30').cur.accession, 'a3x', 'a4 was not out yet, and the FY was restated');
+  assert.equal(at('2026-02-20').cur.accession, 'a3x', 'the amendment is what the company now says');
+  assert.equal(at('2026-02-10').cur.accession, 'a3', 'but only from the day it was filed');
   assert.equal(at('2025-01-31').cur, null, 'nothing filed yet');
   // prev / yoy move back with it
   const q1 = at('2026-05-15');
-  assert.equal(q1.prev.accession, 'a3');
+  assert.equal(q1.prev.accession, 'a3x', 'the period before, in its amended version');
   assert.equal(q1.yoy.accession, 'a2', 'the same quarter a year earlier');
   const fy = at('2026-04-30');
   assert.equal(fy.prev.accession, 'a2');
   assert.equal(fy.yoy.accession, 'a1');
-  assert.equal(fy.history, 3);
+  assert.equal(fy.history, 3, 'the amended FY and its original are one period');
+});
+
+test('an amendment with no statements in it corrects nothing', () => {
+  // the Part III-only kind: `coverage` 0, so the original stands
+  const partIII = [{ ...SCORES[1][1], accession: 'a3z', coverage: 0, score: null }, ...SCORES[1].slice(2)];
+  assert.equal(pickAsOf(partIII, null).cur.accession, 'a3');
+  // and when both versions have the numbers, the later one wins
+  assert.equal(pickAsOf(SCORES[1].slice(1), null).cur.accession, 'a3x');
 });
 
 test('a late filing does not show up before it was filed', () => {
@@ -67,10 +76,14 @@ test('a late filing does not show up before it was filed', () => {
   assert.equal(pickAsOf(SCORES[2], '2026-06-10').cur.accession, 'b2');
 });
 
-test('only the newest filings are looked back at', () => {
+test('only the newest periods are looked back at, every version of them', () => {
   const many = Array.from({ length: 9 }, (_, i) => score(3, `c${i}`, '10-Q', `2026-0${9 - i}-01`, `2026-0${9 - i}-01`, '2026', 'Q1', 10));
   assert.equal(pickAsOf(many, null).history, 6);
   assert.equal(pickAsOf(many, null, 2).history, 2);
+  // an amended period is one period, not two, so the window still reaches back six
+  const amended = many.flatMap((m, i) => (i % 2 ? [m] : [{ ...m, accession: `${m.accession}x`, form: '10-Q/A', filingDate: `2026-1${i}-01` }, m]));
+  assert.equal(pickAsOf(amended, null).history, 6);
+  assert.equal(pickAsOf(amended, null).cur.accession, 'c0x');
 });
 
 // the server reads the scores as row objects, the static site the same
@@ -91,7 +104,8 @@ test('the screener reads every company as of the date', () => {
     [null, [['T1', 80], ['T2', 90]]],
     ['2026-06-30', [['T1', 80], ['T2', 90]]],
     ['2026-05-15', [['T1', 80], ['T2', 40]]], // T2's Q1 was not filed until June
-    ['2026-02-20', [['T1', 70], ['T2', 40]]], // the amendment is not the current filing
+    ['2026-02-20', [['T1', 75], ['T2', 40]]], // T1's FY as amended five days earlier
+    ['2026-02-10', [['T1', 70], ['T2', 40]]], // before the amendment: the original
     ['2025-04-01', [['T2', 40], ['T1', 50]]],
     ['2025-02-15', [['T1', 50]]], // T2 had not filed anything yet
     ['2025-01-01', []],
@@ -117,7 +131,7 @@ test('a date reads its own year and the two before it', () => {
 });
 
 test('the year files answer exactly as one whole index would', () => {
-  for (const asof of ['2026-05-15', '2026-02-20', '2025-04-01', '2025-02-15']) {
+  for (const asof of ['2026-05-15', '2026-02-20', '2026-02-10', '2025-04-01', '2025-02-15']) {
     assert.equal(screenQuery(staticTable(asof, [1900]), query).total, 0, 'no year loaded: nothing to screen');
     const sharded = screenQuery(staticTable(asof), query);
     const server = screenQuery(serverRows(asof), query);

@@ -4,18 +4,33 @@
 
 export const RANGES = { '1y': 1, '3y': 3, '5y': 5, '10y': 10, max: 10 };
 
+// A window the user typed: 'YYYY-MM-DD' or nothing. Anything else is ignored
+// rather than guessed at, and a window typed back to front is turned round.
+export const isoDate = (v) => {
+  const d = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null;
+  // the round trip rejects a day that does not exist (2020-02-30 would roll over to March)
+  return d && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d ? d : null;
+};
+export function dateWindow(body) {
+  let from = isoDate(body?.from);
+  let to = isoDate(body?.to);
+  if (from && to && from > to) [from, to] = [to, from];
+  return { from, to };
+}
+
+export function yearsBefore(date, years) {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCFullYear(d.getUTCFullYear() - years);
+  return d.toISOString().slice(0, 10);
+}
+
 function daysBefore(date, n) {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
 }
 
-function rangeStart(range, end) {
-  const years = RANGES[range] || 5;
-  const d = new Date(`${end}T00:00:00Z`);
-  d.setUTCFullYear(d.getUTCFullYear() - years);
-  return d.toISOString().slice(0, 10);
-}
+const rangeStart = (range, end) => yearsBefore(end, RANGES[range] || 5);
 
 // Basket index, base 100 on the start date, from the constituents' bars.
 //   rebalance 'none'  : buy and hold - weights are the allocation on the start date
@@ -27,7 +42,13 @@ function rangeStart(range, end) {
 // is never rebalanced, and one newcomer or leaver never shortens the chart. The high / low of a day are the
 // weighted highs / lows of the constituents, which slightly overstates the
 // basket's true intraday range.
-export function basketSeries(members, { range = '5y', rebalance = 'none', base = 100 } = {}) {
+//
+// `from` / `to` are the window asked for (either alone is enough): `from`
+// replaces the start `range` would have picked, `to` ends the index there
+// instead of at the last bar - so the index is base 100 on the first session
+// of the window and everything after it (the statistics, each constituent's
+// return, what counts as delisted) is measured inside it.
+export function basketSeries(members, { range = '5y', from = null, to = null, rebalance = 'none', base = 100 } = {}) {
   const notes = []; // { code, ...params }: worded by the UI in its language
   const rows = members.filter((m) => m.days?.length);
   if (!rows.length) return { bars: [], start: null, end: null, notes: [{ code: 'noPrices' }] };
@@ -36,16 +57,17 @@ export function basketSeries(members, { range = '5y', rebalance = 'none', base =
   const first = rows.map((m) => m.days[0].date);
   const lastOf = rows.map((m) => m.days.at(-1).date);
 
-  const last = lastOf.reduce((d, x) => (x > d ? x : d), '');
-  let start = rangeStart(range, last);
+  const lastBar = lastOf.reduce((d, x) => (x > d ? x : d), '');
+  const last = to && to < lastBar ? to : lastBar; // where the window ends: the day asked for, or the last bar there is
+  let start = from || rangeStart(range, last);
   const earliest = first.reduce((d, x) => (x < d ? x : d), first[0]);
   if (earliest > start) {
     start = earliest;
     notes.push({ code: 'startsLater', start });
   }
 
-  // trading calendar: every date any constituent traded, from the first date at/after start
-  const dates = [...new Set(rows.flatMap((m) => m.days.map((d) => d.date)))].filter((d) => d >= start).sort();
+  // trading calendar: every date any constituent traded inside the window
+  const dates = [...new Set(rows.flatMap((m) => m.days.map((d) => d.date)))].filter((d) => d >= start && d <= last).sort();
   if (dates.length < 2) return { bars: [], start, end: last, notes: [...notes, { code: 'tooFewDays' }] };
   // per constituent: date -> bar between its first and last day, carrying the
   // previous close over days it did not trade
@@ -62,8 +84,9 @@ export function basketSeries(members, { range = '5y', rebalance = 'none', base =
     }
     // a name with only a few days in the range (a stock delisted just after
     // the start, Yahoo's single last bar of a taken-private company) would
-    // join and leave within days: leave it out instead
-    if (out.size < 5) {
+    // join and leave within days: leave it out instead. In a window shorter
+    // than that, a name that traded every session of it is not "a few days".
+    if (out.size < Math.min(5, dates.length)) {
       notes.push({ code: 'fewDays', symbol: m.symbol, n: out.size, first: m.days[0].date, last: m.days.at(-1).date });
       out.clear();
     }
@@ -140,7 +163,9 @@ export function basketSeries(members, { range = '5y', rebalance = 'none', base =
     // under a dollar) print wild bars that swamp a basket - flag them
     const recent = m.days.slice(-60);
     const illiquid = (b ?? m.days.at(-1).close) < 1 || recent.filter((d) => !d.volume).length > recent.length / 3;
-    // no bar in the last two weeks while others have them: delisted, taken private, renamed
+    // no bar in the last two weeks of the window while others have them:
+    // delisted, taken private, renamed (a name still trading today is not
+    // delisted just because the window ends in the past)
     const delisted = m.days.at(-1).date < daysBefore(last, 14);
     return { symbol: m.symbol, weight: w[i], source: m.source, first: m.days[0].date, last: m.days.at(-1).date, joined: from, left: left[i], delisted, startClose: a, endClose: b, return: ret, contribution: rebalance === 'daily' || !whole || ret == null ? null : w[i] * ret, illiquid };
   });
@@ -191,16 +216,22 @@ export function rebased(hist, start, end, base = 100) {
   return days.map((d) => ({ time: d.date, value: d.close * k }));
 }
 
-// POST /api/basket's body -> { wanted: [{ ticker, cik, weight }], range, rebalance, benchmark }
+// POST /api/basket's body -> { wanted: [{ ticker, cik, weight }], range, from, to, rebalance, benchmark }
+// An explicit from / to wins over `range` - the preset is then just a label.
 export function basketRequest(body) {
   const seen = new Set();
   const wanted = (Array.isArray(body.constituents) ? body.constituents : [])
     .map((c) => ({ ticker: String(c?.ticker || '').trim().toUpperCase(), cik: Number(c?.cik) || null, weight: Number(c?.weight) > 0 ? Number(c.weight) : 1 }))
     .filter((c) => c.ticker && !seen.has(c.ticker) && seen.add(c.ticker));
   if (!wanted.length) throw Object.assign(new Error('constituents is empty'), { status: 400 });
+  const { from, to } = dateWindow(body);
+  // 'custom' with neither end typed in yet: everything the bars cover
+  const preset = RANGES[body.range] ? body.range : body.range === 'custom' ? 'max' : '5y';
   return {
     wanted,
-    range: RANGES[body.range] ? body.range : '5y',
+    range: from || to ? 'custom' : preset,
+    from,
+    to,
     rebalance: body.rebalance === 'daily' ? 'daily' : 'none',
     benchmark: body.benchmark ? String(body.benchmark).trim().toUpperCase() : null,
   };
@@ -209,10 +240,10 @@ export function basketRequest(body) {
 // The index of the members fetched so far. listingOf(ticker, cik) -> { listed,
 // renamed } from the ticker table (null: unknown); `extra` is merged into the
 // result (the server adds its data-source status).
-function basketResult({ wanted, range, rebalance }, out, { partial = false, done = 0, total = 0 } = {}, { listingOf = () => null, extra = {} } = {}) {
+function basketResult({ wanted, range, from, to, rebalance }, out, { partial = false, done = 0, total = 0 } = {}, { listingOf = () => null, extra = {} } = {}) {
   const members = out.filter((m) => m && !m.bench);
   const bench = out.find((m) => m && m.bench) || null;
-  const series = basketSeries(members, { range, rebalance });
+  const series = basketSeries(members, { range, from, to, rebalance });
   // EDGAR's ticker table is the other delisting signal: a name whose prices
   // still come in but that left the table (taken private, deregistered,
   // renamed) is flagged too, with the new ticker when the company lives on
@@ -228,6 +259,7 @@ function basketResult({ wanted, range, rebalance }, out, { partial = false, done
   const sources = [...new Set(members.filter((m) => !m.error).map((m) => m.source))];
   return {
     range,
+    window: { from: from || null, to: to || null },
     rebalance,
     partial,
     done,
@@ -256,7 +288,7 @@ export async function runBasket(req, fetchBars, { emit = null, interim = 0, sign
   let done = 0;
   let lastInterim = Date.now();
   let dirty = false;
-  emit?.({ type: 'start', total, range: req.range, rebalance: req.rebalance });
+  emit?.({ type: 'start', total, range: req.range, from: req.from, to: req.to, rebalance: req.rebalance });
   const worker = async () => {
     while (next < jobs.length && !signal?.aborted) {
       const i = next++;

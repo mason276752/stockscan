@@ -6,6 +6,7 @@ import { ROWS as INDICATOR_ROWS } from './indicators.js';
 import { AMOUNT_FIELDS } from './scoreModel.js';
 import { MARKET_FIELDS } from './marketFields.js';
 import { FILER_STATUS, SIC, sicInfo } from './sic.js';
+import { collapseAmendments, filingPeriodKey } from './filings.js';
 
 // Screener fields: the score, every indicator row, statement amounts (from
 // the latest filing), and the market snapshot (price, market cap, multiples).
@@ -189,17 +190,31 @@ export const SCORE_HISTORY = 6; // filings per company to look back at for prev 
 
 // A company's filings newest first -> the one current at `asof` (null = the
 // newest of all), the one before it and the same fiscal period a year
-// earlier, for the change filters. Amendments are skipped, as they are
-// wherever the screener compares filings; a filing with no filing date is
-// kept (nothing says it was not out yet).
+// earlier, for the change filters. A filing with no filing date is kept
+// (nothing says it was not out yet).
+//
+// A period that was amended counts once, as the amended version: that is
+// the number the company now stands behind, so it is what gets screened and
+// scored (filings.js collapseAmendments). An amendment that carries no
+// statements - `coverage` 0, the Part III-only kind - corrects nothing, so
+// its original stands. And an amendment only counts from the day it was
+// filed: screening 2026-01-01 reads what was on the table then, not the
+// correction that arrived in March.
+const thinScore = (f) => !(Number(f.coverage) > 0);
 export function pickAsOf(filings, asof = null, limit = SCORE_HISTORY) {
-  const hist = [];
+  const versions = [];
+  const periods = new Set();
   for (const f of filings) {
-    if (!f || /\/A$/i.test(f.form || '')) continue;
+    if (!f) continue;
     if (asof && f.filingDate && f.filingDate > asof) continue;
-    hist.push(f);
-    if (hist.length >= limit) break;
+    const key = filingPeriodKey(f);
+    if (!periods.has(key)) {
+      if (periods.size >= limit) break; // the newest `limit` periods, every version of them
+      periods.add(key);
+    }
+    versions.push(f);
   }
+  const hist = collapseAmendments(versions, thinScore);
   const cur = hist[0] || null;
   const yoy = cur ? hist.find((x, i) => i > 0 && x.fiscalPeriod === cur.fiscalPeriod && String(Number(x.fiscalYear) + 1) === String(cur.fiscalYear)) : null;
   return { cur, prev: hist[1] || null, yoy: yoy || null, history: hist.length };
@@ -264,7 +279,7 @@ export function screenAsOfIndex(shards) {
     for (let j = 0; j < cols.n; j++) {
       const cik = cols.cik[j];
       const of = byCik.get(cik) || byCik.set(cik, []).get(cik);
-      of.push({ s, j, form: cols.form[j], filingDate: cols.filingDate[j], periodEnd: cols.periodEnd[j], fiscalYear: cols.fiscalYear[j], fiscalPeriod: cols.fiscalPeriod[j] });
+      of.push({ s, j, form: cols.form[j], filingDate: cols.filingDate[j], periodEnd: cols.periodEnd[j], fiscalYear: cols.fiscalYear[j], fiscalPeriod: cols.fiscalPeriod[j], coverage: cols.coverage[j] });
     }
   });
   // newest first, as the store hands a company's scores over: by the period
