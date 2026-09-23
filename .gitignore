@@ -1,0 +1,4 @@
+# 這個 branch 只放資料（data/store 財報與評分、data/bars 已結束年份的日線）。
+# 今年還在長的 head.zst 每天都變，不進 git；寫到一半的 .tmp 也不進。
+data/bars/**/head.zst
+**/*.tmp
