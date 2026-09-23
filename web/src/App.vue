@@ -557,6 +557,7 @@ onMounted(() => {
             {{ t('note.compare') }}
           </Note>
           <Note v-if="data.derived && !isIndicators && !isValuation && !isChart">{{ t('note.derived') }}</Note>
+          <Note v-if="data.source === 'dera' && !isChart">{{ t('note.dera') }}</Note>
 
           <div class="toolbar">
             <div class="tabs">

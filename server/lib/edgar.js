@@ -147,7 +147,13 @@ function rowsOf(table) {
 // the day a new 10-Q/10-K is filed); maxAge lengthens it (the crawler's
 // weekly sweep is happy with a list a few days old - the daily-index watch
 // catches new filings anyway).
-export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, includeOlder = true, refresh = false, maxAge = SUBMISSIONS_TTL } = {}) {
+// `inlineOnly` (the default) leaves out the filings nothing here can read:
+// before 2019 a filer tagged its numbers in a separate instance document,
+// not in the HTML, and ixbrl.js only reads Inline XBRL. Such a filing is
+// still offered once its numbers are in the store - that is what
+// ingest-dera.mjs puts there, from SEC's quarterly datasets. Pass false to
+// see every filing EDGAR lists (the ingester, deciding what to fill in).
+export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, includeOlder = true, refresh = false, maxAge = SUBMISSIONS_TTL, inlineOnly = true } = {}) {
   const cik = await resolveCik(client, tickerOrCik);
   const padded = String(cik).padStart(10, '0');
   const main = await cachedJson(client, padded, `${SUBMISSIONS}CIK${padded}.json`, refresh ? 0 : maxAge);
@@ -162,7 +168,7 @@ export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, i
   }
   const allowed = new Set(forms.map((f) => f.toUpperCase()));
   const filings = rows
-    .filter((r) => allowed.has(r.form.toUpperCase()) && r.isInlineXBRL && r.primaryDocument)
+    .filter((r) => allowed.has(r.form.toUpperCase()) && r.primaryDocument && (!inlineOnly || r.isInlineXBRL || store.hasFiling(r.accession)))
     .map((r) => ({
       cik,
       ...r,

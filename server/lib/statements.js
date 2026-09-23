@@ -54,7 +54,7 @@ function dimKey(ctx) {
 }
 
 // Undimensioned columns first, then grouped by dimension, newest period first.
-function compareContexts(a, b) {
+export function compareContexts(a, b) {
   const da = Object.keys(a.dimensions).length;
   const db = Object.keys(b.dimensions).length;
   if (da !== db) return da - db;
@@ -79,7 +79,7 @@ function prevDay(d) {
 // the balance sheet) shows up as an undimensioned instant column with one or
 // two facts. Real opening/closing balances (cash flow, equity) are kept
 // because a duration column in the same statement brackets their date.
-function pruneColumns(columns, counts) {
+export function pruneColumns(columns, counts) {
   const plain = columns.filter((c) => !Object.keys(c.dimensions).length);
   if (!plain.length) return columns;
   const max = Math.max(...plain.map((c) => counts[c.id]));

@@ -331,8 +331,11 @@ write('screen-history.json', screenCols.history);
 // date. A year is megabytes and the store keeps growing backwards, so the
 // page only fetches the years a date can reach (asOfShardYears), and only
 // once a date is set. STOCKSCAN_ASOF_YEARS caps how many years are
-// published at all - beyond that the screener's dates stop.
-const ASOF_YEARS = Math.max(1, Number(process.env.STOCKSCAN_ASOF_YEARS) || 8);
+// published at all - beyond that the screener's dates stop. The default
+// covers everything there is to cover: SEC's quarterly datasets start at
+// 2009q1 (ingest-dera.mjs), and a year of them is a couple of MB zstd'd
+// against the 1 GB the site may take.
+const ASOF_YEARS = Math.max(1, Number(process.env.STOCKSCAN_ASOF_YEARS) || 20);
 const screened = new Set(screenerRows.map((r) => r.cik));
 const asOfByYear = new Map();
 for (const r of store.scoreIndex(SCORE_VERSION)) {

@@ -24,7 +24,7 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
      把那天申報、有代號、本機還沒有的 10-K / 10-Q / 20-F / 40-F 全部抓下來、計分——**只要 server 開著就一直補**，
      每家公司的存檔份數沒有上限。讀到哪一天記在 `crawl:backfill`，重啟接著補；補完一天會把緊接在後面那份財報重算一次評分
      （一季的評分要讀前一季，原本算的時候前一季還沒下載）。補到 `STOCKSCAN_CRAWL_FROM`（預設 `2019-01-01`，Inline XBRL 上路那年，
-     再早的申報沒有 iXBRL 可解）為止。**補完整段歷史大約要下載 30 萬份財報、5 GB 以上、連續跑上幾十小時**，
+     再早的申報沒有 iXBRL 可解——那段歷史改用 SEC 的季度資料集補，見下面「2019 年以前的財報」）為止。**補完整段歷史大約要下載 30 萬份財報、5 GB 以上、連續跑上幾十小時**，
      想少一點就把 `STOCKSCAN_CRAWL_FROM` 設晚一些（例如 `2023-01-01`）。
   存檔以 zstd 壓縮（每份約 10 KB）。
 - 財報之外：財務指標與評分、股價估值、分類瀏覽（SIC / 申報身分 / ETF 成分股）、尋找股票、觀察名單，
@@ -34,7 +34,7 @@ Node.js server + Vue 網頁：抓取 SEC EDGAR 上的 Inline XBRL 財報（10-K 
   那天還沒送出去的那份不算，當時還沒有任何財報的公司不會出現；「較上期」「較去年同期」也跟著往前移。
   用的是申報日不是期末日，所以晚報的公司不會提前出現。市場數據（股價、市值、估值倍數）一律是現在的快照，不回溯。
   能回溯多久看本機存了多少：爬蟲的第一輪只抓每家最近 5 期，往回補的部分是背景一天一天補上來的（見上面第 3 點），
-  補到哪裡就能查到哪裡；還沒補到的時間點，很多公司會沒有當時的財報。純前端版則是看發布了幾年的時間點索引（見下方「索引」，預設 8 年，
+  補到哪裡就能查到哪裡；還沒補到的時間點，很多公司會沒有當時的財報。純前端版則是看發布了幾年的時間點索引（見下方「索引」，預設 20 年，
   每次查詢只載那個日期用得到的三年）。
 
 ## 安裝與啟動
@@ -56,7 +56,7 @@ SEC_USER_AGENT="YourName you@example.com" npm run dev     # 後端 :3000
 npm --prefix web run dev                                  # 前端 :5173，/api 代理到 :3000
 ```
 
-環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 repo 的 `data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `data/cache.sqlite`）、`STOCKSCAN_BARS`（日線目錄，預設 `data/bars`；這些預設都相對於 repo，不是執行時的工作目錄）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_CRAWL=0`（關閉背景財報爬蟲）、`STOCKSCAN_CRAWL_FROM`（往回補舊財報補到哪一天為止，預設 `2019-01-01`）、`STOCKSCAN_CRAWL_PARALLEL`（爬蟲同時處理幾家公司，預設 4）、`STOCKSCAN_ASOF_YEARS`（純前端版發布幾年的「時間點」索引，預設 8）、`STOCKSCAN_PUBLISH_MB`（純前端版發布多少財報，預設用滿 Pages 的 1 GB）、`STOCKSCAN_PUBLISH_YEARS`（推上 data ref 的財報保留幾年，預設不設限）、`STOCKSCAN_DATA_URL` / `STOCKSCAN_DATA_REF`（站台沒帶的財報去哪裡取，預設 `raw.githubusercontent.com` 上的 `refs/data/main`）、`STOCKSCAN_BARS_CRAWL=0`（關閉每日收盤後全市場日線的背景抓取）；
+環境變數：`SEC_USER_AGENT`（必填）、`PORT`（預設 3000）、`BASE_URL`（路徑前綴，見下）、`STOCKSCAN_STORE`（財報 / 評分目錄，預設 repo 的 `data/store`）、`STOCKSCAN_CACHE`（快取 SQLite，預設 `data/cache.sqlite`）、`STOCKSCAN_BARS`（日線目錄，預設 `data/bars`；這些預設都相對於 repo，不是執行時的工作目錄）、`STOCKSCAN_DB`（舊版單檔 SQLite，啟動時若 store 目錄是空的會自動搬過去）、`STOCKSCAN_DERA`（SEC 季度資料集 zip 的存放處，預設 `data/dera`）、`STOCKSCAN_CRAWL=0`（關閉背景財報爬蟲）、`STOCKSCAN_CRAWL_FROM`（往回補舊財報補到哪一天為止，預設 `2019-01-01`）、`STOCKSCAN_CRAWL_PARALLEL`（爬蟲同時處理幾家公司，預設 4）、`STOCKSCAN_ASOF_YEARS`（純前端版發布幾年的「時間點」索引，預設 20）、`STOCKSCAN_PUBLISH_MB`（純前端版發布多少財報，預設用滿 Pages 的 1 GB）、`STOCKSCAN_PUBLISH_YEARS`（推上 data ref 的財報保留幾年，預設不設限）、`STOCKSCAN_DATA_URL` / `STOCKSCAN_DATA_REF`（站台沒帶的財報去哪裡取，預設 `raw.githubusercontent.com` 上的 `refs/data/main`）、`STOCKSCAN_BARS_CRAWL=0`（關閉每日收盤後全市場日線的背景抓取）；
 自製 ETF 的日線：`TV_ENABLED=0`（不用 TradingView websocket）、`IB_HOST`（預設 127.0.0.1）、`IB_PORT`（預設 7496；TWS 模擬帳戶 7497、IB Gateway 4001 / 4002）、`IB_CLIENT_ID`（預設 100 + PORT 的後三位，兩個 server 才不會互踢）、`IB_ENABLED=0`（不連 TWS，改用 Yahoo）。
 
 ### 純前端版（沒有伺服器也能跑）
@@ -111,7 +111,7 @@ Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、�
   設了時間點才抓年份檔，而且只抓那個日期碰得到的**三年**（`asOfShardYears`：當年加前兩年——當期財報最多一年前，跟它比的前一期／去年同期再往前一年），
   抓到後在瀏覽器裡自己挑每家公司當時最新的那份（`screenAsOfTable`，自帶前一份與去年同期，不必再等第二個），換日期只要重挑一次（約 20 ms）。
   三年不夠的少數情況（公司在那之前就停止申報、或年報公司的上一份落在第四年）該公司會少出現或少了「較上期」的對照；
-  年份檔不合併、以 (檔, 列) 定位，所以多載一年不會複製任何資料。發布幾年由 `STOCKSCAN_ASOF_YEARS` 決定（預設 8 年），
+  年份檔不合併、以 (檔, 列) 定位，所以多載一年不會複製任何資料。發布幾年由 `STOCKSCAN_ASOF_YEARS` 決定（預設 20 年，夠蓋到季度資料集起算的 2009 年），
   日期選擇器的下限就是最舊的那個年份（`/api/screen/fields` 的 `asof.min`；伺服器版沒有下限，它直接讀 store）。
 - 純前端版的資料層跑在 Web Worker（[api.static.worker.js](web/src/api.static.worker.js)；頁面上的 [api.static.js](web/src/api.static.js) 只是把每個呼叫轉過去的 proxy）：抓檔、zstd 解壓、JSON parse、解財報算指標、算自製 ETF 指數與股價估值全在 worker 裡，索引也留在 worker 不搬回頁面，只有結果過線——主執行緒沒有任何 long task（之前載尋找股票索引會卡 ~130 ms）。錯誤訊息要用的語言隨每個請求帶過去（[locales/translate.js](web/src/locales/translate.js)，無 Vue 的 `t()`）。
   32 KB 以上的下載 worker 逐段讀、回報進度（`busy.downloads`）：頂端那條進度條在有已知大小的下載時顯示真實百分比，載入中的訊息旁顯示「1.2 / 1.6 MB」。
@@ -178,6 +178,31 @@ data/cache.sqlite                                                         快取
   - **沒收進站台的照樣點得開**：申報清單列的是**全部**財報，站台沒有的那幾份標成 `off`，瀏覽器直接向 **`raw.githubusercontent.com/<owner>/<repo>/refs/data/main/data/store/…`** 取同一個檔（它回 `access-control-allow-origin: *`，而且 store 在那邊是同一棵樹，路徑一模一樣；build 會把這個 base 寫進 `meta.json` 的 `store`，`STOCKSCAN_DATA_URL` / `STOCKSCAN_DATA_REF` 可覆寫）。抓回來一樣進 Cache Storage，之後不再下載。Service worker 只管同源，所以這些請求直接走網路。
   - 代價：多一個外連（raw 有匿名流量限制，正常瀏覽沒問題，大量抓會被擋）；repo 沒有那個檔（沒 push、或 repo 是 private）時，那份財報就真的打不開，頁面會講。
 - **clone 下來就是完整的**：財報、評分、申報清單都在 `data/store/`，所以新環境開任何一家公司不用等下載，爬蟲第一輪掃描時「最近 5 期都已存」的公司**一個請求都不會發**（申報清單一週內的就直接用；當天的新申報由每日索引監看補上）。`data/cache.sqlite` 只剩真正的快取（代號表、市場快照、產業宇宙、ETF 清單），刪掉也只是重抓這些。
+
+### 2019 年以前的財報（SEC 季度資料集）
+
+解析器讀的是 **Inline XBRL**，2019 年才上路；再早的申報把數字標在另一份 instance 文件裡，本站解析不了——這就是背景爬蟲往回補只補到 `STOCKSCAN_CRAWL_FROM`（預設 `2019-01-01`）的原因。
+
+那段歷史改從 SEC 的 **Financial Statement Data Sets** 補（[DERA](https://www.sec.gov/dera/data/financial-statement-data-sets.html)）：一季一個 zip、**2009q1 起**，裡面是 SEC 自己從每份申報的 XBRL 抽出來的四個 tab 分隔檔（`sub.txt` 申報、`num.txt` 每個數字、`pre.txt` 每個數字出現在哪張報表的第幾列、`tag.txt` 每個科目的型別／標準標籤／SEC 定義）。
+
+```bash
+npm run ingest:dera                       # 2009q1 到現在，每一季
+npm run ingest:dera -- --from 2015q1      # 只補這之後
+npm run ingest:dera -- --quarter 2012q1   # 只補這一季
+npm run ingest:dera -- --cik 320193       # 只補一家（查問題用）
+npm run ingest:dera -- --dry-run          # 只數，不寫
+npm run ingest:dera -- --compare          # 拿本機已解析的財報重建一次，比對評分差多少
+npm run rescore                           # 補完要計分（ingest 本身不算分）
+```
+
+- **界線是 EDGAR 的 `isInlineXBRL`，不是日期**：EDGAR 標成 inline 的留給爬蟲自己解析（它拿得到段落標題、縮排、封面股數），其餘的才用資料集重建。已經存在的財報永遠不覆蓋。`--include-inline` 可以連 inline 的也補——比爬快得多，但存的是比較薄的那一份，而且之後爬蟲看到已存在就不會再解析它了。
+- **EDGAR 還是「這份申報是什麼」的權威**：accession、表別、**精確的期末日**、文件連結都取自該公司的 submissions 清單。資料集把每個日期四捨五入到月底，而 52／53 週制的公司期末是 3/28 不是 3/31——兩種寫法會被當成兩期（[filings.js](server/lib/filings.js) `filingPeriodKey`），所以每個日期都會貼回該公司真正報過的期末日。EDGAR 沒列的申報就跳過不猜。
+- **有什麼、沒什麼**（[server/lib/dera.js](server/lib/dera.js) 開頭寫得更細）：
+  **有** 四大報表的每一列（公司自己的標籤、順序、金額、正負號）、標準科目的 SEC 定義、股東權益變動表的維度欄位。
+  **沒有** 段落標題（`pre.txt` 一列 abstract 科目都沒有），因此每一列都在同一層、沒有縮排；沒有報表標題（依 `stmt` 補上「CONSOLIDATED BALANCE SHEETS」這種）；沒有封面 dei，所以估值頁沒有流通股數；其餘報表不帶維度欄位（`pre.txt` 沒說哪張報表宣告了哪個軸，全放進來會把分部附註的數字放到損益表上）。財報頁上會標明這一份是資料集重建的。
+- **差多少是量出來的，不是猜的**：`--compare` 拿爬蟲已經解析過的同一批申報重建一次，兩邊用同一種方式計分。2026q2 的 6,001 份裡重建出 6,000 份，**分數完全相同 95.4%、差 2 分以內 96.7%、差 5 分以內 98.7%**。
+  一路上被這個比對抓到兩個真的 bug：外國發行人附的美元換算欄會蓋掉本國幣別（現在只留申報主要幣別），以及只按分部標、沒有合計列的公司會整列不見（現在該列沒有無維度數字時就保留它的維度欄位，讓 `rolledUp` 加得起來）。
+- 重建出來的一份約 5.3 KB，解析出來的約 10.3 KB。下載的 zip 放在 `data/dera/`（`STOCKSCAN_DERA` 可改），跑第二次直接重用；一季的 `num.txt` 解開有 600 MB，所以只讀這一輪要的那些列（`--batch` 控制一輪拿幾份，預設 2,500）。
 
 ### 路徑前綴（BASE_URL）
 
@@ -612,6 +637,8 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/store.js` | 存檔：`data/store/` 的財報 / 評分小檔（brotli JSON、檔名帶 cik / 期末 / 表別 / 版本，啟動時掃檔名建索引）、`data/cache.sqlite` 的 kv 快取、舊版 SQLite 的一次性搬移 |
 | `server/lib/prefetch.js` | 閒置時背景預抓相鄰申報 |
 | `server/lib/crawler.js` | 背景爬蟲：第一輪掃過所有有代號公司的最近 5 期申報（含修正版）、每 30 分鐘監看 EDGAR daily index、其餘時間由新往舊一天一天補舊財報 |
+| `server/lib/dera.js` | 從 SEC 季度資料集（Financial Statement Data Sets）重建一份申報的四大報表：2019 年以前沒有 Inline XBRL 可解的那些 |
+| `server/tools/ingest-dera.mjs` | 逐季下載資料集、挑出解析器讀不到的申報、重建後寫進 store（`--compare` 量它跟解析差多少） |
 | `server/lib/market.js` | TradingView 市場快照：全美股的股價、市值、估值倍數、成交量（每半小時） |
 | `server/lib/edgar.js` | ticker/CIK → 公司與申報清單、會計年度/季度判斷、`ix?doc=` 網址解析 |
 | `server/lib/ixbrl.js` | 解析 iXBRL：contexts、units、`ix:nonFraction` / `ix:nonNumeric`、ixt 數值與日期轉換 |

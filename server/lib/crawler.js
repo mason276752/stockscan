@@ -362,7 +362,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         const company = await getCompany(low, String(cik), { maxAge: BACKFILL_SUBMISSIONS_TTL });
         const got = [];
         for (const acc of accessions) {
-          const filing = company.filings.find((f) => f.accession === acc); // absent = not Inline XBRL, nothing to parse
+          const filing = company.filings.find((f) => f.accession === acc); // absent = not Inline XBRL and not saved, so nothing here can read it
           if (filing && (await saveLatest(company, filing))) got.push(filing);
         }
         if (!got.length) continue;

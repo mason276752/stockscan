@@ -55,6 +55,7 @@ export default {
   'note.previous': "A 10-Q's cash flow statement is year-to-date only: this quarter = year-to-date − the previous quarter's ({year} {period}) year-to-date, opening balance = previous quarter's ending; those columns are marked \"derived\".",
   'note.ytdOnly': '{title}: the filing has year-to-date columns only and no previous-quarter filing was found, showing year-to-date ({start} ~ {end}).',
   'note.compare': 'For comparative columns switch "Columns → all columns of the filing".',
+  'note.dera': "These numbers come from SEC's quarterly Financial Statement Data Sets, not from parsing the filing itself — before 2019 a filer tagged its numbers in a separate instance document, which this site's parser cannot read. The datasets carry every line of the four statements with the company's own label, the amounts and the signs, but no section headings and so no indentation, no cover-page share count (the valuation page needs one), and the statement titles here are supplied from the dataset's own classification. The SEC link above is the filing as filed.",
   'note.derived': 'Income statement / cash flow: Q1–Q3 from the 10-Qs (three-month column, or year-to-date columns subtracted), Q4 = 10-K full year − first three quarters. Per-share amounts are approximated by subtraction (marked ≈); items that cannot be subtracted (share counts …) are left blank for Q4. Balance sheet = each quarter end. No derivation for the statement of equity.',
   'stmt.balance_sheet': 'Balance sheet',
   'stmt.income_statement': 'Income statement',

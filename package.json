@@ -15,6 +15,7 @@
     "data:pull": "sh scripts/pull-data.sh",
     "data:push": "node server/tools/push-data.mjs",
     "fetch:new": "node server/tools/fetch-new.mjs",
+    "ingest:dera": "node server/tools/ingest-dera.mjs",
     "rescore": "node server/tools/rescore.mjs",
     "enrich:cover-shares": "node server/tools/enrich-cover-shares.mjs",
     "fetch:bars": "node server/tools/fetch-bars.mjs"
