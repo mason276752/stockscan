@@ -570,7 +570,16 @@ export const store = {
       rmdirQuiet(dir('filings', cik));
       rmdirQuiet(dir('scores', cik));
     }
-    return { companies: gone.size, filings: nf, scores: ns };
+    // the saved submissions of those companies go too - both shapes the
+    // directory holds: <cik>.json and CIK<cik>-submissions-NNN.json
+    let nd = 0;
+    for (const name of this.listDocs('companies')) {
+      const cik = Number(/(\d{6,10})/.exec(path.basename(name))?.[1]);
+      if (!cik || keep.has(cik)) continue;
+      unlinkQuiet(path.join(root, name));
+      nd++;
+    }
+    return { companies: gone.size, filings: nf, scores: ns, docs: nd };
   },
   size() {
     need();

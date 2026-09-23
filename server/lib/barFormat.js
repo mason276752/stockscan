@@ -15,17 +15,35 @@
 
 const DAY = 86_400_000;
 export const TOL = 0.005; // closes within half a percent are the same bar
-export const round = (x) => Math.round(x * 1e6) / 1e6;
+// Trim the float noise a split factor leaves behind (1.7670000000000002),
+// by significant digits rather than decimal places: rounding to six decimals
+// would turn a sub-cent quote into 0.
+export const round = (x) => Number(x.toPrecision(12));
 export const same = (a, b) => Math.abs(a / b - 1) <= TOL;
 export const yearOf = (bar) => bar.date.slice(0, 4);
 
-const decimals = (x) => {
-  const s = String(x);
-  const i = s.indexOf('.');
-  return i < 0 ? 0 : Math.min(6, s.length - i - 1);
+// How many decimals a price needs, read off its exponential form: a number
+// JavaScript prints as "4e-7" has no '.' in it at all, and taking that for
+// an integer is what used to store every sub-cent quote as 0.
+export const decimals = (x) => {
+  const [mantissa, exp] = Math.abs(x).toExponential().split('e');
+  return Math.max(0, (mantissa.split('.')[1] || '').length - Number(exp));
 };
+// Prices are integers of 10^-d, so d is what the smallest tick in the file
+// needs - enough decimals that no price rounds away. The count is taken
+// from the price trimmed to twelve significant digits, so a source's float
+// noise (0.30000000000000004) does not ask for seventeen decimals, and it
+// stops at MAX_DECIMALS whatever arrives. One file holds one year, whose
+// prices are of a like size; the delta coding is what limits a file that
+// mixes them, not `d`.
+const MAX_DECIMALS = 12;
+export function decimalsFor(days) {
+  let need = 0;
+  for (const b of days) for (const v of [b.open, b.high, b.low, b.close]) if (Number.isFinite(v)) need = Math.max(need, decimals(round(v)));
+  return Math.min(need, MAX_DECIMALS);
+}
 export function encodeBars(days) {
-  const d = Math.max(0, ...days.map((b) => Math.max(decimals(b.open), decimals(b.high), decimals(b.low), decimals(b.close))));
+  const d = decimalsFor(days);
   const m = 10 ** d;
   const I = (x) => Math.round(x * m);
   const t = [];
@@ -113,20 +131,29 @@ export function diffSeries(view, incoming, unsettled = null) {
   const changed = [];
   const unchanged = [];
   const dates = [];
+  let forming = null; // the bar that was still forming when it was saved
   for (const b of incoming) {
     const old = byDate.get(b.date);
     if (!old) continue;
+    const row = { date: b.date, ratio: b.close / old.close, volume: old.volume && b.volume ? b.volume / old.volume : null };
     if (b.date === unsettled) {
-      if (!same(b.close, old.close) || !same(b.volume || 1, old.volume || 1)) dates.push(b.date);
+      if (!same(b.close, old.close) || !same(b.volume || 1, old.volume || 1)) forming = row;
       continue;
     }
-    (same(b.close, old.close) ? unchanged : changed).push({ date: b.date, ratio: b.close / old.close, volume: old.volume && b.volume ? b.volume / old.volume : null });
+    (same(b.close, old.close) ? unchanged : changed).push(row);
   }
-  if (!changed.length) return { split: null, dates };
-  const firstUnchanged = unchanged[0];
-  const prefix = unchanged.every((u) => u.date > changed.at(-1).date); // every bar before some date changed, none after
+  if (!changed.length) return { split: null, dates: forming ? [forming.date] : dates };
   const ratio = changed[Math.floor(changed.length / 2)].ratio;
   const oneFactor = changed.every((c) => same(c.ratio, ratio));
+  // A bar still forming when it was saved may differ for its own reasons, so
+  // it is never evidence of a split - but when it moved by the same factor as
+  // everything before it, it is on the old basis too and the new one starts
+  // after it. Leaving it out of the shift is what used to date a split a day
+  // early and leave that one bar reading as the whole factor out of line.
+  const shifted = forming && same(forming.ratio, ratio) ? [...changed, forming] : changed;
+  if (forming && shifted.length === changed.length) dates.push(forming.date);
+  const firstUnchanged = unchanged[0];
+  const prefix = unchanged.every((u) => u.date > shifted.at(-1).date); // every bar before some date changed, none after
   if (prefix && oneFactor && !same(ratio, 1) && changed.length >= 2) {
     // a split scales volume by the inverse of the price factor: recorded as
     // null (1 / price, computed exactly when applied) unless the source's
@@ -134,8 +161,8 @@ export function diffSeries(view, incoming, unsettled = null) {
     const volumes = changed.map((c) => c.volume).filter((x) => x);
     const vm = volumes.length ? volumes[Math.floor(volumes.length / 2)] : 1 / ratio;
     const volume = Math.abs(vm * ratio - 1) < 0.01 ? null : round(vm);
-    // the first bar of the new basis: the first unchanged one, else the day after the last changed one
-    const date = firstUnchanged?.date || new Date(Date.parse(changed.at(-1).date) + DAY).toISOString().slice(0, 10);
+    // the first bar of the new basis: the first unchanged one, else the day after the last shifted one
+    const date = firstUnchanged?.date || new Date(Date.parse(shifted.at(-1).date) + DAY).toISOString().slice(0, 10);
     return { split: { date, price: round(ratio), volume }, dates };
   }
   return { split: null, dates: [...dates, ...changed.map((c) => c.date)] };
@@ -161,6 +188,6 @@ export function mergeDays(saved, fresh, unsettled = null) {
     checked++;
     if (!same(f.close, d.close)) return null;
   }
-  if (!checked && saved.at(-1).date !== unsettled) return null;
+  if (!checked) return null; // the only shared bar was the one still forming: nothing was verified
   return [...saved.filter((d) => d.date < first), ...fresh];
 }

@@ -97,16 +97,22 @@ const SOURCE_NAME = { tv: 'TradingView', ib: 'IBKR', yahoo: 'Yahoo Finance' };
 const CACHE_KEY = { tv: 'tv2', ib: 'ib', yahoo: 'yahoo' }; // directory per source under data/bars (tv2: before the US-listing check the series could be another country's)
 const OVERLAP = 7; // calendar days re-fetched behind the last saved bar, to check the history still lines up
 
+// A bar is only usable when all four prices are real and above zero: a
+// source that prints a halted day as 0, or an empty quote as null, would
+// otherwise divide an index by it. Dropping the day leaves a hole the
+// series carries the previous close over, which is what a halt is.
+const usable = (b) => b.open > 0 && b.high > 0 && b.low > 0 && b.close > 0 && Number.isFinite(b.open + b.high + b.low + b.close);
+
 // the whole series, or (since = 'yyyy-mm-dd') only the bars from that day on
 async function fetchFrom(source, symbol, since = null) {
   const calendarDays = since ? Math.ceil((Date.now() - Date.parse(since)) / 86_400_000) + 2 : null;
   if (source === 'tv') {
     const r = await tvDailyBars(symbol, since ? { bars: calendarDays } : {});
-    return { symbol, source: 'TradingView', currency: r.currency || 'USD', resolved: r.resolved, days: since ? r.days.filter((d) => d.date >= since) : r.days };
+    return { symbol, source: 'TradingView', currency: r.currency || 'USD', resolved: r.resolved, days: r.days.filter((d) => usable(d) && (!since || d.date >= since)) };
   }
-  if (source === 'ib') return { symbol, source: 'IBKR', currency: 'USD', days: await ibDailyBars(symbol, since ? { days: calendarDays } : { years: YEARS }) };
+  if (source === 'ib') return { symbol, source: 'IBKR', currency: 'USD', days: (await ibDailyBars(symbol, since ? { days: calendarDays } : { years: YEARS })).filter(usable) };
   const { days, currency } = await yahooDailyBars(symbol, since);
-  return { symbol, source: 'Yahoo Finance', currency, days };
+  return { symbol, source: 'Yahoo Finance', currency, days: days.filter(usable) };
 }
 
 // bring a saved series up to date: fetch the tail (with overlap) and splice

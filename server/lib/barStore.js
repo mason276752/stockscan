@@ -23,7 +23,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { store } from './store.js';
-import { adjusted, decodeBars, diffSeries, encodeBars, settledAt, unadjust, yearOf } from './barFormat.js';
+import { adjusted, decodeBars, diffSeries, encodeBars, same, settledAt, unadjust, yearOf } from './barFormat.js';
 
 export { mergeDays, settledAt } from './barFormat.js';
 
@@ -99,14 +99,18 @@ function load(src, symbol) {
   meta.adjust ||= [];
   return { meta, years, head, fetchedAt, view: null };
 }
+// every bar the record holds, oldest first, as the files have them
+function rawBars(rec) {
+  const raw = [];
+  for (const year of [...rec.years.keys()].sort()) raw.push(...rec.years.get(year));
+  raw.push(...rec.head);
+  return raw;
+}
 // the record as a series in the source's current basis (what callers see)
 function view(rec) {
   if (!rec.view) {
-    const raw = [];
-    for (const year of [...rec.years.keys()].sort()) raw.push(...rec.years.get(year));
-    raw.push(...rec.head);
     const { fetchedAt: _old, years: _years, ...meta } = rec.meta;
-    rec.view = { ...meta, fetchedAt: rec.fetchedAt, days: adjusted(raw, rec.meta.adjust) };
+    rec.view = { ...meta, fetchedAt: rec.fetchedAt, days: adjusted(rawBars(rec), rec.meta.adjust) };
   }
   return rec.view;
 }
@@ -251,6 +255,44 @@ function groupByYear(days) {
   return out;
 }
 
+// Put `rows` - bars in the source's current basis - into one year of a
+// record, keeping whatever else that year already holds (the incoming bar
+// wins) and storing them raw. A finished year is marked dirty: its file has
+// to be rewritten, which is what the split record exists to avoid.
+function rewriteYear(rec, year, rows, current, dirtyYears) {
+  const inHead = year >= current;
+  const merged = new Map((inHead ? rec.head.filter((b) => yearOf(b) === year) : rec.years.get(year) || []).map((b) => [b.date, b]));
+  for (const b of rows) merged.set(b.date, unadjust(b, rec.meta.adjust));
+  const out = [...merged.values()].sort(byDate);
+  if (inHead) rec.head = [...rec.head.filter((b) => yearOf(b) !== year), ...out].sort(byDate);
+  else {
+    rec.years.set(year, out);
+    dirtyYears.add(year);
+  }
+  rec.view = null;
+}
+
+// The bars the record would now hand back differently from the source.
+const offBy = (rec, incoming) => {
+  const saved = new Map(view(rec).days.map((b) => [b.date, b]));
+  return incoming.filter((b) => saved.has(b.date) && !same(saved.get(b.date).close, b.close));
+};
+
+// bytes of a file or of everything under a directory
+function du(f) {
+  const st = fs.statSync(f);
+  if (!st.isDirectory()) return st.size;
+  let bytes = 0;
+  for (const e of fs.readdirSync(f)) {
+    try {
+      bytes += du(path.join(f, e));
+    } catch {
+      /* gone */
+    }
+  }
+  return bytes;
+}
+
 export const barStore = {
   get file() {
     return root;
@@ -309,31 +351,73 @@ export const barStore = {
       const { split, dates } = diffSeries(view(prev).days, incoming, isUnsettled(prev));
       if (split) {
         rec.meta.adjust = [...rec.meta.adjust, split];
+        rec.view = null; // the decoded series is now a factor out of date
         console.log(`bars ${symbol}: ${split.date} 之前的價格 ×${split.price}（分割），歷史檔不改，記在 meta`);
       }
       for (const d of dates) dirty.add(d.slice(0, 4));
     }
     const have = new Set(prev ? view(prev).days.map((b) => b.date) : []);
     for (const b of incoming) if (!have.has(b.date)) dirty.add(yearOf(b));
+    // Whatever the factors worked out to, a reader has to see the source's
+    // own series: a shared date the saved bars still disagree with is
+    // rewritten from the incoming one. A split that reconciles every bar
+    // adds nothing here - this is what stops a single bar left behind on the
+    // old basis from standing in the chart as a 25x spike nobody can explain.
+    if (prev) {
+      const nowSaved = new Map(adjusted(rawBars(rec), rec.meta.adjust).map((b) => [b.date, b]));
+      for (const b of incoming) {
+        const was = nowSaved.get(b.date);
+        if (was && !same(was.close, b.close)) dirty.add(yearOf(b));
+      }
+    }
     // a dirty year is rebuilt from the saved bars plus the incoming ones (incoming wins), stored raw
     const current = thisYear();
     const grouped = groupByYear(incoming);
     const dirtyYears = new Set();
-    for (const year of dirty) {
-      const inHead = year >= current;
-      const merged = new Map((inHead ? rec.head.filter((b) => yearOf(b) === year) : rec.years.get(year) || []).map((b) => [b.date, b]));
-      for (const b of grouped.get(year) || []) merged.set(b.date, unadjust(b, rec.meta.adjust));
-      const rows = [...merged.values()].sort(byDate);
-      if (inHead) rec.head = [...rec.head.filter((b) => yearOf(b) !== year), ...rows].sort(byDate);
-      else {
-        rec.years.set(year, rows);
-        dirtyYears.add(year);
-      }
+    for (const year of dirty) rewriteYear(rec, year, grouped.get(year) || [], current, dirtyYears);
+    // A split is one line of meta and the bars before its date are multiplied
+    // on the way out - right only while that reproduces what the source
+    // sends. Whatever it does not is written out as its own raw bar: a bar
+    // saved mid-session on the old basis lands on the wrong side of the
+    // date the factor starts, and then reads back 25x too low for ever.
+    // It is one bar, not a rewrite of the history.
+    const off = offBy(rec, incoming);
+    if (off.length) {
+      for (const [year, rows] of groupByYear(off)) rewriteYear(rec, year, rows, current, dirtyYears);
+      console.log(`bars ${symbol}: ${off.length} 根跟來源對不上（分割調整的交界），那幾根直接改寫`);
     }
     rec.fetchedAt = fetchedAt || new Date().toISOString();
     save(src, symbol, rec, dirtyYears);
     if (keep || lru.has(key)) remember(key, rec);
     return record ? rec : view(rec);
+  },
+  // Series of symbols the ticker table no longer carries - delisted, or
+  // moved to the OTC market - go from disk (the caller names the benchmark
+  // ETFs, which are in no ticker table). A short list is a truncated
+  // download, not an empty market: it purges nothing.
+  purgeExcept(symbols) {
+    if (!root) return null;
+    const keep = new Set((symbols || []).filter(Boolean).map((x) => safe(x)));
+    if (keep.size < 100) return null;
+    let n = 0;
+    let bytes = 0;
+    for (const src of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!src.isDirectory()) continue;
+      for (const e of fs.readdirSync(path.join(root, src.name), { withFileTypes: true })) {
+        const symbol = e.isDirectory() ? e.name : e.name.replace(/\.json\.br$/, '');
+        if (keep.has(safe(symbol))) continue;
+        const f = path.join(root, src.name, e.name);
+        try {
+          bytes += du(f);
+          fs.rmSync(f, { recursive: true, force: true });
+          n++;
+        } catch {
+          /* gone */
+        }
+        lru.delete(`${src.name}:${String(symbol).toUpperCase()}`);
+      }
+    }
+    return { symbols: n, bytes };
   },
   stats() {
     let files = 0;

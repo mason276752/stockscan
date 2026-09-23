@@ -1,11 +1,13 @@
 // Company lookup and filing lists from EDGAR's JSON APIs.
 
 import { store } from './store.js';
+import { barStore } from './barStore.js';
+import { POPULAR_ETFS } from './etf.js';
 import { DEFAULT_FORMS, filingUrls, fiscalLabel, pickFiling } from './filings.js';
 
 export { DEFAULT_FORMS, filingUrls, fiscalLabel, pickFiling };
 
-const TICKERS_URL = 'https://www.sec.gov/files/company_tickers.json';
+const TICKERS_URL = 'https://www.sec.gov/files/company_tickers_exchange.json';
 const SUBMISSIONS = 'https://data.sec.gov/submissions/';
 
 
@@ -20,9 +22,38 @@ const SUBMISSIONS_TTL = 10 * 60 * 1000; // filing lists refresh every 10 minutes
 let tickersMemo = null;
 const TICKERS_DOC = 'tickers.json';
 
+// Only what trades on a real exchange is covered here. EDGAR names the
+// venue in company_tickers_exchange.json, and everything quoted over the
+// counter is left out: an OTC quote is not a price anyone could have
+// traded on - the tick below a cent is a 100% move, sub-penny shells print
+// quotes that never clear - so a chart built from them shows quote noise,
+// not a return. (Of the saved series, one OTC name in four had a one-day
+// step of 4x that came straight back the next day; on NYSE it was one in
+// two hundred.) A blank venue is EDGAR not having filled it in yet - a
+// fresh IPO, a SPAC - so the company's own submissions record decides, and
+// silence there keeps the company.
+const MAJOR_EXCHANGE = /^(nasdaq|nyse|amex|cboe|bats|iex|arca)/i;
+export const isMajorExchange = (x) => MAJOR_EXCHANGE.test(String(x || '').trim());
+// `venuesOf(cik)` answers for a row EDGAR left blank: the exchanges of the
+// company's own submissions record, or nothing when there is none.
+export const onMajorExchange = (row, venuesOf) => {
+  if (row.exchange) return isMajorExchange(row.exchange);
+  const venues = (venuesOf(row.cik) || []).filter(Boolean);
+  return !venues.length || venues.some(isMajorExchange);
+};
+const savedVenues = (cik) => store.getDoc(`companies/${String(cik).padStart(10, '0')}.json`)?.value?.exchanges;
+
+// company_tickers_exchange.json is { fields: [...], data: [[...], ...] }.
+export const tickerRows = (data) => {
+  const col = Object.fromEntries((data.fields || []).map((f, i) => [f, i]));
+  return (data.data || []).map((r) => ({ cik: Number(r[col.cik]), ticker: r[col.ticker], name: r[col.name], exchange: r[col.exchange] || null })).filter((r) => r.cik && r.ticker);
+};
+
 export async function refreshTickers(client) {
-  const data = await client.json(TICKERS_URL);
-  const rows = Object.values(data).map((r) => ({ cik: Number(r.cik_str), ticker: r.ticker, name: r.title }));
+  const all = tickerRows(await client.json(TICKERS_URL));
+  const rows = all.filter((r) => onMajorExchange(r, savedVenues));
+  const off = all.length - rows.length;
+  if (off) console.log(`ticker table: ${off} 檔非主要交易所（OTC）的代號不納入`);
   store.putKV('tickers', rows);
   store.putDoc(TICKERS_DOC, { updatedAt: new Date().toISOString(), tickers: rows });
   tickersMemo = rows;
@@ -41,15 +72,20 @@ export function savedTickers() {
   return { value: rows, ageMs: Date.now() - at };
 }
 
-// Delisted filers (no ticker on EDGAR any more) are nothing the user can buy:
-// throw their saved filings and scores away. Only after a fresh, plausible
-// ticker table - a truncated download must not empty the store.
+// Companies the table no longer carries - delisted, or moved to the OTC
+// market - are nothing this site covers any more: throw their saved
+// filings, scores, company records and daily bars away. Only after a fresh,
+// plausible ticker table - a truncated download must not empty the store.
 const MIN_TICKERS = 5000;
 export function purgeDelisted(rows) {
   if (!Array.isArray(rows) || rows.length < MIN_TICKERS) return null;
   const r = store.purgeExcept(rows.map((t) => t.cik));
-  if (r.companies) console.log(`store: 移除 ${r.companies} 家已下市公司的 ${r.filings} 份財報（EDGAR 代號表已無此公司）`);
-  return r;
+  if (r.companies) console.log(`store: 移除 ${r.companies} 家已下市或轉上櫃（OTC）公司的 ${r.filings} 份財報`);
+  // the bars are keyed by ticker, not CIK; the benchmark ETFs are not
+  // companies and file nothing, so they are named here to be kept
+  const bars = barStore.purgeExcept([...rows.map((t) => t.ticker), ...POPULAR_ETFS]);
+  if (bars?.symbols) console.log(`bars: 移除 ${bars.symbols} 檔已不在代號表的日線`);
+  return { ...r, bars: bars?.symbols || 0 };
 }
 
 // Listing status of a ticker from the saved table (no network): listed, or
