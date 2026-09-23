@@ -146,8 +146,10 @@ const build = (over = {}) =>
 
 test('a filing comes out in the shape the store saves and the app reads', () => {
   const r = build();
-  assert.equal(r.source, 'dera');
-  assert.equal(r.dataset, '2022q1');
+  // in the header, so store.filingHeader can spot a stand-in without
+  // unpacking the statements (scrape.js isStandIn)
+  assert.equal(r.filing.source, 'dera');
+  assert.equal(r.filing.dataset, '2022q1');
   // the header is EDGAR's, not the dataset's
   assert.equal(r.filing.periodEnd, '2021-12-28');
   assert.equal(r.filing.form, '10-K');

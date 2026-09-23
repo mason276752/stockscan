@@ -26,7 +26,7 @@
 import { store } from './store.js';
 import { getCompany, tickerTable, DEFAULT_FORMS } from './edgar.js';
 import { filingPeriodKey } from './filings.js';
-import { ensureStored } from './scrape.js';
+import { ensureStored, upgradable } from './scrape.js';
 import { getUniverse } from './universe.js';
 import { scoreAccession } from './score.js';
 
@@ -158,7 +158,10 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   }
 
   async function saveLatest(company, filing) {
-    if (!filing || store.hasFiling(filing.accession)) return false;
+    // a filing rebuilt from the quarterly datasets is a stand-in: it stays
+    // only until something can parse the document itself (scrape.js)
+    const upgrade = filing && store.hasFiling(filing.accession) && upgradable(filing);
+    if (!filing || (store.hasFiling(filing.accession) && !upgrade)) return false;
     if ((fails[filing.accession] || 0) >= MAX_FAILS) return false;
     const label = `${company.tickers?.[0] || company.cik} ${filing.form} ${filing.fiscalYear} ${filing.fiscalPeriod}`;
     inFlight.add(label);
@@ -166,6 +169,8 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     try {
       await ensureStored(low, filing, company);
       state.saved++;
+      // the score was computed from the stand-in: it is out of date now
+      if (upgrade) await scoreAccession(filing.accession, { force: true }).catch(() => {});
       return true;
     } catch (err) {
       state.failed++;

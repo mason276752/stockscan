@@ -6,6 +6,9 @@
 //   npm run ingest:dera -- --quarter 2012q1  # just that one
 //   npm run ingest:dera -- --cik 320193      # one company, for checking
 //   npm run ingest:dera -- --dry-run         # count what would be saved
+//   npm run ingest:dera -- --rebuild         # redo the ones already rebuilt
+//                                            # (after a change to dera.js);
+//                                            # a real parse is never touched
 //   npm run ingest:dera -- --compare         # rebuild filings the store
 //                                            # already parsed and diff the
 //                                            # scores, to see what is lost
@@ -38,7 +41,7 @@ import { openStore, store, requireVersion } from '../lib/store.js';
 import { SecClient } from '../lib/secClient.js';
 import { getCompany, refreshTickers, savedTickers } from '../lib/edgar.js';
 import { readZipEntry, zipEntryStream } from '../lib/remoteZip.js';
-import { SCRAPE_VERSION } from '../lib/scrape.js';
+import { SCRAPE_VERSION, isStandIn } from '../lib/scrape.js';
 import { DERA_FORMS, dateSnapper, deraResult } from '../lib/dera.js';
 import { scoreFiling } from '../lib/scoreModel.js';
 import { reclassify } from '../lib/statementTypes.js';
@@ -59,6 +62,7 @@ const opt = (name, dflt = null) => {
 const DRY = args.includes('--dry-run');
 const COMPARE = args.includes('--compare');
 const INCLUDE_INLINE = args.includes('--include-inline');
+const REBUILD = args.includes('--rebuild'); // redo the ones already rebuilt, after a change to dera.js
 const KEEP = !args.includes('--discard-zips');
 const ONLY_CIK = opt('--cik') ? Number(opt('--cik')) : null;
 const LIMIT = Number(opt('--limit')) || 0;
@@ -371,7 +375,11 @@ async function ingestQuarter(client, quarter, tickerCiks, totals) {
     saved: 0,
     noCompany: 0,
   };
-  const pending = subs.filter((s) => store.hasFiling(s.adsh) === COMPARE);
+  const pending = subs.filter((s) => {
+    if (COMPARE) return store.hasFiling(s.adsh);
+    if (!store.hasFiling(s.adsh)) return true;
+    return REBUILD && isStandIn(s.adsh); // --rebuild: a stand-in is redone, a real parse never is
+  });
   stats.haveIt = COMPARE ? 0 : subs.length - pending.length;
   if (!pending.length) {
     log(`${quarter}: nothing to do (all ${n(subs.length)} ${COMPARE ? 'unsaved' : 'already saved'})`);

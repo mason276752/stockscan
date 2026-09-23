@@ -334,11 +334,14 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
 
   return {
     fetchedAt,
-    // where these numbers came from, so the filing page can say so and a
-    // later pass can tell them from a real parse
-    source: 'dera',
-    dataset,
     filing: {
+      // where these numbers came from. It sits in the header because that is
+      // the part the store can read back without unpacking the statements
+      // (store.filingHeader), and the crawler asks the question of every
+      // filing it walks past: a rebuild is a stand-in, to be replaced the
+      // moment something can parse the document itself.
+      source: 'dera',
+      dataset,
       cik: filing.cik,
       companyName: sub.name || null,
       form: filing.form,

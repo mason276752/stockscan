@@ -67,6 +67,14 @@ const durableKV = (key) => DURABLE_KV.some((p) => (p.endsWith(':') ? key.startsW
 const durableFile = (key) => `kv/${key.replace(/[^A-Za-z0-9:_.-]/g, '_').replace(/:/g, '/')}.json`;
 const filings = new Map(); // accession -> { cik, form, reportDate, version, file, bytes }
 const scores = new Map(); // accession -> { cik, reportDate, version, file }
+// cik -> its filings, built the first time one is asked for and thrown away
+// whenever `filings` changes. Scoring asks per company and the store is
+// heading for six figures, so the scan it replaces is the whole of a
+// rescore's time (store.filingIndex).
+let byCik = null;
+const forgetByCik = () => {
+  byCik = null;
+};
 let docs = {}; // concept -> SEC documentation (standard concepts)
 let docsDirty = false;
 let docsTimer = null;
@@ -105,6 +113,7 @@ const rmdirQuiet = (d) => {
 // scan the tree once: file names carry everything the indexes need
 function scan(kind, re, into, make) {
   into.clear();
+  forgetByCik();
   const base = path.join(root, kind);
   if (!fs.existsSync(base)) return;
   for (const cikDir of fs.readdirSync(base, { withFileTypes: true })) {
@@ -324,6 +333,7 @@ export function requireVersion(version) {
     unlinkQuiet(f.file);
     rmdirQuiet(path.dirname(f.file));
     filings.delete(acc);
+    forgetByCik();
     n++;
   }
   if (n) console.log(`store: dropped ${n} filings parsed by an older version`);
@@ -353,6 +363,7 @@ export const store = {
       console.warn(`store: ${path.basename(f.file)} unreadable (${err.message}), dropped`);
       unlinkQuiet(f.file);
       filings.delete(accession);
+      forgetByCik();
       return null;
     }
   },
@@ -381,6 +392,7 @@ export const store = {
     const prev = filings.get(accession);
     if (prev && prev.file !== file) unlinkQuiet(prev.file);
     filings.set(accession, { accession, cik: Number(cik), form, reportDate, version, file, bytes: buf.length });
+    forgetByCik();
   },
   filingCount(cik = null) {
     need();
@@ -402,9 +414,15 @@ export const store = {
   // accession -> report_date of every saved filing of a company (cheap: no file reads)
   filingIndex(cik) {
     need();
-    const out = [];
-    for (const f of filings.values()) if (f.cik === Number(cik)) out.push({ accession: f.accession, form: f.form, report_date: f.reportDate });
-    return out;
+    if (!byCik) {
+      byCik = new Map();
+      for (const f of filings.values()) {
+        const list = byCik.get(f.cik);
+        if (list) list.push(f);
+        else byCik.set(f.cik, [f]);
+      }
+    }
+    return (byCik.get(Number(cik)) || []).map((f) => ({ accession: f.accession, form: f.form, report_date: f.reportDate }));
   },
 
   // small plain-JSON documents in the store (companies/<cik>.json …): git-
@@ -537,6 +555,7 @@ export const store = {
       if (keep.has(f.cik)) continue;
       unlinkQuiet(f.file);
       filings.delete(acc);
+      forgetByCik();
       gone.add(f.cik);
       nf++;
     }

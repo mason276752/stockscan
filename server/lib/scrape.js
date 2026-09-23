@@ -58,10 +58,18 @@ export function scrapeFiling(client, filing, company = null) {
   return promise;
 }
 
+// A filing rebuilt from SEC's quarterly datasets (server/lib/dera.js) stands
+// in for one this cannot parse: it has the numbers, but not the headings,
+// the indent hierarchy or the cover page. It is not the final word - the
+// moment something can parse the document itself, the parse replaces it.
+// EDGAR's isInlineXBRL flag is what says so.
+export const isStandIn = (accession) => store.filingHeader(accession)?.source === 'dera';
+export const upgradable = (filing) => !!filing?.isInlineXBRL && isStandIn(filing.accession);
+
 // For the background crawler: parse and save a filing without pinning the
 // result in the in-memory cache. Returns true when something was downloaded.
 export async function ensureStored(client, filing, company) {
-  if (store.hasFiling(filing.accession)) return false;
+  if (store.hasFiling(filing.accession) && !upgradable(filing)) return false;
   const result = await scrapeUncached(client, filing, company);
   store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
   return true;
@@ -69,11 +77,22 @@ export async function ensureStored(client, filing, company) {
 
 async function loadOrScrape(client, filing, company) {
   const saved = store.getFiling(filing.accession);
+  // a stand-in and the document is Inline XBRL: whoever opened this page gets
+  // the real parse, and the store keeps it. The stand-in still answers if the
+  // parse fails - it is what the page would have shown anyway.
+  const standIn = saved?.filing?.source === 'dera' && !!filing.isInlineXBRL;
   // a saved result with no statements, or statements without a single column
   // (the financial statements were in a second Inline XBRL file), came from
   // a parser gap: parse it again
-  if (saved && saved.stats?.statementRoles > 0 && !emptyStatements(saved)) return applyZh(reclassify(saved));
-  const result = await scrapeUncached(client, filing, company);
+  if (saved && !standIn && saved.stats?.statementRoles > 0 && !emptyStatements(saved)) return applyZh(reclassify(saved));
+  let result;
+  try {
+    result = await scrapeUncached(client, filing, company);
+  } catch (err) {
+    if (!standIn) throw err;
+    console.warn(`scrape ${filing.accession}: ${err.message} - keeping the rebuilt copy`);
+    return applyZh(reclassify(saved));
+  }
   store.putFiling(filing.accession, filing.cik, result, SCRAPE_VERSION);
   return result;
 }

@@ -54,9 +54,11 @@ async function computeScore(accession, header) {
 // saved of a company) is cached like any other - the screener still wants
 // it as the year-earlier comparison - and recomputed when the crawler asks
 // (`redoPartial`) after saving more of the company's filings.
-export async function scoreAccession(accession, { redoPartial = false } = {}) {
+export async function scoreAccession(accession, { redoPartial = false, force = false } = {}) {
   const hit = store.getScore(accession, SCORE_VERSION);
-  if (hit && !(redoPartial && hit.basis?.partial)) return hit;
+  // `force`: the filing itself changed under it (a stand-in rebuilt from the
+  // quarterly datasets replaced by the parse of the document, scrape.js)
+  if (hit && !force && !(redoPartial && hit.basis?.partial)) return hit;
   const h = store.filingHeader(accession);
   if (!h) return null;
   const s = await computeScore(accession, h);
