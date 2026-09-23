@@ -356,20 +356,28 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
       }
       ptr++;
     }
-    const now = [];
-    for (let i = 0; i < rows.length; i++) {
-      if (!held[i] || at[i][k] < 0) continue;
-      // priced too low to be worth a trade: held by the rules, not bought
-      if (minPrice && px(i, k, 'open') < minPrice) {
-        per[i].cheap++;
-        continue;
+    // What the filters would hold, of what can actually be bought - worked
+    // out only on a day the portfolio could be traded on. On a fixed
+    // schedule that is once a month rather than once a session; 'filing'
+    // has to look every day, because a difference is what it trades on.
+    const trading = !on || !!on[k];
+    let now = null;
+    if (trading) {
+      now = [];
+      for (let i = 0; i < rows.length; i++) {
+        if (!held[i] || at[i][k] < 0) continue;
+        // priced too low to be worth a trade: held by the rules, not bought
+        if (minPrice && px(i, k, 'open') < minPrice) {
+          per[i].cheap++;
+          continue;
+        }
+        now.push(i);
       }
-      now.push(i);
     }
     // A holding whose prices have stopped goes whatever day of the month it
     // is - it cannot be held once nothing trades.
-    const stopped = on && !on[k] ? active.filter((i) => at[i][k] < 0) : [];
-    const rebalancing = on ? !!on[k] : now.length !== active.length || now.some((x, j) => x !== active[j]);
+    const stopped = trading ? [] : active.filter((i) => at[i][k] < 0);
+    const rebalancing = trading && (!!on || now.length !== active.length || now.some((x, j) => x !== active[j]));
     if (rebalancing) {
       // sell everything at this open, then buy the new list at its weights
       const V = valueAt(k);
@@ -458,7 +466,7 @@ export function ruleSeries(members, events, { base = 100, minPrice = MIN_PRICE, 
     last: per[i].last,
     return: per[i].days ? per[i].ret - 1 : null,
     in: !!held[i],
-    cheap: per[i].cheap, // sessions the rules held it but its price was under the floor
+    cheap: per[i].cheap, // rebalances the rules held it at but its price was under the floor
     wild: per[i].wild, // an implausible one-day step while held (an unadjusted split?)
     delisted: gone[i],
   }));

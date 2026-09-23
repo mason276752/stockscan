@@ -189,7 +189,8 @@ test('a share too cheap to trade is held by the rules but never bought', () => {
   assert.equal(r.counts[0].n, 1);
   const c = r.constituents.find((x) => x.symbol === 'C');
   assert.equal(c.days, 0);
-  assert.equal(c.cheap, 4, 'and the days it sat out are counted');
+  assert.equal(c.cheap, 1, 'and the rebalances it sat out are counted - January is one of them');
+  assert.equal(ruleSeries([A, shell], [ev('2020-01-01', ['A', 'C'])], { rebalance: 'filing' }).constituents.find((x) => x.symbol === 'C').cheap, 4, 'trading on every filing looks every session');
   assert.equal(r.notes.find((n) => n.code === 'ruleCheap')?.n, 1);
   // with the floor off it is bought, and one tick is +4,950% on the index
   const raw = ruleSeries([A, shell], [ev('2020-01-01', ['A', 'C'])], { minPrice: 0 });
