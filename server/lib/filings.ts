@@ -85,8 +85,17 @@ export interface AmendableFiling {
 //
 // Each period keeps the place its newest filing had, so a list that came in
 // newest-first stays newest-first.
-export const filingPeriodKey = (f: AmendableFiling): string =>
-  `${String(f.form || '').toUpperCase().replace(/\/A$/, '')}@${f.periodEnd || f.reportDate || ''}`;
+// Remembered per filing: a rule ETF replays a company's whole filing list
+// once per filing date it has (pickAsOf), so the same filing is keyed
+// dozens of times over - tens of millions of string operations across a
+// replay. The key is a function of `form` and the period alone and nothing
+// rewrites those on a filing once it is built.
+const periodKeys = new WeakMap<AmendableFiling, string>();
+export function filingPeriodKey(f: AmendableFiling): string {
+  let key = periodKeys.get(f);
+  if (key === undefined) periodKeys.set(f, (key = `${String(f.form || '').toUpperCase().replace(/\/A$/, '')}@${f.periodEnd || f.reportDate || ''}`));
+  return key;
+}
 
 export function collapseAmendments<T extends AmendableFiling>(filings: readonly (T | null | undefined)[], thin: ((f: T) => boolean) | null = null): T[] {
   const periodOf = filingPeriodKey;

@@ -29,7 +29,7 @@ const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 import type { Universe } from '../lib/universe.ts';
 import type { MarketSnapshot } from '../lib/market.ts';
 import type { TickerRow } from '../lib/edgar.ts';
-import type { Company, FilingHeader, IsoDate, Score } from '../lib/types.ts';
+import type { AsOfRef, Company, FilingHeader, IsoDate, Score } from '../lib/types.ts';
 import type { Etf } from '../lib/etf.ts';
 
 /** index/etfs.json: the ETF list plus which holdings files were written. */
@@ -95,8 +95,8 @@ execFileSync('npx', ['vite', 'build', '--outDir', OUT, '--emptyOutDir'], { cwd: 
 const { openStore, store } = await import('../lib/store.ts');
 openStore();
 const { SCRAPE_VERSION } = await import('../lib/scrape.ts');
-const { SCORE_VERSION, latestScores } = await import('../lib/score.ts');
-const { filerCounts, asOfShardOf, screenAsOfColumns, screenColumns, screenRows, scoreBadge, sicCounts } = await import('../lib/screen.ts');
+const { SCORE_VERSION, asOfIndex, latestScores } = await import('../lib/score.ts');
+const { filerCounts, asOfShardOf, asOfSubset, screenColumns, screenRows, scoreBadge, sicCounts } = await import('../lib/screen.ts');
 const { fiscalLabel, filingFile, scoreFile, DEFAULT_FORMS } = await import('../lib/filings.ts');
 const { PAGES_LIMIT_MB, publishBudget, publishMb } = await import('../lib/publish.ts');
 const { lookupFiler, sicInfo } = await import('../lib/universe.ts');
@@ -369,22 +369,22 @@ write('screen-history.json', screenCols.history);
 // against the 1 GB the site may take.
 const ASOF_YEARS = Math.max(1, Number(process.env.STOCKSCAN_ASOF_YEARS) || 20);
 const screened = new Set(screenerRows.map((r) => r.cik));
-const asOfByYear = new Map();
-for (const r of store.scoreIndex(SCORE_VERSION)) {
-  if (!screened.has(r.cik)) continue;
-  const s = store.scoreJson(r.accession);
-  const year = s && asOfShardOf(s);
-  if (!year) continue;
-  // every score of every year is held at once here, and `items` (the
-  // seventeen benchmark rows, with their names and thresholds) is most of a
-  // score's bytes and none of it travels in a shard - so it goes now rather
-  // than sitting in memory a hundred thousand times over
-  const { items, ...row } = s;
-  (asOfByYear.get(year) || asOfByYear.set(year, []).get(year)).push(row);
+// The scores themselves are not read here: latestScores above has already
+// put every one of them into the as-of index as columns (score.ts), so a
+// year file is a slice of that rather than another walk of the store's
+// ~200,000 score files.
+const index = asOfIndex();
+const asOfByYear = new Map<number, AsOfRef[]>();
+for (const [cik, filings] of index.byCik) {
+  if (!screened.has(cik)) continue;
+  for (const r of filings) {
+    const year = asOfShardOf(r);
+    if (year) (asOfByYear.get(year) || asOfByYear.set(year, []).get(year)!).push(r);
+  }
 }
 const asOfYears = [...asOfByYear.keys()].sort((a, b) => b - a).slice(0, ASOF_YEARS);
-for (const year of asOfYears) write(`screen-asof-${year}.json`, screenAsOfColumns(asOfByYear.get(year)));
-console.log(`build-static: screener as-of years ${asOfYears.at(-1)}–${asOfYears[0]} (${asOfYears.map((y) => `${y}: ${asOfByYear.get(y).length}`).join(', ')} filings)`);
+for (const year of asOfYears) write(`screen-asof-${year}.json`, asOfSubset(index, asOfByYear.get(year)!));
+console.log(`build-static: screener as-of years ${asOfYears.at(-1)}–${asOfYears[0]} (${asOfYears.map((y) => `${y}: ${asOfByYear.get(y)!.length}`).join(', ')} filings)`);
 write('universe.json', { updatedAt: universe.updatedAt, datasets: universe.datasets, companies: universe.companies });
 // the SIC / filer-status counts of the browse pages and the screener's
 // pickers, so those need not load the 2 MB universe

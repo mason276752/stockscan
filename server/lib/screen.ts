@@ -10,7 +10,7 @@ import { collapseAmendments, filingPeriodKey } from './filings.ts';
 import type {
   AsOfColumns, AsOfIndex, AsOfRef, BaseColumns, Column, MarketQuote, RatioValues, ScoreBadge, ScoreBrief,
   ScoreWithHistory, ScreenColumnFiles, ScreenColumns, ScreenField, ScreenQueryParams, ScreenRow, ScreenTable,
-  UniverseCompany, IsoDate, Score,
+  UniverseCompany, IsoDate, ScoreRow,
 } from './types.ts';
 import type { SicCode } from './sic.ts';
 
@@ -276,9 +276,9 @@ export const asOfShardYears = (asof: IsoDate | null, available: readonly number[
 export const asOfShardOf = (score: { filingDate?: IsoDate | null; periodEnd?: IsoDate | null }): number | null => Number(String(score.filingDate || score.periodEnd || '').slice(0, 4)) || null;
 
 const ASOF_KEYS = ['cik', 'accession', 'form', 'filingDate', 'periodEnd', 'fiscalYear', 'fiscalPeriod', 'score', 'coverage'];
-export function screenAsOfColumns(scores: readonly Score[]): AsOfColumns {
+export function screenAsOfColumns(scores: readonly ScoreRow[]): AsOfColumns {
   const n = scores.length;
-  const col = <T,>(get: (s: Score) => T | null | undefined): Column<T> => {
+  const col = <T,>(get: (s: ScoreRow) => T | null | undefined): Column<T> => {
     const a = new Array<T | null>(n);
     for (let i = 0; i < n; i++) a[i] = get(scores[i]!) ?? null;
     return a;
@@ -314,28 +314,85 @@ export function screenAsOfIndex(shards: AsOfColumns[] | AsOfColumns): AsOfIndex 
   return { shards: list, byCik };
 }
 
+/** One filing of an as-of index, addressed by the (shard, row) a ref carries. */
+export interface AsOfReader {
+  /** any scalar column of the filing (`score`, `accession`, `periodEnd` …) */
+  field: (r: AsOfRef | null, key: string) => number | string | null;
+  /** one ratio of the filing */
+  value: (r: AsOfRef | null, key: string) => number | null;
+  /** every ratio of the filing, as a score's own `values` object */
+  values: (r: AsOfRef | null) => RatioValues;
+  /** the little of it the change filters compare against */
+  brief: (r: AsOfRef | null) => ScoreBrief | null;
+}
+
+// The shards hold columns and pickAsOf hands back (shard, row) pairs, so
+// everything that replays an as-of index - the screener's own time machine,
+// a rule ETF, the newest score of each company - reads a filing through
+// this. Made per index rather than per call: the ratio keys are the union
+// over every shard, which is not worth working out again per company.
+export function asOfReader(index: AsOfIndex): AsOfReader {
+  const { shards } = index;
+  const valueKeys = [...new Set(shards.flatMap((c) => Object.keys(c.values)))];
+  const field = (r: AsOfRef | null, key: string) => (r ? (((shards[r.s] as unknown as Record<string, Column<unknown>>)[key]?.[r.j] ?? null) as number | string | null) : null);
+  const value = (r: AsOfRef | null, key: string) => (r ? (shards[r.s]!.values[key]?.[r.j] ?? null) : null);
+  const values = (r: AsOfRef | null) => {
+    const o: RatioValues = {};
+    for (const key of valueKeys) o[key] = value(r, key);
+    return o;
+  };
+  return {
+    field,
+    value,
+    values,
+    brief: (r) => (!r ? null : ({ fiscalYear: field(r, 'fiscalYear'), fiscalPeriod: field(r, 'fiscalPeriod'), periodEnd: field(r, 'periodEnd'), score: field(r, 'score'), values: values(r) } as unknown as ScoreBrief)),
+  };
+}
+
+/** The rows of one shard that `keep` says yes to, as a shard of their own. */
+export function asOfKept(cols: AsOfColumns, keep: (accession: string) => boolean): AsOfColumns {
+  const rows: number[] = [];
+  for (let j = 0; j < cols.n; j++) if (keep(cols.accession[j] as string)) rows.push(j);
+  if (rows.length === cols.n) return cols;
+  const col = <T,>(a: Column<T>) => rows.map((j) => a[j] ?? null);
+  return {
+    n: rows.length,
+    ...Object.fromEntries(ASOF_KEYS.map((k) => [k, col((cols as unknown as Record<string, Column<unknown>>)[k]!)])),
+    categories: col(cols.categories),
+    values: Object.fromEntries(Object.entries(cols.values).map(([k, a]) => [k, col(a)])),
+  } as unknown as AsOfColumns;
+}
+
+// Some of an as-of index's rows as a shard of their own - columns in,
+// columns out, with no score read again. This is how the static build cuts
+// the one index it has in memory into the year files it ships. Every ratio
+// any shard has gets a column, so a slice whose rows all lack one carries it
+// as nulls rather than leaving it out; a reader answers null either way.
+export function asOfSubset(index: AsOfIndex, rows: readonly AsOfRef[]): AsOfColumns {
+  const { shards } = index;
+  const valueKeys = [...new Set(shards.flatMap((c) => Object.keys(c.values)))];
+  const col = (key: string) => rows.map((r) => (shards[r.s] as unknown as Record<string, Column<unknown>>)[key]?.[r.j] ?? null);
+  return {
+    n: rows.length,
+    ...Object.fromEntries(ASOF_KEYS.map((k) => [k, col(k)])),
+    categories: rows.map((r) => shards[r.s]!.categories[r.j] ?? null),
+    values: Object.fromEntries(valueKeys.map((k) => [k, rows.map((r) => shards[r.s]!.values[k]?.[r.j] ?? null)])),
+  } as unknown as AsOfColumns;
+}
+
 // company / market columns (index/screen.json, or any screenTable) + the
 // per-filing columns -> the table screenQuery reads, as of `asof`. Only the
 // companies that had a filing out by then are in it.
 export function screenAsOfTable(core: readonly ScreenRow[] | ScreenColumns | ScreenTable, index: AsOfIndex, asof: IsoDate | null): ScreenTable {
   const t = screenTable(core);
-  const { shards, byCik } = index;
+  const { byCik } = index;
   const picks: { i: number; cur: AsOfRef; prev: AsOfRef | null; yoy: AsOfRef | null; history: number }[] = [];
   for (let i = 0; i < t.length; i++) {
     const p = pickAsOf(byCik.get(t.cik(i)) || [], asof);
     if (p.cur) picks.push({ i, cur: p.cur, prev: p.prev, yoy: p.yoy, history: p.history });
   }
   const at = (k: number, mode: string) => (mode === 'now' ? picks[k]!.cur : picks[k]![mode === 'chg' ? 'prev' : 'yoy']);
-  const field = (r: AsOfRef | null, key: string) => (r ? (((shards[r.s] as unknown as Record<string, Column<unknown>>)[key]?.[r.j] ?? null) as number | string | null) : null); // one column of one filing
-  const value = (r: AsOfRef | null, key: string) => (r ? (shards[r.s]!.values[key]?.[r.j] ?? null) : null);
-  const valueKeys = [...new Set(shards.flatMap((c) => Object.keys(c.values)))];
-  const valuesAt = (r: AsOfRef | null) => {
-    const o: RatioValues = {};
-    for (const key of valueKeys) o[key] = value(r, key);
-    return o;
-  };
-  const baseAt = (r: AsOfRef | null): ScoreBrief | null =>
-    !r ? null : ({ fiscalYear: field(r, 'fiscalYear'), fiscalPeriod: field(r, 'fiscalPeriod'), periodEnd: field(r, 'periodEnd'), score: field(r, 'score'), values: valuesAt(r) } as unknown as ScoreBrief);
+  const { field, value, values: valuesAt, brief: baseAt } = asOfReader(index);
   return {
     length: picks.length,
     cik: (k) => t.cik(picks[k]!.i),
@@ -577,4 +634,4 @@ export function searchRows<T extends { ticker: string; name: string }>(rows: rea
 }
 
 // the score summary every list shows next to a company
-export const scoreBadge = (s: Score | null | undefined): ScoreBadge | null => (s ? { score: s.score, coverage: s.coverage, accession: s.accession, form: s.form, fiscalYear: s.fiscalYear, fiscalPeriod: s.fiscalPeriod, periodEnd: s.periodEnd, filingDate: s.filingDate, categories: s.categories.map((c) => c.score) } : null);
+export const scoreBadge = (s: ScoreRow | null | undefined): ScoreBadge | null => (s ? { score: s.score, coverage: s.coverage, accession: s.accession, form: s.form, fiscalYear: s.fiscalYear, fiscalPeriod: s.fiscalPeriod, periodEnd: s.periodEnd, filingDate: s.filingDate, categories: s.categories.map((c) => c.score) } : null);

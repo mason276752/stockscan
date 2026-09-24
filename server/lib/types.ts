@@ -857,8 +857,18 @@ export interface MarketQuote {
   tv?: string | null;
 }
 
+/**
+ * A saved score without its `items` breakdown - the seventeen benchmark
+ * rows, with their names and thresholds, which is three quarters of a
+ * score's bytes. Everything that reads scores in bulk (the screener, the
+ * as-of index, the static build's shards) reads this much and no more, so
+ * this is the shape they are kept in; `items` is re-read from the file on
+ * the one page that shows it.
+ */
+export type ScoreRow = Omit<Score, 'items'>;
+
 /** A score with the two earlier filings the change filters compare against. */
-export interface ScoreWithHistory extends Score {
+export interface ScoreWithHistory extends ScoreRow {
   prev: ScoreBrief | null;
   yoy: ScoreBrief | null;
   history: number;
@@ -866,7 +876,6 @@ export interface ScoreWithHistory extends Score {
 
 /** The little of an earlier filing the change filters need. */
 export interface ScoreBrief {
-  accession?: string;
   fiscalYear: string | null;
   fiscalPeriod?: string | null;
   periodEnd: IsoDate | null;

@@ -60,7 +60,7 @@
 // in the result. Set it to 0 to buy whatever the filters picked.
 
 import { RANGES, dateWindow, stats, yearsBefore } from './basket.ts';
-import { pickAsOf, screenFilter, screenTable } from './screen.ts';
+import { asOfReader, pickAsOf, screenFilter, screenTable } from './screen.ts';
 import type {
   AsOfIndex, AsOfRef, Bar, BasketBar, BasketNote, EmitEvent, IsoDate, RuleBarsMember, RuleConstituent, RuleEvent,
   RuleMember, RuleRequest, RuleSchedule, ScreenColumns, ScreenQueryParams, ScreenRow, ScreenTable,
@@ -92,9 +92,9 @@ const daysBefore = (date: IsoDate, n: number): IsoDate => new Date(Date.parse(da
 export function replaySchedule(core: readonly ScreenRow[] | ScreenColumns | ScreenTable, index: AsOfIndex, q: ScreenQueryParams): RuleSchedule {
   const t = screenTable(core);
   const { test, skipped } = screenFilter(q, { market: false });
-  const { shards, byCik } = index;
-  const field = (r: AsOfRef | null, key: string) => (r ? (((shards[r.s] as unknown as Record<string, (unknown | null)[]>)[key]?.[r.j] ?? null) as number | null) : null);
-  const value = (r: AsOfRef | null, key: string) => (r ? (shards[r.s]!.values[key]?.[r.j] ?? null) : null);
+  const { byCik } = index;
+  const { field: column, value } = asOfReader(index);
+  const field = (r: AsOfRef | null, key: string) => column(r, key) as number | null;
   // one row of the table, with the company half fixed and the filing half
   // swapped for every date tested (a new object per test would be 30,000
   // allocations for nothing)
@@ -276,6 +276,20 @@ const topIndexes = (w: readonly number[], n: number) =>
     .map((x, i) => i)
     .sort((a, b) => w[b]! - w[a]!)
     .slice(0, n);
+// What the `n` largest weights add up to. breachesConstraints asks this of
+// every session of the backtest and only ever wants the total, which no
+// ordering of equal weights can change - so it keeps a running top `n`
+// rather than sorting the whole book each time.
+function topTotal(w: readonly number[], n: number): number {
+  const top = new Float64Array(n); // ascending, so top[0] is the one to drop
+  for (const x of w) {
+    if (x <= top[0]!) continue;
+    let j = 0;
+    while (j + 1 < n && top[j + 1]! < x) (top[j] = top[j + 1]!), j++;
+    top[j] = x;
+  }
+  return total([...top]);
+}
 
 // Which stages can be met at all. Nasdaq's numbers are written for a hundred
 // names; over sixteen holdings everybody is above 4.5% and the five largest
@@ -328,7 +342,7 @@ export function breachesConstraints(w: readonly number[], c: WeightConstraints |
   const level = (x: { watch?: number; over: number }) => x.watch ?? x.over;
   if (live.single && Math.max(...w) > level(c.single!) + 1e-12) return true;
   if (live.cohort && total(w.filter((x) => x > c.cohort!.above + 1e-12)) >= level(c.cohort!) - 1e-12) return true;
-  if (live.top && total(topIndexes(w, c.top!.n).map((i) => w[i]!)) >= level(c.top!) - 1e-12) return true;
+  if (live.top && topTotal(w, c.top!.n) >= level(c.top!) - 1e-12) return true;
   return false;
 }
 
@@ -416,7 +430,9 @@ export function ruleSeries(members: readonly RuleBarsMember[], events: readonly 
   // the trading calendar: every date any member traded after the first change
   // (inside the window, when one was asked for)
   const start = from && from > events[0]!.date ? from : events[0]!.date;
-  const dates = [...new Set(rows.flatMap((m) => m.days.map((d) => d.date)))].filter((d) => d > start && (!to || d <= to)).sort();
+  const sessions = new Set<IsoDate>(); // straight into the set: the members hold millions of bars between them
+  for (const m of rows) for (const b of m.days) if (b.date > start && (!to || b.date <= to)) sessions.add(b.date);
+  const dates = [...sessions].sort();
   if (dates.length < 2) return { bars: [], start, end: null, notes: [...notes, { code: 'tooFewDays' }], constituents: [], counts: [], stats: null };
   const n = dates.length;
 
@@ -428,14 +444,27 @@ export function ruleSeries(members: readonly RuleBarsMember[], events: readonly 
   // so its close is carried to the end rather than counting as a delisting.
   const lastSession = dates.at(-1)!;
   const gone = rows.map((m) => m.days.at(-1)!.date < daysBefore(lastSession, GONE_DAYS));
+  // the last session at or before `date` (-1: none). `dates` is sorted, and
+  // this table is a member times a session, so the test that used to sit
+  // inside the fill below is answered once per member instead.
+  const sessionAt = (date: IsoDate) => {
+    let lo = 0;
+    let hi = n - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (dates[mid]! <= date) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return hi;
+  };
   const at = rows.map((m, i) => {
     const a = new Int32Array(n).fill(-1);
-    const last = gone[i] ? m.days.at(-1)!.date : lastSession;
+    const lastK = gone[i] ? sessionAt(m.days.at(-1)!.date) : n - 1;
     let j = 0;
     let cur = -1;
-    for (let k = 0; k < n; k++) {
+    for (let k = 0; k <= lastK; k++) {
       while (j < m.days.length && m.days[j]!.date <= dates[k]!) cur = j++;
-      if (cur >= 0 && dates[k]! <= last) a[k] = cur;
+      if (cur >= 0) a[k] = cur;
     }
     return a;
   });
@@ -447,6 +476,7 @@ export function ruleSeries(members: readonly RuleBarsMember[], events: readonly 
 
   const idxOf = new Map(rows.map((m, i) => [m.symbol, i]));
   const held = new Uint8Array(rows.length); // by the filters
+  const buying = new Uint8Array(rows.length); // scratch: who a rebalance is keeping (see below)
   let units = new Float64Array(rows.length);
   let value = base; // what the index is worth on a day it can hold nothing
   let active: number[] = [];
@@ -477,7 +507,9 @@ export function ruleSeries(members: readonly RuleBarsMember[], events: readonly 
   const valueAt = (k: number) => {
     let owned = false;
     let V = 0;
-    for (let i = 0; i < rows.length; i++) {
+    for (const i of active) {
+      // nothing outside `active` can hold units: a rebalance starts from a
+      // fresh book and a delisting zeroes what it sold
       if (!units[i]) continue;
       owned = true;
       V += units[i]! * (at[i]![k]! >= 0 ? px(i, k, 'open') : rows[i]!.days.at(-1)!.close);
@@ -530,7 +562,9 @@ export function ruleSeries(members: readonly RuleBarsMember[], events: readonly 
     if (rebalancing) {
       // sell everything at this open, then buy the new list at its weights
       const V = valueAt(k);
-      for (const i of active) if (!now!.includes(i)) sell(i, at[i]![k]! >= 0 ? px(i, k, 'open') : rows[i]!.days.at(-1)!.close);
+      for (const i of now!) buying[i] = 1; // who is kept, so each holding is one lookup and not a scan of the new list
+      for (const i of active) if (!buying[i]) sell(i, at[i]![k]! >= 0 ? px(i, k, 'open') : rows[i]!.days.at(-1)!.close);
+      for (const i of now!) buying[i] = 0;
       units = new Float64Array(rows.length);
       if (now!.length) {
         let w: number[];
@@ -566,12 +600,30 @@ export function ruleSeries(members: readonly RuleBarsMember[], events: readonly 
     }
     let bar: BasketBar;
     if (active.length) {
-      const sum = (f: 'open' | 'high' | 'low' | 'close') => {
-        let s = 0;
-        for (const i of active) s += units[i]! * px(i, k, f);
-        return s;
-      };
-      bar = { time: d, open: sum('open'), high: sum('high'), low: sum('low'), close: sum('close') };
+      // the four sums in one pass - this is the innermost loop of the whole
+      // backtest (every holding of every session), and px() would look the
+      // day's bar up and compare its date four times over
+      let o = 0;
+      let h = 0;
+      let l = 0;
+      let c = 0;
+      for (const i of active) {
+        const u = units[i]!;
+        const b = rows[i]!.days[at[i]![k]!]!;
+        if (b.date === d) {
+          o += u * b.open;
+          h += u * b.high;
+          l += u * b.low;
+          c += u * b.close;
+        } else {
+          const carried = u * b.close; // a day it did not trade: its last close, four times
+          o += carried;
+          h += carried;
+          l += carried;
+          c += carried;
+        }
+      }
+      bar = { time: d, open: o, high: h, low: l, close: c };
       bar.high = Math.max(bar.high, bar.open, bar.close);
       bar.low = Math.min(bar.low, bar.open, bar.close);
       value = bar.close;

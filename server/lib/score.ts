@@ -2,13 +2,15 @@
 // every company (for the screener). The scoring itself is in scoreModel.ts
 // (no I/O, shared with the browser build).
 
+import zlib from 'node:zlib';
+
 import { store } from './store.ts';
 import { reclassify } from './statementTypes.ts';
 import { fiscalLabel } from './filings.ts';
 import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.ts';
-import { SCORE_HISTORY, pickAsOf, screenAsOfColumns, screenAsOfIndex } from './screen.ts';
+import { SCORE_HISTORY, asOfKept, asOfReader, asOfSubset, pickAsOf, screenAsOfColumns, screenAsOfIndex } from './screen.ts';
 import { collapseAmendments } from './filings.ts';
-import type { AsOfIndex, Company, FilingHeader, FilingRef, IsoDate, Score, ScoreBrief, ScoreWithHistory, ScrapeResult } from './types.ts';
+import type { AsOfColumns, AsOfIndex, Company, FilingHeader, FilingRef, IsoDate, Score, ScoreRow, ScoreWithHistory, ScrapeResult } from './types.ts';
 
 export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf, SCORE_HISTORY };
 
@@ -63,7 +65,10 @@ export async function scoreAccession(accession: string, { redoPartial = false, f
   const h = store.filingHeader(accession);
   if (!h) return null;
   const s = await computeScore(accession, h);
-  if (s) store.putScore(accession, h.cik, h.periodEnd, SCORE_VERSION, s);
+  if (s) {
+    store.putScore(accession, h.cik, h.periodEnd, SCORE_VERSION, s);
+    forgetScore(accession);
+  }
   return s;
 }
 
@@ -131,7 +136,10 @@ export async function rescoreAll({ budgetMs = 50, log = (_m: string) => {}, cik 
       if (s) {
         const prev = store.getScore(f.accession, SCORE_VERSION);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(s)) {
-          if (!dryRun) store.putScore(f.accession, h!.cik, h!.periodEnd, SCORE_VERSION, s);
+          if (!dryRun) {
+            store.putScore(f.accession, h!.cik, h!.periodEnd, SCORE_VERSION, s);
+            forgetScore(f.accession);
+          }
           out.changed++;
         }
       }
@@ -149,27 +157,37 @@ export async function rescoreAll({ budgetMs = 50, log = (_m: string) => {}, cik 
   return out;
 }
 
-// Latest score of every company (for the screener), each with the previous
-// filing's values (`prev`) and the same period a year earlier (`yoy`) for
-// change filters. Cached for a minute; decoded score JSON is kept per
-// accession so a refresh only decodes what is new.
-// a company's scores newest first -> the one current at `asof` (null = the
-// newest of all) with `prev` / `yoy` attached
-export function withHistory(scores: readonly (Score | null)[], asof: IsoDate | null = null): ScoreWithHistory | null {
-  const { cur, prev, yoy, history } = pickAsOf(scores, asof);
-  if (!cur) return null;
-  const brief = (x: Score): ScoreBrief => ({ accession: x.accession, fiscalYear: x.fiscalYear, fiscalPeriod: x.fiscalPeriod, periodEnd: x.periodEnd, score: x.score, values: x.values });
-  return { ...cur, prev: prev ? brief(prev) : null, yoy: yoy ? brief(yoy) : null, history };
+// ---- the decoded scores ----
+// Both readers below want the same thing off a score - the ratios, the
+// category scores and which filing it is of - and neither looks at `items`,
+// the seventeen benchmark rows with their names and thresholds that make up
+// three quarters of its bytes. So a score is read without them (ScoreRow);
+// holding them whole was well over a gigabyte for the sake of a field
+// nothing in this file touches.
+function readScoreRow(accession: string): ScoreRow | null {
+  const s = store.scoreJson(accession);
+  if (!s) return null;
+  // rest-destructured rather than deleted: `items` is by far the biggest
+  // field, and dropping it by hand would leave the object in dictionary mode
+  const { items, ...row } = s;
+  return row;
 }
-const decoded = new Map<string, Score | null>(); // accession -> score
-function scoreOf(accession: string): Score | null {
-  if (!decoded.has(accession)) decoded.set(accession, store.scoreJson(accession));
-  return decoded.get(accession)!;
+// The current score of each company, which the screener asks for again on
+// every refresh - a few thousand rows, kept for the life of the process.
+// The bulk reads below do not go through it: what they produce is the as-of
+// columns, and those are the cache.
+const decoded = new Map<string, ScoreRow | null>(); // accession -> the score without its items
+function scoreOf(accession: string): ScoreRow | null {
+  let row = decoded.get(accession);
+  if (row === undefined) decoded.set(accession, (row = readScoreRow(accession)));
+  return row;
 }
+
 // Every company's current score as of a date (null = now), for the
-// screener. Without a date only the newest SCORE_HISTORY filings of a
-// company are decoded; with one every saved filing may be the current one,
-// so all of them are (the decoded cache above makes the next date cheap).
+// screener. Which filing that is, and the two the change filters compare it
+// against, are read off the as-of index below - columns already in memory -
+// so the only score files opened are the current ones: one per company,
+// where this used to decode the newest six periods of every one of them.
 // One row set per date is memoised, a few dates at a time.
 const latestMemo = new Map<string, { n: number; at: number; rows: ScoreWithHistory[] }>(); // asof ('' = now) -> { n, at, rows }
 export function latestScores(asof: IsoDate | null = null): ScoreWithHistory[] {
@@ -177,47 +195,115 @@ export function latestScores(asof: IsoDate | null = null): ScoreWithHistory[] {
   const n = store.scoreCount(SCORE_VERSION);
   const hit = latestMemo.get(key);
   if (hit && hit.n === n && Date.now() - hit.at < 60_000) return hit.rows;
-  // the index comes sorted by company, newest period first. Without a date
-  // only the newest SCORE_HISTORY *periods* are decoded - every version of
-  // them, since an amendment shares its original's period end and pickAsOf
-  // has to see both to choose.
-  const byCik = new Map<number, { accs: string[]; periods: Set<string> }>();
-  for (const r of store.scoreIndex(SCORE_VERSION)) {
-    if (!r.report_date) continue;
-    const rec = byCik.get(r.cik) || byCik.set(r.cik, { accs: [], periods: new Set<string>() }).get(r.cik)!;
-    if (!asof && rec.periods.size >= SCORE_HISTORY && !rec.periods.has(r.report_date)) continue;
-    rec.periods.add(r.report_date);
-    rec.accs.push(r.accession);
-  }
+  const index = asOfIndex();
+  const read = asOfReader(index);
   const rows: ScoreWithHistory[] = [];
-  for (const [, rec] of byCik) {
-    const row = withHistory(rec.accs.map(scoreOf), asof);
-    if (row) rows.push(row);
+  for (const filings of index.byCik.values()) {
+    const { cur, prev, yoy, history } = pickAsOf(filings, asof);
+    const s = cur && scoreOf(read.field(cur, 'accession') as string);
+    if (!s) continue;
+    rows.push({ ...s, prev: read.brief(prev), yoy: read.brief(yoy), history });
   }
-  if (decoded.size > 60_000) decoded.clear();
+  if (decoded.size > 60_000) decoded.clear(); // a date of its own reaches every filing there is
   if (latestMemo.size > 4) latestMemo.clear();
   latestMemo.set(key, { n, at: Date.now(), rows });
   return rows;
 }
 
+// ---- the as-of index ----
 // Every saved score as the as-of index the screener's time machine reads
 // (screen.ts): each company's filings newest first, the values addressed by
-// (shard, row). The static build ships the same thing as one file per
-// filing year; here it is one shard over the whole store, rebuilt only when
-// the store has grown. This is what a rule ETF replays (ruleEtf.ts) - it
-// asks for every filing at once, not for one date.
+// (shard, row). This is what a rule ETF replays (ruleEtf.ts) - it asks for
+// every filing at once, not for one date.
+//
+// Reading all ~200,000 score files takes fifteen seconds and a rule ETF
+// cannot start until it is done, so the columns are also written out as one
+// file beside the kv cache - 35 MB, read back in well under a second - and
+// only the scores saved since it was written are read from the store.
+// Those go in as a *second shard*, which is how an as-of index addresses
+// its rows anyway (the static build ships one shard per filing year), so
+// there is nothing to merge.
+const ASOF_FILE = `asof-v${SCORE_VERSION}.json.zst`;
+// how much may pile up beside the file before it is written afresh: past
+// this, reading the leftover from the store on every start costs more than
+// the occasional rewrite it takes to fold it in
+const ASOF_REWRITE = 20_000;
+
+/** The saved shard and the accessions it holds; null = there is no usable file. */
+let asOfSaved: { cols: AsOfColumns; have: Set<string> } | null | undefined; // undefined: not looked for yet
+
+function savedAsOfShard(): { cols: AsOfColumns; have: Set<string> } | null {
+  if (asOfSaved !== undefined) return asOfSaved;
+  const buf = store.readCache(ASOF_FILE);
+  try {
+    const cols = buf ? (JSON.parse(zlib.zstdDecompressSync(buf).toString('utf8')) as AsOfColumns) : null;
+    asOfSaved = cols?.n ? { cols, have: new Set(cols.accession as string[]) } : null;
+  } catch (err) {
+    console.warn(`score: 讀取 ${ASOF_FILE} 失敗，改為重建：${(err as Error).message}`);
+    asOfSaved = null;
+  }
+  return asOfSaved;
+}
+
+// Every score the store has been given since this process started. A new
+// one only adds a row to what is on disk; one written *over* an accession
+// the saved shard already holds leaves a row in the file that is no longer
+// what the store says - which the count the memos hang on cannot notice,
+// since it does not move for a write in place.
+const written = new Set<string>();
+function forgetScore(accession: string): void {
+  written.add(accession);
+  decoded.delete(accession);
+  asOfMemo = null;
+  latestMemo.clear();
+}
+
+const rowsOf = (accessions: readonly string[]): ScoreRow[] => accessions.map(readScoreRow).filter((s): s is ScoreRow => !!s);
+
+// The saved shard, minus anything it no longer agrees with, plus a shard of
+// the scores it does not have. `rewrite` says the file is worth writing out
+// again: it has rows in it that are gone, or it never existed.
+function asOfShards(): { shards: AsOfColumns[]; rewrite: boolean } {
+  const saved = savedAsOfShard();
+  const scored = new Set<string>();
+  const missing: string[] = [];
+  for (const r of store.scoreIndex(SCORE_VERSION)) {
+    if (!r.report_date) continue;
+    scored.add(r.accession);
+    // covered by the file, unless it has been written over since
+    if (!saved?.have.has(r.accession) || written.has(r.accession)) missing.push(r.accession);
+  }
+  if (!saved) return { shards: [screenAsOfColumns(rowsOf([...scored]))], rewrite: true };
+  // A row the file holds that the store has dropped, or one written over
+  // since, is not what the store says any more. It is cut out of the shard -
+  // columns trimmed in memory, with not one score file opened for it - and
+  // read again below along with everything the file never had.
+  const base = asOfKept(saved.cols, (a) => scored.has(a) && !written.has(a));
+  return { shards: [base, screenAsOfColumns(rowsOf(missing))], rewrite: base !== saved.cols };
+}
+
+// the index as one shard again, written out for the next start
+function saveAsOfShard(index: AsOfIndex): void {
+  const cols = asOfSubset(index, [...index.byCik.values()].flat());
+  // level 3: a cache of numbers rewritten now and then, so the time it takes
+  // to compress matters more than the last few MB of it
+  store.writeCache(ASOF_FILE, zlib.zstdCompressSync(Buffer.from(JSON.stringify(cols)), { params: { [zlib.constants.ZSTD_c_compressionLevel]: 3 } }));
+  asOfSaved = { cols, have: new Set(cols.accession as string[]) };
+  written.clear(); // the file now says what the store says
+}
+
 let asOfMemo: { n: number; index: AsOfIndex } | null = null;
 export function asOfIndex(): AsOfIndex {
   const n = store.scoreCount(SCORE_VERSION);
   if (asOfMemo?.n === n) return asOfMemo.index;
-  const all: Score[] = [];
-  for (const r of store.scoreIndex(SCORE_VERSION)) {
-    if (!r.report_date) continue;
-    const s = scoreOf(r.accession);
-    if (s) all.push(s);
-  }
-  asOfMemo = { n, index: screenAsOfIndex([screenAsOfColumns(all)]) };
-  return asOfMemo.index;
+  const { shards, rewrite } = asOfShards();
+  const index = screenAsOfIndex(shards);
+  // the leftover shard is folded into the file once enough has piled up
+  // beside it: reading it from the store on every start eventually costs
+  // more than the one rewrite it takes to be rid of it
+  if (rewrite || (shards[1]?.n ?? 0) > ASOF_REWRITE) saveAsOfShard(index);
+  asOfMemo = { n, index };
+  return index;
 }
 
 // Latest saved filing of a company and its score (null when nothing is

@@ -105,6 +105,7 @@ const unpack = <T,>(kind: StoreKind, buf: Buffer, file: string): T => JSON.parse
 const unpackLegacy = (col: unknown) => JSON.parse(col instanceof Uint8Array ? zlib.gunzipSync(col).toString('utf8') : (col as string));
 
 let root: string | null = null; // data/store
+let cacheDir: string | null = null; // where cache.sqlite lives (derived data, safe to delete)
 let cache: DatabaseSync = null as unknown as DatabaseSync; // the kv SQLite
 
 // kv keys that also live as files in the store (see getKV): what the
@@ -211,8 +212,9 @@ function scheduleDocs() {
 
 export function openStore(storeDir: string = process.env.STOCKSCAN_STORE || path.join(DATA, 'store'), cacheFile: string = process.env.STOCKSCAN_CACHE || path.join(DATA, 'cache.sqlite')): string {
   root = storeDir;
+  cacheDir = path.dirname(cacheFile);
   fs.mkdirSync(root, { recursive: true });
-  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  fs.mkdirSync(cacheDir, { recursive: true });
   cache = new DatabaseSync(cacheFile);
   cache.exec(`
     PRAGMA journal_mode = WAL;
@@ -533,6 +535,27 @@ export const store = {
   },
   compactKV(): void {
     cache.exec('VACUUM; PRAGMA wal_checkpoint(TRUNCATE);');
+  },
+
+  // A derived blob kept as its own file beside cache.sqlite rather than as
+  // a kv row: the kv rows are brotli'd one at a time, which is the wrong
+  // shape for something rewritten whole at tens of MB (score.ts's as-of
+  // columns). Like everything else there, losing it costs a rebuild.
+  readCache(name: string): Buffer | null {
+    need();
+    try {
+      return fs.readFileSync(path.join(cacheDir!, name));
+    } catch {
+      return null;
+    }
+  },
+  writeCache(name: string, buf: Buffer): void {
+    need();
+    try {
+      writeAtomic(path.join(cacheDir!, name), buf);
+    } catch (err) {
+      console.warn(`store: 寫入快取 ${name} 失敗：${(err as Error).message}`); // a cache: carry on without it
+    }
   },
 
   // scores: one per filing, keyed by accession, invalidated by version

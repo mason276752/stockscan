@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { asOfDate, asOfShardOf, asOfShardYears, pickAsOf, screenAsOfColumns, screenAsOfIndex, screenAsOfTable, screenColumns, screenQuery, screenRows } from '../server/lib/screen.ts';
-import { withHistory } from '../server/lib/score.ts';
-import type { IsoDate, Score, ScoreWithHistory } from '../server/lib/types.ts';
+import type { IsoDate, Score, ScoreBrief, ScoreWithHistory } from '../server/lib/types.ts';
 
 // two companies' saved scores, newest report date first (as the store hands
 // them over). B filed its Q1 late, after A had already filed the same quarter.
@@ -88,7 +87,16 @@ test('only the newest periods are looked back at, every version of them', () => 
 });
 
 // the server reads the scores as row objects, the static site the same
-// figures as columns: both must answer a dated query identically
+// figures as columns: both must answer a dated query identically. This is
+// the row built straight from whole score objects - the shape the columns
+// have to reproduce, written out here rather than shared with what they
+// are being checked against.
+function withHistory(scores: readonly Score[], asof: IsoDate | null): ScoreWithHistory | null {
+  const { cur, prev, yoy, history } = pickAsOf(scores, asof);
+  if (!cur) return null;
+  const brief = (x: Score): ScoreBrief => ({ fiscalYear: x.fiscalYear, fiscalPeriod: x.fiscalPeriod, periodEnd: x.periodEnd, score: x.score, values: x.values });
+  return { ...cur, prev: prev ? brief(prev) : null, yoy: yoy ? brief(yoy) : null, history };
+}
 const serverRows = (asof: IsoDate | null) => screenRows([1, 2].map((cik) => withHistory(SCORES[cik as 1 | 2], asof)).filter((x): x is ScoreWithHistory => !!x), COMPANIES);
 // the static side ships one file per year of filing date and loads the few
 // years a date can reach; `years` says which ones are in the browser
