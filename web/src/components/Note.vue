@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // An explanatory paragraph: as is on a desktop, folded behind a "details"
 // line on a phone so the tables stay near the top.
 import { isPhone } from '../viewport';

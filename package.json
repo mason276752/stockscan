@@ -4,24 +4,29 @@
   "private": true,
   "type": "module",
   "description": "Node.js server that scrapes SEC Inline XBRL filings and serves the primary financial statements as JSON",
-  "main": "server/index.js",
+  "main": "server/index.ts",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
+    "start": "node server/index.ts",
+    "dev": "node --watch server/index.ts",
     "test": "node --test",
+    "typecheck": "tsc --noEmit && tsc -p web --noEmit",
     "build:web": "npm --prefix web run build",
     "postinstall": "npm --prefix web install",
-    "build:static": "node server/tools/build-static.mjs",
+    "build:static": "node server/tools/build-static.mts",
     "data:pull": "sh scripts/pull-data.sh",
-    "data:push": "node server/tools/push-data.mjs",
-    "fetch:new": "node server/tools/fetch-new.mjs",
-    "ingest:dera": "node server/tools/ingest-dera.mjs",
-    "rescore": "node server/tools/rescore.mjs",
-    "enrich:cover-shares": "node server/tools/enrich-cover-shares.mjs",
-    "fetch:bars": "node server/tools/fetch-bars.mjs"
+    "data:push": "node server/tools/push-data.mts",
+    "fetch:new": "node server/tools/fetch-new.mts",
+    "ingest:dera": "node server/tools/ingest-dera.mts",
+    "rescore": "node server/tools/rescore.mts",
+    "enrich:cover-shares": "node server/tools/enrich-cover-shares.mts",
+    "fetch:bars": "node server/tools/fetch-bars.mts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.8.0"
   },
   "dependencies": {
     "@stoqey/ib": "^1.6.9",

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import { createBasket } from '../baskets';

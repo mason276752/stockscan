@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // What a rule ETF has instead of a constituent table: the filters it ran,
 // every day the holdings changed, and the companies it has ever held.
 // Nothing here is editable - the filters are the fund (see baskets.js).

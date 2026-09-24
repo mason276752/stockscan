@@ -1,7 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue';
 import { t } from '../i18n';
-import { collapseAmendments } from '../../../server/lib/filings.js';
+import { collapseAmendments } from '../../../server/lib/filings.ts';
 
 const props = defineProps({
   filings: { type: Array, required: true },

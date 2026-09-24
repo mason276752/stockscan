@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { api } from './api';
 import CompanySearch from './components/CompanySearch.vue';
@@ -7,7 +7,7 @@ import StatementTable from './components/StatementTable.vue';
 import IndicatorsTable from './components/IndicatorsTable.vue';
 import ValuationPanel from './components/ValuationPanel.vue';
 import TvEmbedChart from './components/TvEmbedChart.vue';
-import { simplifyStatement } from '../../shared/simplify.js';
+import { simplifyStatement } from '../../shared/simplify.ts';
 import BrowsePage from './components/BrowsePage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
 import ScreenerPage from './components/ScreenerPage.vue';

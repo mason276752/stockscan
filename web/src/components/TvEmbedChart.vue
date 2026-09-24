@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // TradingView's official embeddable Advanced Chart widget, on TradingView's
 // own data. A basket is charted as a "spread" symbol - a weighted sum of
 // tickers such as 0.42*AAPL+0.4*MSFT+2.2*NVDA - which TradingView computes

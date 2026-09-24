@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Small inline SVG icons (stroke follows the text colour).
 defineProps({ name: { type: String, required: true }, size: { type: Number, default: 16 } });
 </script>

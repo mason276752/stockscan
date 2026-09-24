@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // A searchable SIC picker: type a code, a Chinese name or the SEC English
 // title, pick from the matches. v-model is the 4-digit code ('' = none).
 import { computed, ref, watch } from 'vue';

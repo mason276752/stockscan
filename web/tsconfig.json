@@ -1,0 +1,23 @@
+{
+  // Browser side. Vite (esbuild) strips the types when it bundles; tsc here
+  // only type-checks (`npm run typecheck` in web/). The .vue files are not
+  // covered - that needs vue-tsc.
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2023", "dom", "dom.iterable", "webworker"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["vite/client"],
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // as on the server: a mechanical port, so no annotations yet
+    "strict": false,
+    "noImplicitAny": false
+  },
+  // server/lib and shared are pulled in through the imports of src/, not listed:
+  // only the pure modules the browser actually uses get checked here.
+  "include": ["src/**/*.ts", "vite.config.ts"]
+}

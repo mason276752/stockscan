@@ -1,0 +1,26 @@
+{
+  // Node side (server/, shared/, test/). Nothing is compiled: Node 22.18+ runs
+  // the .ts files itself by stripping the types, so this config only
+  // type-checks (`npm run typecheck`) - hence noEmit, and
+  // allowImportingTsExtensions for the `./x.ts` specifiers Node resolves.
+  // erasableSyntaxOnly keeps the source to what the stripper accepts (no
+  // enums, no namespaces, no parameter properties).
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // The port was mechanical: the code is the JavaScript it always was, so
+    // nothing is annotated yet and the checks that demand annotations are off.
+    "strict": false,
+    "noImplicitAny": false
+  },
+  "include": ["server/**/*.ts", "server/**/*.mts", "shared/**/*.ts", "test/**/*.mts"]
+}

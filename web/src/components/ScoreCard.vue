@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Score breakdown of one filing, shown above the indicators table.
 import { computed, ref } from 'vue';
 import { t, tr } from '../i18n';

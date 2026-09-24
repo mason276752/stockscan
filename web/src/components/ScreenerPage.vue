@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
@@ -6,7 +6,7 @@ import SicPicker from './SicPicker.vue';
 import { isWatched, toggleWatch } from '../watchlist';
 import { applySource, basketOf, createBasket, createRuleBasket, setSource } from '../baskets';
 import { bigMoney, dateLocale, isZh, pick, t, tr } from '../i18n';
-import { sicInfo } from '../../../server/lib/sic.js';
+import { sicInfo } from '../../../server/lib/sic.ts';
 import { isNarrow, isPhone } from '../viewport';
 import Note from './Note.vue';
 import Loading from './Loading.vue';

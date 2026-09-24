@@ -1,5 +1,5 @@
 //! stockscan-static: the parts of the static-site build that are slow in
-//! Node (server/tools/build-static.mjs calls this; the logic that decides
+//! Node (server/tools/build-static.mts calls this; the logic that decides
 //! what goes into the indexes stays in JavaScript so the two builds cannot
 //! drift). Three commands, all parallel over the machine's cores:
 //!

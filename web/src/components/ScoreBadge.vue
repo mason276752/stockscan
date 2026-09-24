@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Small coloured pill for a company's latest-filing score.
 import { api } from '../api';
 import { t, tr } from '../i18n';

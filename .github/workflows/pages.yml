@@ -99,7 +99,7 @@ jobs:
       # between runs so only what its TTLs say is stale gets fetched again.
       # What the build needs from SEC beyond that (ETF list, CUSIP table,
       # N-PORT filings) lives as files in the store itself (data/store/kv,
-      # see store.js DURABLE_KV) and so comes with the data ref.
+      # see store.ts DURABLE_KV) and so comes with the data ref.
       - name: Restore the cache database
         uses: actions/cache@v4
         with:
@@ -185,7 +185,7 @@ jobs:
       - name: Build the static site
         run: |
           chmod +x tools/stockscan-static/bin/stockscan-static-x86_64-linux
-          node server/tools/build-static.mjs --link
+          node server/tools/build-static.mts --link
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

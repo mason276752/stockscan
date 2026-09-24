@@ -1,6 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { MODELS, impliedPrice, multiplesAt, runModels } from '../../../shared/valuation.js';
+import { MODELS, impliedPrice, multiplesAt, runModels } from '../../../shared/valuation.ts';
 import { bigMoney, bigShares, dateLocale, t, tr } from '../i18n';
 
 const props = defineProps({

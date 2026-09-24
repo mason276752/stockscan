@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Daily candlestick chart with an optional rebased overlay line (the
 // benchmark). Two renderers: TradingView's Advanced Charts when the licensed
 // library is installed (web/assets/tradingview/, served at /tradingview/;

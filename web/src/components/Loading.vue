@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // A loading message with a spinner. Every place that used to show a bare
 // "loading…" line uses this, so nothing looks frozen: the ring turns, and
 // the top bar (App.vue) runs while any of these is mounted. While the data

@@ -8,7 +8,7 @@ COPY web/package.json web/package-lock.json* ./
 RUN npm ci
 COPY web/ ./
 COPY shared/ /src/shared/
-# web/src/api.static.js (static build) imports the pure modules of server/lib
+# web/src/api.static.ts (static build) imports the pure modules of server/lib
 COPY server/ /src/server/
 # relative asset URLs: one build serves any BASE_URL (the server injects the prefix)
 RUN npx vite build
@@ -34,4 +34,4 @@ ENV PORT=3000 STOCKSCAN_STORE=/app/data/store STOCKSCAN_CACHE=/app/data/cache.sq
 EXPOSE 3000
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s \
   CMD wget -qO- "http://127.0.0.1:${PORT}${BASE_URL:-}/api/status" > /dev/null || exit 1
-CMD ["node", "server/index.js"]
+CMD ["node", "server/index.ts"]
