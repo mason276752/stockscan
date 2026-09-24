@@ -29,6 +29,63 @@ import { filingPeriodKey } from './filings.ts';
 import { ensureStored, upgradable } from './scrape.ts';
 import { getUniverse } from './universe.ts';
 import { scoreAccession } from './score.ts';
+import type { SecClient } from './secClient.ts';
+import type { Prefetcher } from './prefetch.ts';
+import type { CompanyWithFilings } from './edgar.ts';
+import type { EdgarFiling, FilingRef, IsoDate } from './types.ts';
+
+/** One line of EDGAR's daily form index. */
+export interface DailyIndexRow {
+  form: string;
+  name: string;
+  cik: number;
+  filed: string;
+  accession: string;
+}
+
+/** A filing the watch picked up, for the status page. */
+interface WatchEntry {
+  at: string;
+  day: IsoDate;
+  ticker: string | null;
+  cik: number;
+  form: string;
+  fiscalYear?: number | null;
+  fiscalPeriod?: string | null;
+  filingDate?: IsoDate | null;
+}
+
+/** How far the walk back through the daily index has got. */
+interface BackfillState {
+  day: IsoDate | null;
+  floor: IsoDate;
+  left: number | null;
+  days: number;
+  saved: number;
+  done: boolean;
+}
+
+/** What the status endpoint reports about the crawl. */
+interface CrawlerState {
+  enabled: boolean;
+  phase: 'waiting' | 'sweep' | 'watch' | 'backfill';
+  round: number;
+  total: number;
+  position: number;
+  saved: number;
+  skipped: number;
+  failed: number;
+  done: number;
+  current: string | null;
+  lanes: number;
+  startedAt: string | null;
+  lastWatch: string | null;
+  lastWatchDay?: IsoDate;
+  watched: number;
+  depth: number;
+  watchLog: WatchEntry[];
+  backfill: BackfillState;
+}
 
 const CHECK_TTL = 7 * 24 * 3600 * 1000; // re-sweep a company after this long
 // What the sweep grabs per company on its first visit: enough to score it
@@ -61,11 +118,11 @@ const DAILY_INDEX = 'https://www.sec.gov/Archives/edgar/daily-index';
 
 // a company's filings -> every version of its `n` newest periods (an
 // amendment shares its original's period, so the two count once)
-function newestPeriods(filings, n) {
-  const byPeriod = new Map();
+function newestPeriods<T extends FilingRef>(filings: readonly T[], n: number): T[] {
+  const byPeriod = new Map<string, { end: string; versions: T[] }>();
   for (const f of filings) {
     const key = filingPeriodKey(f);
-    const rec = byPeriod.get(key) || byPeriod.set(key, { end: f.periodEnd || f.reportDate || '', versions: [] }).get(key);
+    const rec = byPeriod.get(key) || byPeriod.set(key, { end: f.periodEnd || f.reportDate || '', versions: [] }).get(key)!;
     rec.versions.push(f);
   }
   return [...byPeriod.values()]
@@ -74,28 +131,28 @@ function newestPeriods(filings, n) {
     .flatMap((r) => r.versions);
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const FORMS = new Set(DEFAULT_FORMS.map((f) => f.toUpperCase()));
 
 // Today's date in EDGAR's time zone, as YYYY-MM-DD.
-function edgarDay(offsetDays = 0) {
+function edgarDay(offsetDays = 0): IsoDate {
   const d = new Date(Date.now() - offsetDays * 86_400_000);
   return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
 // YYYY-MM-DD a day earlier, and the number of days between two of them
-const prevDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
-const daysBetween = (a, b) => Math.max(0, Math.round((Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000));
+const prevDay = (day: IsoDate): IsoDate => new Date(Date.parse(`${day}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+const daysBetween = (a: IsoDate, b: IsoDate) => Math.max(0, Math.round((Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86_400_000));
 
-function dailyIndexUrl(day) {
-  const [y, m] = day.split('-').map(Number);
+function dailyIndexUrl(day: IsoDate): string {
+  const [y, m] = day.split('-').map(Number) as [number, number];
   return `${DAILY_INDEX}/${y}/QTR${Math.ceil(m / 3)}/form.${day.replace(/-/g, '')}.idx`;
 }
 
 // form.YYYYMMDD.idx: a header, a dashed line, then
 // "Form Type   Company Name   CIK   Date Filed   File Name" separated by runs of spaces.
-export function parseDailyIndex(text) {
-  const out = [];
+export function parseDailyIndex(text: string): DailyIndexRow[] {
+  const out: DailyIndexRow[] = [];
   let started = false;
   for (const line of text.split('\n')) {
     if (!started) {
@@ -104,14 +161,14 @@ export function parseDailyIndex(text) {
     }
     const m = /^(\S+)\s+(.*?)\s{2,}(\d+)\s+(\d{8})\s+(edgar\/data\/\d+\/(\d{10}-\d{2}-\d{6})\.txt)\s*$/.exec(line);
     if (!m) continue;
-    out.push({ form: m[1].toUpperCase(), name: m[2].trim(), cik: Number(m[3]), filed: m[4], accession: m[6] });
+    out.push({ form: m[1]!.toUpperCase(), name: m[2]!.trim(), cik: Number(m[3]), filed: m[4]!, accession: m[6]! });
   }
   return out;
 }
 
-export function createCrawler(client, { prefetcher, enabled = true } = {}) {
+export function createCrawler(client: SecClient, { prefetcher, enabled = true }: { prefetcher?: Prefetcher; enabled?: boolean } = {}) {
   const low = client.lowPriority();
-  const state = {
+  const state: CrawlerState = {
     enabled,
     phase: 'waiting', // waiting | sweep | watch | backfill
     round: 0,
@@ -129,13 +186,13 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     depth: FIRST_PASS,
     watchLog: [], // the last new filings picked up by the daily index
     // the walk back through the daily index (phase 'backfill')
-    backfill: (() => {
-      const day = store.getKV(BACKFILL_KEY)?.value?.day || null;
+    backfill: ((): BackfillState => {
+      const day = store.getKV<{ day?: IsoDate }>(BACKFILL_KEY)?.value?.day || null;
       return { day, floor: BACKFILL_FLOOR, left: day ? daysBetween(day, BACKFILL_FLOOR) : null, days: 0, saved: 0, done: !!day && day < BACKFILL_FLOOR };
     })(),
   };
-  const fails = store.getKV('crawl:fails')?.value || {};
-  const inFlight = new Set(); // one label per lane, shown in the status line
+  const fails: Record<string, number> = store.getKV<Record<string, number>>('crawl:fails')?.value || {};
+  const inFlight = new Set<string>(); // one label per lane, shown in the status line
   const setCurrent = () => (state.current = inFlight.size ? [...inFlight].join(', ') : null);
 
   // wait while the user is active or the neighbour prefetcher has work
@@ -146,20 +203,20 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   // score saved filings (a quarter's score needs the quarter before it, so
   // this runs once a company's batch is on disk; one scored without a
   // neighbour earlier is redone now that more may be saved)
-  async function scoreSaved(filings) {
+  async function scoreSaved(filings: readonly FilingRef[]) {
     for (const f of filings) {
       if (!store.hasFiling(f.accession)) continue;
       try {
         await scoreAccession(f.accession, { redoPartial: true });
       } catch (err) {
-        console.warn(`score ${f.accession}: ${err.message}`);
+        console.warn(`score ${f.accession}: ${(err as Error).message}`);
       }
     }
   }
 
-  async function saveLatest(company, filing) {
+  async function saveLatest(company: CompanyWithFilings, filing: EdgarFiling | undefined): Promise<boolean> {
     // a filing rebuilt from the quarterly datasets is a stand-in: it stays
-    // only until something can parse the document itself (scrape.js)
+    // only until something can parse the document itself (scrape.ts)
     const upgrade = filing && store.hasFiling(filing.accession) && upgradable(filing);
     if (!filing || (store.hasFiling(filing.accession) && !upgrade)) return false;
     if ((fails[filing.accession] || 0) >= MAX_FAILS) return false;
@@ -176,7 +233,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
       state.failed++;
       fails[filing.accession] = (fails[filing.accession] || 0) + 1;
       store.putKV('crawl:fails', fails);
-      console.warn(`crawl ${filing.accession} (${company.name}) failed: ${err.message}`);
+      console.warn(`crawl ${filing.accession} (${company.name}) failed: ${(err as Error).message}`);
       return false;
     } finally {
       inFlight.delete(label);
@@ -192,19 +249,19 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     // was delisted in between is skipped (nothing to buy, nothing to fetch)
     const listed = new Set((await tickerTable(client)).map((t) => t.cik));
     const targets = u.companies.filter((c) => c.ticker && listed.has(c.cik)); // already sorted by public float, largest first
-    const checked = store.getKV(CHECKED_KEY)?.value || {};
+    const checked: Record<string, string> = store.getKV<Record<string, string>>(CHECKED_KEY)?.value || {};
     state.total = targets.length;
     state.position = 0;
     state.done = 0;
     const timer = setInterval(logProgress, LOG_EVERY);
     let next = 0; // index of the next company to hand to a lane
-    let watching = null; // the daily-index poll in progress (the lanes wait for it)
+    let watching: Promise<void> | null = null; // the daily-index poll in progress (the lanes wait for it)
     const lane = async () => {
       for (;;) {
         const c = targets[next++];
         if (!c) return;
         state.position++;
-        if (checked[c.cik] && Date.now() - Date.parse(checked[c.cik]) < CHECK_TTL) {
+        if (checked[c.cik] && Date.now() - Date.parse(checked[c.cik]!) < CHECK_TTL) {
           state.done++;
           continue;
         }
@@ -212,7 +269,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         // today's filings must not wait for a multi-hour sweep
         if (!state.lastWatch || Date.now() - Date.parse(state.lastWatch) > WATCH_EVERY) {
           watching ??= watch()
-            .catch((err) => console.warn(`crawl watch failed: ${err.message}`))
+            .catch((err) => console.warn(`crawl watch failed: ${(err as Error).message}`))
             .finally(() => {
               watching = null;
               state.phase = 'sweep';
@@ -222,7 +279,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         try {
           const company = await getCompany(low, String(c.cik));
           // the newest FIRST_PASS periods, every version of each: a period
-          // that was amended is read as its amendment (filings.js
+          // that was amended is read as its amendment (filings.ts
           // collapseAmendments), so the 10-K/A has to be on disk beside the
           // 10-K - and when the amendment turns out to be Part III only,
           // the original beside it is what answers.
@@ -237,7 +294,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
           if (!wanted.length || had === wanted.length) state.done++;
         } catch (err) {
           state.failed++;
-          console.warn(`crawl ${c.ticker} (CIK ${c.cik}): ${err.message}`);
+          console.warn(`crawl ${c.ticker} (CIK ${c.cik}): ${(err as Error).message}`);
         }
         checked[c.cik] = new Date().toISOString();
         if (state.position % 25 === 0) store.putKV(CHECKED_KEY, checked);
@@ -250,7 +307,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     console.log(`crawl sweep ${state.round} done: ${state.saved} saved, ${state.skipped} already had, ${state.failed} failed`);
   }
 
-  const n = (x) => x.toLocaleString('en-US');
+  const n = (x: number) => x.toLocaleString('en-US');
   function logProgress() {
     const remaining = state.total - state.position;
     console.log(
@@ -265,7 +322,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     state.phase = 'watch';
     const tickers = await tickerTable(client);
     const known = new Set(tickers.map((t) => t.cik));
-    const done = store.getKV('crawl:days')?.value || {}; // day -> true once a past day is fully processed
+    const done: Record<string, boolean> = store.getKV<Record<string, boolean>>('crawl:days')?.value || {}; // day -> true once a past day is fully processed
     const today = edgarDay();
     // the usual few days, or everything since the last day read if the
     // server has been away longer than that
@@ -275,16 +332,17 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     for (let back = days; back >= 0; back--) {
       const day = edgarDay(back);
       if (done[day]) continue;
-      let text;
+      let text: string;
       try {
         text = await low.text(dailyIndexUrl(day));
       } catch (err) {
+        const status = (err as { status?: number }).status;
         // no index for a weekend / holiday: SEC answers 404, or 403 for some paths
-        if (err.status === 404 || (err.status === 403 && day < today)) {
+        if (status === 404 || (status === 403 && day < today)) {
           if (day < today) done[day] = true;
           continue;
         }
-        console.warn(`daily index ${day}: ${err.message}`);
+        console.warn(`daily index ${day}: ${(err as Error).message}`);
         continue;
       }
       const rows = parseDailyIndex(text).filter((r) => FORMS.has(r.form) && known.has(r.cik) && !store.hasFiling(r.accession));
@@ -302,7 +360,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
             console.log(`crawl: 新申報 ${company.tickers?.[0] || company.cik} ${filing.form} ${filing.fiscalYear} ${filing.fiscalPeriod}（${day} 申報）已下載（已存 ${n(store.filingCount())} 份）`);
           }
         } catch (err) {
-          console.warn(`crawl new filing ${r.accession}: ${err.message}`);
+          console.warn(`crawl new filing ${r.accession}: ${(err as Error).message}`);
         }
       }
       if (day < today) done[day] = true;
@@ -321,11 +379,11 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
   // is written to the store, so a restart carries on where it stopped.
   // Returns false when the day could not be read (the caller waits a while)
   // or the floor is reached.
-  function backfillCursor() {
-    const saved = store.getKV(BACKFILL_KEY)?.value?.day;
+  function backfillCursor(): IsoDate {
+    const saved = store.getKV<{ day?: IsoDate }>(BACKFILL_KEY)?.value?.day;
     return saved && /^\d{4}-\d{2}-\d{2}$/.test(saved) ? saved : edgarDay(WATCH_DAYS + 1);
   }
-  function setCursor(day) {
+  function setCursor(day: IsoDate) {
     store.putKV(BACKFILL_KEY, { day, updatedAt: new Date().toISOString() });
     state.backfill.day = day;
     state.backfill.left = daysBetween(day, BACKFILL_FLOOR);
@@ -342,30 +400,31 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
     }
     state.phase = 'backfill';
     await yieldToUser();
-    let text;
+    let text: string;
     try {
       text = await low.text(dailyIndexUrl(day));
     } catch (err) {
+      const status = (err as { status?: number }).status;
       // no index for a weekend / holiday: SEC answers 404, or 403 for some paths
-      if (err.status === 404 || err.status === 403) {
+      if (status === 404 || status === 403) {
         setCursor(prevDay(day));
         return true;
       }
-      console.warn(`crawl backfill ${day}: ${err.message}`);
+      console.warn(`crawl backfill ${day}: ${(err as Error).message}`);
       return false; // a network hiccup: the same day again in a moment
     }
     const known = new Set((await tickerTable(client)).map((t) => t.cik));
     const rows = parseDailyIndex(text).filter((r) => FORMS.has(r.form) && known.has(r.cik) && !store.hasFiling(r.accession));
     // one filing list serves every filing a company sent that day
-    const byCik = new Map();
-    for (const r of rows) (byCik.get(r.cik) || byCik.set(r.cik, []).get(r.cik)).push(r.accession);
+    const byCik = new Map<number, string[]>();
+    for (const r of rows) (byCik.get(r.cik) || byCik.set(r.cik, []).get(r.cik)!).push(r.accession);
     let saved = 0;
     for (const [cik, accessions] of byCik) {
       await yieldToUser();
       try {
         // no refresh: a list from this week already has a filing this old
         const company = await getCompany(low, String(cik), { maxAge: BACKFILL_SUBMISSIONS_TTL });
-        const got = [];
+        const got: EdgarFiling[] = [];
         for (const acc of accessions) {
           const filing = company.filings.find((f) => f.accession === acc); // absent = not Inline XBRL and not saved, so nothing here can read it
           if (filing && (await saveLatest(company, filing))) got.push(filing);
@@ -377,12 +436,12 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         const redo = new Map(got.map((f) => [f.accession, f]));
         for (const f of got) {
           const i = company.filings.indexOf(f); // newest first
-          if (i > 0) redo.set(company.filings[i - 1].accession, company.filings[i - 1]);
+          if (i > 0) redo.set(company.filings[i - 1]!.accession, company.filings[i - 1]!);
         }
         await scoreSaved([...redo.values()]);
       } catch (err) {
         state.failed++;
-        console.warn(`crawl backfill ${day} CIK ${cik}: ${err.message}`);
+        console.warn(`crawl backfill ${day} CIK ${cik}: ${(err as Error).message}`);
       }
     }
     state.backfill.days++;
@@ -398,7 +457,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
       try {
         await sweep();
       } catch (err) {
-        console.warn(`crawl sweep failed: ${err.message}`);
+        console.warn(`crawl sweep failed: ${(err as Error).message}`);
         await sleep(10 * 60 * 1000);
         continue;
       }
@@ -409,7 +468,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
         try {
           await watch();
         } catch (err) {
-          console.warn(`crawl watch failed: ${err.message}`);
+          console.warn(`crawl watch failed: ${(err as Error).message}`);
         }
         const nextWatch = Date.now() + WATCH_EVERY;
         while (Date.now() < nextWatch && Date.now() < until) {
@@ -417,7 +476,7 @@ export function createCrawler(client, { prefetcher, enabled = true } = {}) {
           try {
             moved = await backfillDay();
           } catch (err) {
-            console.warn(`crawl backfill failed: ${err.message}`);
+            console.warn(`crawl backfill failed: ${(err as Error).message}`);
           }
           // nothing to do (the floor is reached, or the day would not load):
           // idle until the next watch

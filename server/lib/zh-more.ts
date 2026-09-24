@@ -1,9 +1,11 @@
 // Second batch of Traditional-Chinese names / explanations, chosen from the
 // concepts that actually appear in the filings crawled so far (every
-// standard concept used by 20+ filings). Merged over zh.js's table.
+// standard concept used by 20+ filings). Merged over zh.ts's table.
 // Format is the same: [name] or [name, explanation].
 
-export const MORE = {
+import type { ZhTable } from './types.ts';
+
+export const MORE: ZhTable = {
   // ---------- 租賃 ----------
   'us-gaap:OperatingLeaseLiabilityCurrent': ['營業租賃負債－流動', '一年內要付的營業租賃（辦公室、店面等）租金現值'],
   'us-gaap:OperatingLeaseLiability': ['營業租賃負債', '尚未支付的營業租賃租金總現值'],
@@ -853,8 +855,8 @@ export const MORE = {
   'us-gaap:ProceedsFromSaleAndMaturityOfMarketableSecurities': ['出售及到期有價證券收現'],
 };
 
-// Explanations for concepts zh.js already names but does not explain.
-export const DESCRIPTIONS = {
+// Explanations for concepts zh.ts already names but does not explain.
+export const DESCRIPTIONS: Record<string, string> = {
   'us-gaap:LiabilitiesAndStockholdersEquity': '負債加股東權益，恆等於總資產',
   'us-gaap:Liabilities': '流動負債加非流動負債',
   'us-gaap:LiabilitiesNoncurrent': '一年後才需償還的負債',
@@ -1092,7 +1094,7 @@ export const DESCRIPTIONS = {
 
 // Companies' own extension concepts: the largest filers' statements are the
 // most-viewed, so their custom lines are named here by hand.
-export const CUSTOM = {
+export const CUSTOM: ZhTable = {
   // NVIDIA
   'nvda:NonMarketableSecurities': ['非上市證券投資'],
   'nvda:ProceedsFromSaleOfEquitySecurities': ['出售權益證券收現'],

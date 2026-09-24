@@ -3,7 +3,7 @@
 // static build's indexes) is queued here and run one task at a time while
 // the browser is idle and nothing the user asked for is loading. A task is
 // an async function; what it fetches lands in the same caches the real
-// request would use (memo.js, Cache Storage, the server's), so the later
+// request would use (memo.ts, Cache Storage, the server's), so the later
 // click is answered from there.
 //
 //   prefetch(key, task, { tag, priority, delay })
@@ -15,35 +15,52 @@
 //               the user leaves before then)
 //   setBusy(fn) fn() true while a user-requested load is in flight: the
 //               queue waits
-const queue = [];
-const done = new Set();
+/** One queued piece of work, and when it becomes eligible. */
+interface Task {
+  key: string;
+  task: () => Promise<unknown>;
+  tag: string | null;
+  priority: number;
+  at: number;
+  seq: number;
+}
+
+/** How a task is queued: what it belongs to, how soon, how urgently. */
+export interface PrefetchOptions {
+  tag?: string | null;
+  priority?: number;
+  delay?: number;
+}
+
+const queue: Task[] = [];
+const done = new Set<string>();
 let running = false;
-let busy = () => false;
+let busy: () => boolean = () => false;
 let seq = 0;
 
-const saveData = typeof navigator !== 'undefined' && navigator.connection?.saveData;
-const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 300));
+const saveData = typeof navigator !== 'undefined' && (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
+const idle = (fn: () => void) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 300));
 
-export function setBusy(fn) {
+export function setBusy(fn: () => boolean): void {
   busy = fn;
 }
 
-export function prefetch(key, task, { tag = null, priority = 0, delay = 0 } = {}) {
+export function prefetch(key: string, task: () => Promise<unknown>, { tag = null, priority = 0, delay = 0 }: PrefetchOptions = {}): void {
   if (saveData || done.has(key) || queue.some((q) => q.key === key)) return;
   queue.push({ key, task, tag, priority, at: Date.now() + delay, seq: seq++ });
   pump();
 }
 
-export function drop(tag) {
-  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].tag === tag) queue.splice(i, 1);
+export function drop(tag: string): void {
+  for (let i = queue.length - 1; i >= 0; i--) if (queue[i]!.tag === tag) queue.splice(i, 1);
 }
 
-function next() {
+function next(): Task | null {
   const now = Date.now();
   const ready = queue.filter((q) => q.at <= now);
   if (!ready.length) return null;
   ready.sort((a, b) => b.priority - a.priority || a.seq - b.seq);
-  return ready[0];
+  return ready[0]!;
 }
 
 function pump() {

@@ -11,7 +11,7 @@
 // history to the end of last year and fetches this year's bars itself. On the
 // first write of a new year the old head is sealed into <year>.zst.
 //
-// The file format and the split arithmetic are in barFormat.js (shared with
+// The file format and the split arithmetic are in barFormat.ts (shared with
 // the static site, which reads these files in the browser).
 //
 // Location: STOCKSCAN_BARS (default <repo>/data/bars). Series nobody has
@@ -26,36 +26,49 @@ import { store } from './store.ts';
 import { adjusted, decodeBars, diffSeries, encodeBars, same, settledAt, unadjust, yearOf } from './barFormat.ts';
 
 export { mergeDays, settledAt } from './barFormat.ts';
+import type { AdjustEvent, Bar, BarFile, BarMeta, BarSeries, IsoDate } from './types.ts';
+
+/** A saved series as it sits in memory: the finished years apart from the head. */
+interface BarRecord {
+  meta: BarMeta;
+  /** finished calendar year -> its bars, as the files hold them (raw basis) */
+  years: Map<string, Bar[]>;
+  /** this year's bars, raw basis */
+  head: Bar[];
+  fetchedAt: string | null;
+  /** the current-basis series, built on demand */
+  view: BarSeries | null;
+}
 
 const LRU_MAX = 400; // decoded series kept in memory (~100 KB each)
 const MAX_AGE = 30 * 24 * 3600 * 1000; // a series nobody asked for in a month goes at startup
 const ZSTD = { params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } };
 
-let root = null;
-const lru = new Map(); // "src:SYMBOL" -> { meta, years: Map<year, raw bars>, head: raw bars, fetchedAt, view } (insertion order = recency)
+let root: string | null = null;
+const lru = new Map<string, BarRecord>(); // "src:SYMBOL" -> record (insertion order = recency)
 
-const safe = (symbol) => String(symbol).toUpperCase().replace(/[^A-Z0-9.\-=^]/gi, '_');
-const dir = (src, symbol) => path.join(root, src, safe(symbol));
-const legacyFile = (src, symbol) => path.join(root, src, `${safe(symbol)}.json.br`);
+const safe = (symbol: string) => String(symbol).toUpperCase().replace(/[^A-Z0-9.\-=^]/gi, '_');
+const dir = (src: string, symbol: string) => path.join(root!, src, safe(symbol));
+const legacyFile = (src: string, symbol: string) => path.join(root!, src, `${safe(symbol)}.json.br`);
 const thisYear = () => new Date().toISOString().slice(0, 4);
-const pack = (obj) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(obj)), ZSTD);
-const unpack = (buf) => JSON.parse(zlib.zstdDecompressSync(buf).toString('utf8'));
-const byDate = (a, b) => (a.date < b.date ? -1 : 1);
+const pack = (obj: unknown) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(obj)), ZSTD);
+const unpack = <T,>(buf: Buffer): T => JSON.parse(zlib.zstdDecompressSync(buf).toString('utf8'));
+const byDate = (a: Bar, b: Bar) => (a.date < b.date ? -1 : 1);
 
-function remember(key, rec) {
+function remember(key: string, rec: BarRecord): BarRecord {
   lru.delete(key);
   lru.set(key, rec);
-  if (lru.size > LRU_MAX) lru.delete(lru.keys().next().value);
+  if (lru.size > LRU_MAX) lru.delete(lru.keys().next().value!);
   return rec;
 }
 
-function writeAtomic(file, buf) {
+function writeAtomic(file: string, buf: Buffer | string) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, buf);
   fs.renameSync(tmp, file);
 }
-const unlinkQuiet = (f) => {
+const unlinkQuiet = (f: string) => {
   try {
     fs.unlinkSync(f);
   } catch {
@@ -65,28 +78,28 @@ const unlinkQuiet = (f) => {
 
 // ---- files ---------------------------------------------------------------
 // { meta, years: Map<finished year, raw bars>, head: raw bars of this year, fetchedAt, view: null }
-function load(src, symbol) {
+function load(src: string, symbol: string): BarRecord | null {
   const d = dir(src, symbol);
-  let meta;
+  let meta: BarMeta;
   try {
     meta = JSON.parse(fs.readFileSync(path.join(d, 'meta.json'), 'utf8'));
   } catch {
     return null;
   }
-  const years = new Map();
-  const head = [];
-  let fetchedAt = null;
+  const years = new Map<string, Bar[]>();
+  const head: Bar[] = [];
+  let fetchedAt: string | null = null;
   const current = thisYear();
   try {
     for (const name of fs.readdirSync(d)) {
       const m = /^(\d{4})\.zst$/.exec(name);
       if (m) {
-        const bars = decodeBars(unpack(fs.readFileSync(path.join(d, name))));
+        const bars = decodeBars(unpack<BarFile>(fs.readFileSync(path.join(d, name))));
         // a year file of the running year: the layout before head.zst - becomes the head on the next write
-        if (m[1] >= current) head.push(...bars);
-        else years.set(m[1], bars);
+        if (m[1]! >= current) head.push(...bars);
+        else years.set(m[1]!, bars);
       } else if (name === 'head.zst') {
-        const h = unpack(fs.readFileSync(path.join(d, name)));
+        const h = unpack<BarFile & { fetchedAt?: string }>(fs.readFileSync(path.join(d, name)));
         fetchedAt = h.fetchedAt || null;
         head.push(...decodeBars(h));
       }
@@ -100,26 +113,26 @@ function load(src, symbol) {
   return { meta, years, head, fetchedAt, view: null };
 }
 // every bar the record holds, oldest first, as the files have them
-function rawBars(rec) {
-  const raw = [];
-  for (const year of [...rec.years.keys()].sort()) raw.push(...rec.years.get(year));
+function rawBars(rec: BarRecord): Bar[] {
+  const raw: Bar[] = [];
+  for (const year of [...rec.years.keys()].sort()) raw.push(...rec.years.get(year)!);
   raw.push(...rec.head);
   return raw;
 }
 // the record as a series in the source's current basis (what callers see)
-function view(rec) {
+function view(rec: BarRecord): BarSeries {
   if (!rec.view) {
     const { fetchedAt: _old, years: _years, ...meta } = rec.meta;
-    rec.view = { ...meta, fetchedAt: rec.fetchedAt, days: adjusted(rawBars(rec), rec.meta.adjust) };
+    rec.view = { ...meta, fetchedAt: rec.fetchedAt, days: adjusted(rawBars(rec), rec.meta.adjust) as Bar[] };
   }
   return rec.view;
 }
-const isUnsettled = (rec) => {
+const isUnsettled = (rec: BarRecord): IsoDate | null => {
   const last = view(rec).days.at(-1);
-  return last && Date.parse(rec.fetchedAt || 0) < settledAt(last.date) ? last.date : null;
+  return last && Date.parse(rec.fetchedAt || '') < settledAt(last.date) ? last.date : null;
 };
 
-export function openBarStore(d = process.env.STOCKSCAN_BARS || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'bars')) {
+export function openBarStore(d: string = process.env.STOCKSCAN_BARS || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'bars')): string {
   root = d;
   fs.mkdirSync(root, { recursive: true });
   migrateFromKv();
@@ -135,9 +148,9 @@ function migrateFromKv() {
   let n = 0;
   for (const key of keys) {
     const m = /^bars:([a-z0-9]+):(.+)$/.exec(key);
-    const saved = m && store.getKV(key);
+    const saved = m && store.getKV<BarSeries>(key);
     if (saved?.value?.days?.length) {
-      barStore.put(m[1], m[2], saved.value);
+      barStore.put(m![1]!, m![2]!, saved.value);
       n++;
     }
     store.deleteKV(key);
@@ -149,7 +162,7 @@ function migrateFromKv() {
 // Earlier layouts, converted in the background (and on first read):
 //   <SYMBOL>.json.br            one brotli'd row JSON per symbol
 //   <SYMBOL>/<this year>.zst    the running year as a year file, fetchedAt in meta.json
-function readLegacy(f) {
+function readLegacy(f: string): BarSeries | null {
   try {
     return JSON.parse(zlib.brotliDecompressSync(fs.readFileSync(f)).toString('utf8'));
   } catch {
@@ -157,13 +170,13 @@ function readLegacy(f) {
   }
 }
 function migrateLayout() {
-  const todo = [];
+  const todo: [string, string, 'br' | 'year'][] = [];
   const current = `${thisYear()}.zst`;
-  for (const src of fs.readdirSync(root, { withFileTypes: true })) {
+  for (const src of fs.readdirSync(root!, { withFileTypes: true })) {
     if (!src.isDirectory()) continue;
-    for (const e of fs.readdirSync(path.join(root, src.name), { withFileTypes: true })) {
+    for (const e of fs.readdirSync(path.join(root!, src.name), { withFileTypes: true })) {
       if (e.name.endsWith('.json.br')) todo.push([src.name, e.name.slice(0, -'.json.br'.length), 'br']);
-      else if (e.isDirectory() && fs.existsSync(path.join(root, src.name, e.name, current))) todo.push([src.name, e.name, 'year']);
+      else if (e.isDirectory() && fs.existsSync(path.join(root!, src.name, e.name, current))) todo.push([src.name, e.name, 'year']);
     }
   }
   if (!todo.length) return;
@@ -174,7 +187,7 @@ function migrateLayout() {
       console.log('bars: 轉檔完成');
       return;
     }
-    const [src, symbol, kind] = todo[i++];
+    const [src, symbol, kind] = todo[i++]!;
     try {
       if (kind === 'br') {
         const f = legacyFile(src, symbol);
@@ -186,7 +199,7 @@ function migrateLayout() {
         if (rec) save(src, symbol, rec);
       }
     } catch (err) {
-      console.warn(`bars: ${src}/${symbol} 轉檔失敗：${err.message}`);
+      console.warn(`bars: ${src}/${symbol} 轉檔失敗：${(err as Error).message}`);
     }
     setTimeout(step, 20).unref();
   };
@@ -197,10 +210,10 @@ function migrateLayout() {
 function sweep() {
   const cutoff = Date.now() - MAX_AGE;
   let n = 0;
-  for (const src of fs.readdirSync(root, { withFileTypes: true })) {
+  for (const src of fs.readdirSync(root!, { withFileTypes: true })) {
     if (!src.isDirectory()) continue;
-    for (const name of fs.readdirSync(path.join(root, src.name), { withFileTypes: true })) {
-      const f = path.join(root, src.name, name.name);
+    for (const name of fs.readdirSync(path.join(root!, src.name), { withFileTypes: true })) {
+      const f = path.join(root!, src.name, name.name);
       try {
         if (name.isDirectory()) {
           if (fs.statSync(path.join(f, 'meta.json')).mtimeMs < cutoff) {
@@ -223,7 +236,7 @@ function sweep() {
 // changed) and meta.json only when its content changed. Bars of a finished
 // year still sitting in the head (the year turned since the last write) are
 // sealed into their year file first.
-function save(src, symbol, rec, dirtyYears = new Set()) {
+function save(src: string, symbol: string, rec: BarRecord, dirtyYears: Set<string> = new Set()) {
   const d = dir(src, symbol);
   const current = thisYear();
   const sealed = rec.head.filter((b) => yearOf(b) < current);
@@ -235,9 +248,9 @@ function save(src, symbol, rec, dirtyYears = new Set()) {
     rec.head = rec.head.filter((b) => yearOf(b) >= current);
   }
   for (const year of dirtyYears) writeAtomic(path.join(d, `${year}.zst`), pack(encodeBars(rec.years.get(year) || [])));
-  const meta = { symbol: rec.meta.symbol, source: rec.meta.source, currency: rec.meta.currency ?? null, resolved: rec.meta.resolved ?? null, years: [...rec.years.keys()].sort(), adjust: rec.meta.adjust || [] };
+  const meta: BarMeta = { symbol: rec.meta.symbol, source: rec.meta.source, currency: rec.meta.currency ?? null, resolved: rec.meta.resolved ?? null, years: [...rec.years.keys()].sort(), adjust: rec.meta.adjust || [] };
   const json = JSON.stringify(meta);
-  let onDisk = null;
+  let onDisk: string | null = null;
   try {
     onDisk = fs.readFileSync(path.join(d, 'meta.json'), 'utf8');
   } catch {
@@ -249,9 +262,9 @@ function save(src, symbol, rec, dirtyYears = new Set()) {
   unlinkQuiet(path.join(d, `${current}.zst`)); // the previous layout's file for the running year
   rec.view = null;
 }
-function groupByYear(days) {
-  const out = new Map();
-  for (const b of days) (out.get(yearOf(b)) || out.set(yearOf(b), []).get(yearOf(b))).push(b);
+function groupByYear(days: readonly Bar[]): Map<string, Bar[]> {
+  const out = new Map<string, Bar[]>();
+  for (const b of days) (out.get(yearOf(b)) || out.set(yearOf(b), []).get(yearOf(b))!).push(b);
   return out;
 }
 
@@ -259,7 +272,7 @@ function groupByYear(days) {
 // record, keeping whatever else that year already holds (the incoming bar
 // wins) and storing them raw. A finished year is marked dirty: its file has
 // to be rewritten, which is what the split record exists to avoid.
-function rewriteYear(rec, year, rows, current, dirtyYears) {
+function rewriteYear(rec: BarRecord, year: string, rows: readonly Bar[], current: string, dirtyYears: Set<string>) {
   const inHead = year >= current;
   const merged = new Map((inHead ? rec.head.filter((b) => yearOf(b) === year) : rec.years.get(year) || []).map((b) => [b.date, b]));
   for (const b of rows) merged.set(b.date, unadjust(b, rec.meta.adjust));
@@ -273,13 +286,13 @@ function rewriteYear(rec, year, rows, current, dirtyYears) {
 }
 
 // The bars the record would now hand back differently from the source.
-const offBy = (rec, incoming) => {
+const offBy = (rec: BarRecord, incoming: readonly Bar[]): Bar[] => {
   const saved = new Map(view(rec).days.map((b) => [b.date, b]));
-  return incoming.filter((b) => saved.has(b.date) && !same(saved.get(b.date).close, b.close));
+  return incoming.filter((b) => saved.has(b.date) && !same(saved.get(b.date)!.close, b.close));
 };
 
 // bytes of a file or of everything under a directory
-function du(f) {
+function du(f: string): number {
   const st = fs.statSync(f);
   if (!st.isDirectory()) return st.size;
   let bytes = 0;
@@ -294,16 +307,16 @@ function du(f) {
 }
 
 export const barStore = {
-  get file() {
+  get file(): string | null {
     return root;
   },
   // fetchedAt of a saved series (is it fresh?) without decoding its bars, or null
-  fetchedAt(src, symbol) {
+  fetchedAt(src: string, symbol: string): string | null {
     const hit = lru.get(`${src}:${String(symbol).toUpperCase()}`);
     if (hit) return hit.fetchedAt;
     const d = dir(src, symbol);
     try {
-      return unpack(fs.readFileSync(path.join(d, 'head.zst'))).fetchedAt || null;
+      return unpack<{ fetchedAt?: string }>(fs.readFileSync(path.join(d, 'head.zst'))).fetchedAt || null;
     } catch {
       /* no head yet */
     }
@@ -316,7 +329,7 @@ export const barStore = {
   // the saved series of a symbol from one source (current basis), or null.
   // keep: false leaves it out of the LRU (a crawl of thousands of symbols
   // must not push the user's baskets out of it).
-  get(src, symbol, { keep = true } = {}) {
+  get(src: string, symbol: string, { keep = true }: { keep?: boolean } = {}): BarSeries | null {
     const key = `${src}:${String(symbol).toUpperCase()}`;
     const hit = lru.get(key);
     if (hit) return view(keep ? remember(key, hit) : hit);
@@ -324,7 +337,7 @@ export const barStore = {
     if (!rec) {
       const old = readLegacy(legacyFile(src, symbol));
       if (!old?.days?.length) return null;
-      rec = barStore.put(src, symbol, old, { record: true, keep });
+      rec = barStore.put(src, symbol, old, { record: true, keep }) as BarRecord;
       unlinkQuiet(legacyFile(src, symbol));
       return view(rec);
     }
@@ -339,14 +352,14 @@ export const barStore = {
   // Save a series in the source's current basis. Only what changed is
   // written: the head (this year), a split as one line of meta, a data
   // revision as the finished years it touches.
-  put(src, symbol, value, { record = false, keep = true } = {}) {
+  put(src: string, symbol: string, value: BarSeries, { record = false, keep = true }: { record?: boolean; keep?: boolean } = {}): BarSeries | BarRecord {
     const key = `${src}:${String(symbol).toUpperCase()}`;
     const { days, fetchedAt, incremental: _n, ...meta } = value;
     const incoming = [...days].sort(byDate);
     const prev = lru.get(key) || load(src, symbol);
-    const rec = prev || { meta: { adjust: [] }, years: new Map(), head: [], fetchedAt: null, view: null };
+    const rec: BarRecord = prev || { meta: { adjust: [] } as unknown as BarMeta, years: new Map(), head: [], fetchedAt: null, view: null };
     rec.meta = { ...rec.meta, symbol: meta.symbol || rec.meta.symbol, source: meta.source || rec.meta.source, currency: meta.currency ?? rec.meta.currency ?? null, resolved: meta.resolved ?? rec.meta.resolved ?? null };
-    const dirty = new Set(); // years whose bars change
+    const dirty = new Set<string>(); // years whose bars change
     if (prev) {
       const { split, dates } = diffSeries(view(prev).days, incoming, isUnsettled(prev));
       if (split) {
@@ -373,7 +386,7 @@ export const barStore = {
     // a dirty year is rebuilt from the saved bars plus the incoming ones (incoming wins), stored raw
     const current = thisYear();
     const grouped = groupByYear(incoming);
-    const dirtyYears = new Set();
+    const dirtyYears = new Set<string>();
     for (const year of dirty) rewriteYear(rec, year, grouped.get(year) || [], current, dirtyYears);
     // A split is one line of meta and the bars before its date are multiplied
     // on the way out - right only while that reproduces what the source
@@ -395,9 +408,9 @@ export const barStore = {
   // moved to the OTC market - go from disk (the caller names the benchmark
   // ETFs, which are in no ticker table). A short list is a truncated
   // download, not an empty market: it purges nothing.
-  purgeExcept(symbols) {
+  purgeExcept(symbols: readonly (string | null | undefined)[] | null | undefined): { symbols: number; bytes: number } | null {
     if (!root) return null;
-    const keep = new Set((symbols || []).filter(Boolean).map((x) => safe(x)));
+    const keep = new Set((symbols || []).filter((x): x is string => !!x).map((x) => safe(x)));
     if (keep.size < 100) return null;
     let n = 0;
     let bytes = 0;
@@ -419,10 +432,10 @@ export const barStore = {
     }
     return { symbols: n, bytes };
   },
-  stats() {
+  stats(): { files: number; bytes: number; inMemory: number } {
     let files = 0;
     let bytes = 0;
-    const walk = (d) => {
+    const walk = (d: string) => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const f = path.join(d, e.name);
         if (e.isDirectory()) walk(f);

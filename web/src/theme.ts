@@ -5,15 +5,18 @@
 // tells the charts (which draw their own colours) which side they are on.
 import { computed, ref, watch } from 'vue';
 
-export const THEMES = ['auto', 'light', 'dark'];
+/** What the header offers: follow the system, or pin one. */
+export type Theme = 'auto' | 'light' | 'dark';
+
+export const THEMES: Theme[] = ['auto', 'light', 'dark'];
 const KEY = 'stockscan.theme';
-let saved = null;
+let saved: string | null = null;
 try {
   saved = localStorage.getItem(KEY);
 } catch {
   /* no storage */
 }
-export const theme = ref(THEMES.includes(saved) ? saved : 'auto');
+export const theme = ref<Theme>(THEMES.includes(saved as Theme) ? (saved as Theme) : 'auto');
 
 const media = window.matchMedia('(prefers-color-scheme: dark)');
 const systemDark = ref(media.matches);
@@ -36,4 +39,4 @@ watch(
 );
 
 // a colour token's current value, for the charts
-export const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+export const cssVar = (name: string): string => getComputedStyle(document.documentElement).getPropertyValue(name).trim();

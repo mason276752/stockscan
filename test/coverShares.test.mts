@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { coverSharesOf, parseInlineXbrl } from '../server/lib/ixbrl.ts';
 import { coverSharesFor, indexCoverShares, mergeCoverShareIndexes } from '../server/lib/coverShares.ts';
+import type { Concept, IsoDate, XbrlContext, XbrlFact } from '../server/lib/types.ts';
 
-const context = (id, { entity = '0001652044', instant = '2026-07-15', dimensions = {} } = {}) => ({ id, entity, instant, start: null, end: null, dimensions });
-const fact = (contextRef, value, name = 'dei:EntityCommonStockSharesOutstanding') => ({ name, contextRef, unitRef: 'shares', numeric: true, value });
+const context = (id: string, { entity = '0001652044', instant = '2026-07-15', dimensions = {} }: { entity?: string; instant?: IsoDate; dimensions?: Record<Concept, Concept> } = {}): XbrlContext => ({ id, entity, instant, start: null, end: null, dimensions });
+const fact = (contextRef: string, value: number, name: Concept = 'dei:EntityCommonStockSharesOutstanding') => ({ name, contextRef, unitRef: 'shares', numeric: true, value }) as XbrlFact;
 
-const shares = (contexts, facts) => coverSharesOf({ contexts, units: { shares: 'shares' }, facts });
+const shares = (contexts: Record<string, XbrlContext>, facts: XbrlFact[]) => coverSharesOf({ contexts, units: { shares: 'shares' }, facts });
 
 test('parser retains a scaled cover class sum as compact metadata', () => {
   const doc = parseInlineXbrl(`<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL" xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi" xmlns:dei="http://x">
@@ -55,7 +56,7 @@ test('parser DEI cover facts beat same-filing GAAP balance-sheet facts', () => {
     { accession: 'q2', end: '2026-06-30', value: 12088000000, source: 'cover', concept: 'us-gaap:CommonStockSharesOutstanding', basis: 'aggregate' },
     { accession: 'q2', end: '2026-07-15', value: 12230000000, source: 'cover', concept: 'dei:EntityCommonStockSharesOutstanding', basis: 'class-sum' },
   ]);
-  const selected = coverSharesFor(index, { sources: ['q2'], periodEnd: '2026-06-30' });
+  const selected = coverSharesFor(index, { sources: ['q2'], periodEnd: '2026-06-30' })!;
   assert.equal(selected.value, 12230000000);
   assert.equal(selected.concept, 'dei:EntityCommonStockSharesOutstanding');
 });
@@ -65,14 +66,14 @@ test('exact accession ignores a comparative companyconcept fact', () => {
     { accession: 'q2', end: '2025-12-31', value: 12088000000, source: 'companyconcept' },
     { accession: 'q2', end: '2026-06-30', value: 12230000000, source: 'companyconcept' },
   ]);
-  assert.equal(coverSharesFor(index, { sources: ['q2'], periodEnd: '2026-06-30' }).value, 12230000000);
+  assert.equal(coverSharesFor(index, { sources: ['q2'], periodEnd: '2026-06-30' })!.value, 12230000000);
 });
 
 test('share index prefers parsed records and refuses a conflicting date fallback', () => {
   const parsed = indexCoverShares([{ accession: 'a', end: '2026-07-15', value: 120, source: 'cover', basis: 'class-sum' }]);
   const api = indexCoverShares([{ accession: 'a', end: '2026-07-15', value: 70, source: 'companyconcept', basis: 'dei' }]);
   const index = mergeCoverShareIndexes(parsed, api);
-  assert.equal(coverSharesFor(index, { sources: ['a'], periodEnd: '2026-06-30' }).value, 120);
+  assert.equal(coverSharesFor(index, { sources: ['a'], periodEnd: '2026-06-30' })!.value, 120);
   const conflict = indexCoverShares([
     { accession: 'b', end: '2026-07-15', value: 120, source: 'cover' },
     { accession: 'c', end: '2026-07-15', value: 70, source: 'cover' },

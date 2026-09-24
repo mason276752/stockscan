@@ -15,7 +15,7 @@ import { openStore, requireVersion } from '../lib/store.ts';
 import { SCRAPE_VERSION } from '../lib/scrape.ts';
 import { rescoreAll, scoreUnscored } from '../lib/score.ts';
 
-const arg = (name) => process.argv.find((x, i, a) => a[i - 1] === name) || null;
+const arg = (name: string) => process.argv.find((x, i, a) => a[i - 1] === name) || null;
 const t0 = Date.now();
 const secs = () => ((Date.now() - t0) / 1000).toFixed(0);
 openStore();

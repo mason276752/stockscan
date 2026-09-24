@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { conceptOf, dateSnapper, deraResult, mainCurrency, ownPrefixOf, parseSegments, unitOf } from '../server/lib/dera.ts';
 import { reclassify } from '../server/lib/statementTypes.ts';
 import { scoreFiling } from '../server/lib/scoreModel.ts';
+import type { DeraFiling, DeraInput, DeraNum, DeraPre, DeraSub, DeraTag } from '../server/lib/dera.ts';
+import type { PrimaryType } from '../server/lib/types.ts';
 
 test('a tag names a concept the rest of the app recognises', () => {
   assert.equal(conceptOf('Assets', 'us-gaap/2025', 'tst'), 'us-gaap:Assets');
-  // SEC's datasets call the IFRS taxonomy `ifrs`; the filings (and concepts.js) call it ifrs-full
+  // SEC's datasets call the IFRS taxonomy `ifrs`; the filings (and concepts.ts) call it ifrs-full
   assert.equal(conceptOf('Equity', 'ifrs/2025', 'tst'), 'ifrs-full:Equity');
   assert.equal(conceptOf('Revenue', 'dei/2025', 'tst'), 'dei:Revenue');
   // an extension tag is versioned by the accession itself: it belongs to the filer
@@ -18,7 +20,7 @@ test('a tag names a concept the rest of the app recognises', () => {
 
 test('the unit says what kind of number it is, which num.txt alone does not', () => {
   // a per-share amount is USD in num.txt like any other; only tag.txt's
-  // datatype tells them apart, and quarters.js reads the '/' to know it
+  // datatype tells them apart, and quarters.ts reads the '/' to know it
   // cannot subtract one period from another exactly
   assert.equal(unitOf('USD', 'perShare'), 'USD/shares');
   assert.equal(unitOf('USD', 'monetary'), 'USD');
@@ -49,13 +51,13 @@ test('a rounded date snaps back onto the period end the company really filed', (
 // ---------------------------------------------------------------------------
 // One small 10-K, the way a quarter's files carry it.
 
-const SUB = {
+const SUB: DeraSub = {
   name: 'TEST CO',
   instance: 'tst-20211231.xml',
   fy: '2021',
   fp: 'FY',
 };
-const FILING = {
+const FILING: DeraFiling = {
   cik: 1,
   accession: '0000000000-22-000001',
   form: '10-K',
@@ -65,7 +67,7 @@ const FILING = {
   primaryDocument: 'tst-20211231.htm',
   documentUrl: 'https://example.invalid/tst-20211231.htm',
 };
-const TAGS = {
+const TAGS: Record<string, string> = {
   Assets: 'monetary',
   Liabilities: 'monetary',
   StockholdersEquity: 'monetary',
@@ -75,13 +77,13 @@ const TAGS = {
   CashAndCashEquivalentsAtCarryingValue: 'monetary',
   NetCashProvidedByUsedInOperatingActivities: 'monetary',
 };
-const tagOf = (tag) => ({
+const tagOf = (tag: string): DeraTag => ({
   datatype: TAGS[tag] || 'monetary',
   tlabel: `${tag} (standard)`,
   doc: `what ${tag} means`,
 });
 
-const num = (tag, ddate, qtrs, value, extra = {}) => ({
+const num = (tag: string, ddate: string, qtrs: number, value: number, extra: Partial<DeraNum> = {}): DeraNum => ({
   tag,
   version: 'us-gaap/2021',
   ddate,
@@ -92,7 +94,7 @@ const num = (tag, ddate, qtrs, value, extra = {}) => ({
   value: String(value),
   ...extra,
 });
-const pre = (report, line, stmt, tag, plabel, extra = {}) => ({
+const pre = (report: number, line: number, stmt: string, tag: string, plabel: string, extra: Partial<DeraPre> = {}): DeraPre => ({
   report,
   line,
   stmt,
@@ -131,7 +133,7 @@ const PRE = [
   pre(4, 3, 'CF', 'CashAndCashEquivalentsAtCarryingValue', 'Cash at end of period'),
 ];
 
-const build = (over = {}) =>
+const build = (over: Partial<DeraInput> = {}) =>
   deraResult({
     filing: FILING,
     sub: SUB,
@@ -145,9 +147,9 @@ const build = (over = {}) =>
   });
 
 test('a filing comes out in the shape the store saves and the app reads', () => {
-  const r = build();
+  const r = build()!;
   // in the header, so store.filingHeader can spot a stand-in without
-  // unpacking the statements (scrape.js isStandIn)
+  // unpacking the statements (scrape.ts isStandIn)
   assert.equal(r.filing.source, 'dera');
   assert.equal(r.filing.dataset, '2022q1');
   // the header is EDGAR's, not the dataset's
@@ -159,13 +161,13 @@ test('a filing comes out in the shape the store saves and the app reads', () => 
     r.allStatements.map((s) => s.type),
     ['income_statement', 'balance_sheet', 'cash_flow'],
   );
-  assert.ok(r.statements.balance_sheet && r.statements.income_statement && r.statements.cash_flow);
-  assert.equal(r.statements.equity, null);
+  assert.ok(r.statements.balance_sheet! && r.statements.income_statement! && r.statements.cash_flow!);
+  assert.equal(r.statements.equity!, null);
   assert.equal(r.stats.statementRoles, 3);
 });
 
 test('the titles survive reclassify(), which re-runs the classifier on every load', () => {
-  const r = reclassify(build());
+  const r = reclassify(build()!);
   assert.deepEqual(
     r.allStatements.map((s) => s.type),
     ['income_statement', 'balance_sheet', 'cash_flow'],
@@ -173,14 +175,14 @@ test('the titles survive reclassify(), which re-runs the classifier on every loa
 });
 
 test("dates: the period end is EDGAR's, and a duration starts the day after the period before", () => {
-  const r = build();
-  const bs = r.statements.balance_sheet;
+  const r = build()!;
+  const bs = r.statements.balance_sheet!;
   assert.deepEqual(
     bs.columns.map((c) => c.period.instant),
     ['2021-12-28', '2020-12-29'],
     'newest first, both snapped',
   );
-  const is = r.statements.income_statement;
+  const is = r.statements.income_statement!;
   assert.deepEqual(
     is.columns.map((c) => c.period),
     [{ start: '2020-12-30', end: '2021-12-28' }],
@@ -189,26 +191,26 @@ test("dates: the period end is EDGAR's, and a duration starts the day after the 
 });
 
 test("a co-registrant's numbers are left out", () => {
-  const bs = build().statements.balance_sheet;
-  const assets = bs.lineItems.find((li) => li.concept === 'us-gaap:Assets');
+  const bs = build()!.statements.balance_sheet!;
+  const assets = bs.lineItems.find((li) => li.concept === 'us-gaap:Assets')!;
   assert.deepEqual(
     Object.values(assets.values)
       .map((v) => v.value)
-      .sort((a, b) => b - a),
+      .sort((a, b) => (b as number) - (a as number)),
     [1000, 900],
   );
 });
 
 test('units come from the datatype, so per-share amounts are not treated as money', () => {
-  const is = build().statements.income_statement;
-  const eps = is.lineItems.find((li) => li.concept === 'us-gaap:EarningsPerShareDiluted');
-  assert.equal(Object.values(eps.values)[0].unit, 'USD/shares');
-  assert.equal(Object.values(is.lineItems.find((li) => li.concept === 'us-gaap:Revenues').values)[0].unit, 'USD');
+  const is = build()!.statements.income_statement!;
+  const eps = is.lineItems.find((li) => li.concept === 'us-gaap:EarningsPerShareDiluted')!;
+  assert.equal(Object.values(eps.values)[0]!.unit, 'USD/shares');
+  assert.equal(Object.values(is.lineItems.find((li) => li.concept === 'us-gaap:Revenues')!.values)[0].unit, 'USD');
 });
 
 test("the filer's label is the row label, SEC's is kept beside it", () => {
-  const bs = build().statements.balance_sheet;
-  const assets = bs.lineItems.find((li) => li.concept === 'us-gaap:Assets');
+  const bs = build()!.statements.balance_sheet!;
+  const assets = bs.lineItems.find((li) => li.concept === 'us-gaap:Assets')!;
   assert.equal(assets.label, 'Total assets');
   assert.equal(assets.labelStandard, 'Assets (standard)');
   assert.equal(assets.documentation, 'what Assets means');
@@ -217,16 +219,16 @@ test("the filer's label is the row label, SEC's is kept beside it", () => {
 });
 
 test('the cash roll-forward keeps one instant on each of its two rows', () => {
-  const cf = build().statements.cash_flow;
+  const cf = build()!.statements.cash_flow!;
   const rows = cf.lineItems.filter((li) => li.concept === 'us-gaap:CashAndCashEquivalentsAtCarryingValue');
   assert.equal(rows.length, 2);
-  const at = (li) => Object.keys(li.values).map((id) => cf.columns.find((c) => c.id === id)?.period.instant);
-  assert.deepEqual(at(rows[0]), ['2020-12-29'], 'beginning of period: the day before the year starts');
-  assert.deepEqual(at(rows[1]), ['2021-12-28'], 'end of period');
+  const at = (li: (typeof cf.lineItems)[number]) => Object.keys(li.values).map((id) => cf.columns.find((c) => c.id === id)?.period.instant);
+  assert.deepEqual(at(rows[0]!), ['2020-12-29'], 'beginning of period: the day before the year starts');
+  assert.deepEqual(at(rows[1]!), ['2021-12-28'], 'end of period');
 });
 
 test('the rebuild scores like any other saved filing', () => {
-  const s = scoreFiling(build());
+  const s = scoreFiling(build()!)!;
   assert.equal(s.basis.kind, 'annual');
   assert.equal(s.values.totalAssets, 1000);
   assert.equal(s.values.revenueAnn, 500);
@@ -272,8 +274,8 @@ test('a convenience translation does not overwrite the currency the filer report
     },
   ];
   assert.equal(mainCurrency(num, tagOf), 'CNY');
-  const r = build({ num });
-  const value = (st, concept) => Object.values(r.statements[st].lineItems.find((li) => li.concept === concept).values)[0].value;
+  const r = build({ num })!;
+  const value = (st: PrimaryType, concept: string) => Object.values(r.statements[st]!.lineItems.find((li) => li.concept === concept)!.values)[0]!.value;
   assert.equal(value('balance_sheet', 'us-gaap:Assets'), 1000);
   assert.equal(value('income_statement', 'us-gaap:Revenues'), 500);
   // a per-share amount carries a currency too, so the same rule holds

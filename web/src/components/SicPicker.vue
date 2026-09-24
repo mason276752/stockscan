@@ -2,12 +2,24 @@
 // A searchable SIC picker: type a code, a Chinese name or the SEC English
 // title, pick from the matches. v-model is the 4-digit code ('' = none).
 import { computed, ref, watch } from 'vue';
+import type { PropType } from 'vue';
 import { isZh, t } from '../i18n';
+import type { SicDivision } from '../../../server/lib/sic.ts';
+
+/** One SIC code with the company counts the browse index carries. */
+interface SicOption {
+  code: string;
+  zh: string | null;
+  title: string | null;
+  division: string | null;
+  listed?: number;
+  total?: number;
+}
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
-  codes: { type: Array, default: () => [] }, // [{ code, zh, title, division, listed, total }]
-  divisions: { type: Array, default: () => [] }, // [{ id, zh }]
+  codes: { type: Array as PropType<SicOption[]>, default: () => [] },
+  divisions: { type: Array as PropType<SicDivision[]>, default: () => [] },
   placeholder: { type: String, default: '' },
   countKey: { type: String, default: 'listed' },
 });
@@ -16,8 +28,8 @@ const emit = defineEmits(['update:modelValue']);
 const query = ref('');
 const open = ref(false);
 const active = ref(0);
-const nameOf = (c) => (isZh.value ? c.zh || c.title : c.title || c.zh);
-const label = (c) => `${c.code} ${nameOf(c)}`;
+const nameOf = (c: SicOption) => (isZh.value ? c.zh || c.title : c.title || c.zh);
+const label = (c: SicOption) => `${c.code} ${nameOf(c)}`;
 const chosen = computed(() => props.codes.find((c) => c.code === props.modelValue) || null);
 watch(chosen, (c) => (query.value = c ? label(c) : ''), { immediate: true });
 
@@ -26,7 +38,7 @@ const matches = computed(() => {
   if (chosen.value && q === label(chosen.value).toLowerCase()) return [];
   // Chinese: every character of the query somewhere in the name ("製藥" finds 藥品製劑); Latin: substring
   const cjk = [...q].filter((ch) => /[\u3400-\u9fff]/.test(ch));
-  const hit = (c) => {
+  const hit = (c: SicOption) => {
     if (!q) return true;
     if (c.code.startsWith(q) || (c.title || '').toLowerCase().includes(q)) return true;
     const zh = c.zh || '';
@@ -38,12 +50,12 @@ const matches = computed(() => {
   rows.sort((a, b) => Number((b.zh || '').toLowerCase().includes(q) || b.code.startsWith(q)) - Number((a.zh || '').toLowerCase().includes(q) || a.code.startsWith(q)));
   return rows.slice(0, 40);
 });
-const divisionName = (id) => {
+const divisionName = (id: string | null) => {
   const d = props.divisions.find((x) => x.id === id);
   return (d && (isZh.value ? d.zh : d.en || d.zh)) || id;
 };
 
-function choose(c) {
+function choose(c: SicOption) {
   emit('update:modelValue', c.code);
   query.value = label(c);
   open.value = false;
@@ -58,11 +70,11 @@ function onInput() {
   active.value = 0;
   if (!query.value.trim() && props.modelValue) emit('update:modelValue', '');
 }
-function onKey(e) {
+function onKey(e: KeyboardEvent) {
   if (!open.value || !matches.value.length) return;
   if (e.key === 'ArrowDown') active.value = (active.value + 1) % matches.value.length;
   else if (e.key === 'ArrowUp') active.value = (active.value - 1 + matches.value.length) % matches.value.length;
-  else if (e.key === 'Enter') choose(matches.value[active.value]);
+  else if (e.key === 'Enter') choose(matches.value[active.value]!);
   else if (e.key === 'Escape') open.value = false;
   else return;
   e.preventDefault();
@@ -84,7 +96,7 @@ function onBlur() {
       <li v-for="(c, i) in matches" :key="c.code" :class="{ active: i === active }" @mousedown.prevent="choose(c)">
         <span class="mono">{{ c.code }}</span>
         <span class="name">{{ nameOf(c) }}<span v-if="isZh && c.zh && c.title" class="muted en"> {{ c.title }}</span></span>
-        <span class="muted small">{{ divisionName(c.division) }} · {{ c[countKey] ?? c.listed }}</span>
+        <span class="muted small">{{ divisionName(c.division) }} · {{ (c as unknown as Record<string, number>)[countKey] ?? c.listed }}</span>
       </li>
     </ul>
   </div>

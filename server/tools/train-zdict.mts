@@ -14,10 +14,10 @@ const N = Number(process.argv[3]) || 1500;
 const out = path.join(process.cwd(), 'server', 'data', 'zdict');
 fs.mkdirSync(out, { recursive: true });
 
-const decode = (f) => (f.endsWith('.br') ? zlib.brotliDecompressSync(fs.readFileSync(f)) : null);
-for (const [kind, size] of [['filings', 262144], ['scores', 112640]]) {
+const decode = (f: string) => (f.endsWith('.br') ? zlib.brotliDecompressSync(fs.readFileSync(f)) : null);
+for (const [kind, size] of [['filings', 262144], ['scores', 112640]] as [string, number][]) {
   const base = path.join(root, kind);
-  const all = [];
+  const all: string[] = [];
   for (const cik of fs.readdirSync(base)) for (const name of fs.readdirSync(path.join(base, cik))) if (name.endsWith('.json.br')) all.push(path.join(base, cik, name));
   // an evenly spread sample across companies
   const step = Math.max(1, Math.floor(all.length / N));

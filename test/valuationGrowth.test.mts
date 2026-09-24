@@ -1,12 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildValuation } from '../server/lib/valuation.ts';
+import type { Company, IsoDate, ScrapeResult } from '../server/lib/types.ts';
+import type { ValuationDeps } from '../server/lib/valuation.ts';
+
+/** The handful of figures one fixture year reports. */
+interface YearFigures {
+  revenue: number;
+  netIncome: number;
+  eps: number;
+  equity: number;
+  shares: number;
+}
 
 // An annual filer whose share count multiplies by ten between the two years:
 // no split events are shipped in the static build, so buildValuation infers
 // the split from the share counts of consecutive filings. The per-share
 // figures of the earlier filing are on the basis of the day it was filed.
-const year = (end, { revenue, netIncome, eps, equity, shares }) => ({
+const year = (end: IsoDate, { revenue, netIncome, eps, equity, shares }: YearFigures) => ({
   allStatements: [],
   coverShares: [{ end, value: shares, concept: 'dei:EntityCommonStockSharesOutstanding', basis: 'aggregate', classes: 1 }],
   statements: {
@@ -23,13 +34,13 @@ const year = (end, { revenue, netIncome, eps, equity, shares }) => ({
       lineItems: [{ concept: 'us-gaap:StockholdersEquity', label: 'Equity', abstract: false, values: { i: { value: equity } } }],
     },
   },
-});
+}) as unknown as ScrapeResult;
 
-const DOCS = {
+const DOCS: Record<string, ScrapeResult> = {
   '2024': year('2024-12-31', { revenue: 100e6, netIncome: 50e6, eps: 5, equity: 1000e6, shares: 100e6 }),
   '2025': year('2025-12-31', { revenue: 120e6, netIncome: 60e6, eps: 0.6, equity: 1200e6, shares: 1000e6 }),
 };
-const company = {
+const company: Company = {
   cik: 1,
   name: 'Ten For One Inc.',
   tickers: ['TFO'],
@@ -44,8 +55,8 @@ const days = [
   { date: '2024-12-31', close: 20 },
   { date: '2025-12-31', close: 30 },
 ];
-const deps = {
-  load: async (f) => DOCS[String(f.fiscalYear)],
+const deps: ValuationDeps = {
+  load: async (f) => DOCS[String(f.fiscalYear)]!,
   shares: async () => ({ version: 2, byAccn: {}, list: [] }),
   prices: async () => ({ symbol: 'TFO', source: 'test', currency: 'USD', days, splits: null }),
   fx: async () => null,
@@ -54,10 +65,10 @@ const deps = {
 test('growth compares per-share figures on one share basis across a split', async () => {
   const v = await buildValuation(company, { year: 2025, period: 'FY', n: 2 }, deps);
   assert.deepEqual(v.priceHistory.splits, [{ date: '2025-01-01', ratio: 10 }]);
-  assert.equal(v.growth.years, 1);
-  assert.equal(Math.round(v.growth.revenue * 1000) / 1000, 0.2); // a total: nothing to undo
-  assert.equal(Math.round(v.growth.eps * 1000) / 1000, 0.2); // 5 before the split is 0.50 after it
-  assert.equal(Math.round(v.growth.bvps * 1000) / 1000, 0.2);
+  assert.equal(v.growth!.years, 1);
+  assert.equal(Math.round(v.growth!.revenue! * 1000) / 1000, 0.2); // a total: nothing to undo
+  assert.equal(Math.round(v.growth!.eps! * 1000) / 1000, 0.2); // 5 before the split is 0.50 after it
+  assert.equal(Math.round(v.growth!.bvps! * 1000) / 1000, 0.2);
 });
 
 test('the quoted price of a column is the one of its own share basis', async () => {

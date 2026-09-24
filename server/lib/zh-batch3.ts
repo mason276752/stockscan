@@ -1,8 +1,10 @@
 // Third batch: every standard (us-gaap / ifrs-full / srt) concept that still
 // had no Chinese name after scanning all saved filings (September 2026), in
-// order of how many filings use it. Format as zh.js: [name] or [name, note].
+// order of how many filings use it. Format as zh.ts: [name] or [name, note].
 
-export const BATCH3 = {
+import type { ZhTable } from './types.ts';
+
+export const BATCH3: ZhTable = {
   // ---------- 資產 ----------
   'us-gaap:PrepaidExpenseCurrent': ['預付費用－流動', '一年內會消耗的預付款：保險、租金、訂閱等'],
   'us-gaap:PrepaidExpenseCurrentAndNoncurrent': ['預付費用'],
@@ -635,7 +637,7 @@ export const BATCH3 = {
 };
 
 // ---------- batch 3, second part (12–30 filings each) ----------
-export const BATCH3B = {
+export const BATCH3B: ZhTable = {
   'us-gaap:AccruedSalesCommissionCurrent': ['應付銷售佣金－流動'],
   'us-gaap:AccruedMarketingCostsCurrent': ['應付行銷費用－流動'],
   'us-gaap:IncreaseDecreaseInDividendsReceivable': ['應收股利增加（減少）'],
@@ -919,7 +921,7 @@ export const BATCH3B = {
 };
 
 // ---------- batch 3, third part (12–20 filings each) ----------
-export const BATCH3C = {
+export const BATCH3C: ZhTable = {
   'us-gaap:FairValueNetAssetLiability': ['公允價值淨資產（負債）'],
   'us-gaap:OtherPolicyholderFunds': ['其他保戶資金'],
   'us-gaap:LoansInsurancePolicy': ['保單貸款'],
@@ -1248,7 +1250,7 @@ export const BATCH3C = {
 
 // ---------- extension elements shared by many filers (matched on the local
 // name after the prefix: abc:AccruedOfferingCosts, xyz:AccruedOfferingCosts) ----------
-export const EXT_LOCAL = {
+export const EXT_LOCAL: ZhTable = {
   IncreaseDecreaseInOperatingLeaseLiabilities: ['營業租賃負債增加（減少）'],
   IncreaseDecreaseInLeaseLiabilities: ['租賃負債增加（減少）'],
   IncreaseDecreaseInLeaseLiability: ['租賃負債增加（減少）'],
@@ -1445,7 +1447,7 @@ export const EXT_LOCAL = {
 };
 
 // standard concepts seen in 12+ filings after batch 3
-export const BATCH3D = {
+export const BATCH3D: ZhTable = {
   'us-gaap:CumulativeDividends': ['累積股利'],
   'us-gaap:OciLiabilityForFuturePolicyBenefitGainLossAfterReclassificationAdjustmentBeforeTax': ['其他綜合損益：未來保單給付負債利益（損失）－稅前'],
   'us-gaap:OciLiabilityForFuturePolicyBenefitGainLossAfterReclassificationAdjustmentAndTaxParent': ['其他綜合損益：未來保單給付負債利益（損失）－稅後'],
@@ -1517,7 +1519,7 @@ export const BATCH3D = {
   'us-gaap:RedeemableNoncontrollingInterestEquityOtherCarryingAmount': ['可贖回非控制權益－其他'],
 };
 
-export const EXT_LOCAL2 = {
+export const EXT_LOCAL2: ZhTable = {
   StockIssuedDuringPeriodSharesPeriodIncreaseDecreaseDueToShareTransactions: ['股份交易之股數變動'],
   StockholdersEquityNetIncreaseDecreaseDueToShareTransactionsInShares: ['股份交易之股數變動'],
   OtherIncomeExpenseNet: ['其他收益（費用）淨額'],
@@ -1951,7 +1953,7 @@ export const EXT_LOCAL2 = {
   LeaseLiability: ['租賃負債'],
 };
 
-export const BATCH3E = {
+export const BATCH3E: ZhTable = {
   'us-gaap:IncreaseDecreaseInRegulatoryLiabilities': ['管制負債變動'],
   'us-gaap:PublicUtilitiesInventory': ['公用事業存貨'],
   'us-gaap:ProceedsFromSaleAndCollectionOfFinanceReceivables': ['出售及收回融資應收款'],
@@ -1972,7 +1974,7 @@ export const BATCH3E = {
   'us-gaap:BusinessCombinationStepAcquisitionEquityInterestInAcquireeRemeasurementGainOrLoss': ['分階段收購原持股權益重衡量損益'],
 };
 
-export const EXT_LOCAL3 = {
+export const EXT_LOCAL3: ZhTable = {
   ProceedsFromIssuanceOfCommonStockNet: ['發行普通股所得淨額'],
   ProceedsFromIssuanceOfCommonStockAndWarrantsNet: ['發行普通股及認股權所得淨額'],
   DistributionsToNoncontrollingInterests: ['分配予非控制權益'],

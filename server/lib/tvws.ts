@@ -10,6 +10,38 @@
 // session: chart_create_session -> resolve_symbol -> create_series, bars
 // arrive in timescale_update, series_completed ends it.
 
+import type { Bar } from './types.ts';
+
+/** What a chart session answers with. */
+export interface TvSeries {
+  days: Bar[];
+  /** the symbol TradingView actually resolved to, e.g. 'NASDAQ:AAPL' */
+  resolved: string | null;
+  exchange: string | null;
+  description: string | null;
+  currency: string | null;
+}
+
+/** symbol_resolved's payload, as far as this reads it. */
+interface TvSymbolInfo {
+  pro_name?: string;
+  full_name?: string;
+  exchange?: string;
+  description?: string;
+  currency_code?: string;
+}
+
+/** One open chart session, waiting for its bars. */
+interface TvSession {
+  resolve: (r: TvSeries) => void;
+  reject: (e: Error) => void;
+  /** bar index -> the raw [time, o, h, l, c, v] row */
+  bars: Map<number, number[]>;
+  timer: NodeJS.Timeout;
+  symbol: string;
+  info: TvSymbolInfo | null;
+}
+
 const URL = 'wss://data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart';
 const HEADERS = { Origin: 'https://www.tradingview.com', 'User-Agent': 'Mozilla/5.0' };
 const BARS = 2600; // ~10 years of daily bars
@@ -18,17 +50,17 @@ const MAX_INFLIGHT = 8;
 
 export const TV = { enabled: !/^(0|false|no|off)$/i.test(process.env.TV_ENABLED || '1') };
 
-let ws = null;
-let opening = null;
+let ws: WebSocket | null = null;
+let opening: Promise<void> | null = null;
 let seq = 0;
 let requests = 0;
-let lastError = null;
-let connectedAt = null;
-const sessions = new Map(); // session id -> { resolve, reject, bars: Map<i, bar>, timer, symbol }
-const waiting = []; // requests queued while MAX_INFLIGHT sessions are open
+let lastError: string | null = null;
+let connectedAt: string | null = null;
+const sessions = new Map<string, TvSession>();
+const waiting: (() => void)[] = []; // requests queued while MAX_INFLIGHT sessions are open
 
-const enc = (m) => `~m~${Buffer.byteLength(m)}~m~${m}`;
-const send = (m, p) => ws.send(enc(JSON.stringify({ m, p })));
+const enc = (m: string) => `~m~${Buffer.byteLength(m)}~m~${m}`;
+const send = (m: string, p: unknown[]) => ws!.send(enc(JSON.stringify({ m, p })));
 
 export const tvConnected = () => ws?.readyState === 1;
 export function tvStatus() {
@@ -38,8 +70,8 @@ export function tvStatus() {
 function connect() {
   if (tvConnected()) return Promise.resolve();
   if (opening) return opening;
-  opening = new Promise((resolve, reject) => {
-    const sock = new WebSocket(URL, { headers: HEADERS });
+  opening = new Promise<void>((resolve, reject) => {
+    const sock = new WebSocket(URL, { headers: HEADERS } as unknown as string[]);
     const t = setTimeout(() => {
       sock.close();
       reject(new Error('TradingView websocket: connect timeout'));
@@ -53,7 +85,7 @@ function connect() {
       resolve();
     };
     sock.onerror = (e) => {
-      lastError = e?.message || 'websocket error';
+      lastError = (e as unknown as { message?: string })?.message || 'websocket error';
     };
     sock.onclose = (e) => {
       clearTimeout(t);
@@ -73,37 +105,37 @@ function connect() {
   return opening;
 }
 
-function onMessage(sock, raw) {
+function onMessage(sock: WebSocket, raw: string) {
   for (const part of raw.split(/~m~\d+~m~/)) {
     if (!part) continue;
     if (/^~h~\d+$/.test(part)) {
       sock.send(enc(part));
       continue;
     }
-    let j;
+    let j: { m?: string; p?: unknown[] };
     try {
       j = JSON.parse(part);
     } catch {
       continue;
     }
     if (!j.m || !Array.isArray(j.p)) continue;
-    const s = sessions.get(j.p[0]);
+    const s = sessions.get(j.p[0] as string);
     if (!s) continue;
     if (j.m === 'timescale_update' || j.m === 'du') {
-      const upd = j.p[1] || {};
+      const upd = (j.p[1] || {}) as Record<string, { s?: { i: number; v: number[] }[] }>;
       for (const v of Object.values(upd)) for (const b of v?.s || []) s.bars.set(b.i, b.v);
     } else if (j.m === 'symbol_resolved') {
-      s.info = j.p[2] || null;
+      s.info = (j.p[2] as TvSymbolInfo) || null;
     } else if (j.m === 'series_completed') {
-      finish(j.p[0]);
+      finish(j.p[0] as string);
     } else if (j.m === 'symbol_error' || j.m === 'series_error' || j.m === 'critical_error' || j.m === 'protocol_error') {
       const msg = j.m === 'symbol_error' ? `unknown symbol ${s.symbol}` : `${j.m}: ${j.p.slice(1).filter((x) => typeof x === 'string').join(' ')}`;
-      fail(j.p[0], Object.assign(new Error(`TradingView: ${msg}`), { status: j.m === 'symbol_error' || /resolve error/.test(msg) ? 404 : 502 }));
+      fail(j.p[0] as string, Object.assign(new Error(`TradingView: ${msg}`), { status: j.m === 'symbol_error' || /resolve error/.test(msg) ? 404 : 502 }));
     }
   }
 }
 
-function close(id) {
+function close(id: string) {
   const s = sessions.get(id);
   if (!s) return;
   clearTimeout(s.timer);
@@ -118,18 +150,18 @@ function close(id) {
   const next = waiting.shift();
   if (next) next();
 }
-function finish(id) {
+function finish(id: string) {
   const s = sessions.get(id);
   if (!s) return;
   const days = [...s.bars.values()]
     .filter((v) => Array.isArray(v) && typeof v[4] === 'number' && v[4] > 0)
-    .map((v) => ({ date: new Date(v[0] * 1000).toISOString().slice(0, 10), open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] ?? null }))
+    .map((v) => ({ date: new Date(v[0]! * 1000).toISOString().slice(0, 10), open: v[1]!, high: v[2]!, low: v[3]!, close: v[4]!, volume: v[5] ?? null }))
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const info = s.info || {};
   s.resolve({ days, resolved: info.pro_name || info.full_name || null, exchange: info.exchange || null, description: info.description || null, currency: info.currency_code || null });
   close(id);
 }
-function fail(id, err) {
+function fail(id: string, err: Error) {
   const s = sessions.get(id);
   if (!s) return;
   s.reject(err);
@@ -141,7 +173,7 @@ function fail(id, err) {
 // dash; TradingView's names differ: BRK-B -> BRK.B, preferred ABR-PD ->
 // ABR/PD, warrant AAC-WT -> AAC/W, SPAC unit AAC-UN -> AAC.U. (Rights, -RI,
 // have no TradingView symbol that resolves.)
-export const tvSymbol = (ticker) =>
+export const tvSymbol = (ticker: string): string =>
   String(ticker)
     .toUpperCase()
     .replace(/-(P[A-Z]?)$/, '/$1')
@@ -153,22 +185,27 @@ export const tvSymbol = (ticker) =>
 // Indonesia, instead of NASDAQ:COCO): EDGAR tickers are US listings, so a
 // non-US answer is retried with the US exchanges.
 const US_EXCHANGES = ['NASDAQ', 'NYSE', 'AMEX', 'OTC', 'CBOE', 'BATS', 'ARCA'];
-const isUS = (r) => !r.resolved || US_EXCHANGES.includes(String(r.resolved).split(':')[0]);
-const isSpread = (symbol) => /[*+\/-]/.test(String(symbol).replace(/-/g, ''));
+const isUS = (r: TvSeries) => !r.resolved || US_EXCHANGES.includes(String(r.resolved).split(':')[0]!);
+const isSpread = (symbol: string) => /[*+\/-]/.test(String(symbol).replace(/-/g, ''));
 // "ABR/PD" that TradingView does not know is parsed as the spread ABR ÷ PD
 // (two exchange prefixes in the answer): not our symbol
-const twoLegs = (r) => /:[^/]+\/[^/]+:/.test(String(r.resolved || ''));
-async function tvSecurity(symbol, opts) {
+const twoLegs = (r: TvSeries) => /:[^/]+\/[^/]+:/.test(String(r.resolved || ''));
+async function tvSecurity(symbol: string, opts: TvRequestOptions): Promise<TvSeries> {
   const r = await tvRequest(symbol, opts);
   if (twoLegs(r)) throw Object.assign(new Error(`TradingView: unknown symbol ${symbol}`), { status: 404 });
   return r;
 }
 
-export async function tvDailyBars(symbol, opts = {}) {
+/** How many daily bars to ask for. */
+export interface TvRequestOptions {
+  bars?: number | null;
+}
+
+export async function tvDailyBars(symbol: string, opts: TvRequestOptions = {}): Promise<TvSeries> {
   if (isSpread(symbol)) return tvRequest(symbol, opts);
   const r = await tvSecurity(symbol, opts);
   if (isUS(r)) return r;
-  let lastErr = null;
+  let lastErr: unknown = null;
   for (const ex of US_EXCHANGES.slice(0, 4)) {
     try {
       return await tvSecurity(`${ex}:${tvSymbol(symbol)}`, opts);
@@ -181,14 +218,14 @@ export async function tvDailyBars(symbol, opts = {}) {
 
 // Daily bars of a symbol or spread, oldest first:
 // { days: [{ date, open, high, low, close, volume }], resolved, exchange, description, currency }
-async function tvRequest(symbol, { bars = BARS } = {}) {
+async function tvRequest(symbol: string, { bars = BARS }: TvRequestOptions = {}): Promise<TvSeries> {
   if (!TV.enabled) throw Object.assign(new Error('TradingView source disabled'), { status: 503 });
   await connect();
-  if (sessions.size >= MAX_INFLIGHT) await new Promise((r) => waiting.push(r));
+  if (sessions.size >= MAX_INFLIGHT) await new Promise<void>((r) => waiting.push(r));
   if (!tvConnected()) await connect();
   requests++;
   const id = `cs_${(++seq).toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  return new Promise((resolve, reject) => {
+  return new Promise<TvSeries>((resolve, reject) => {
     const timer = setTimeout(() => fail(id, Object.assign(new Error(`TradingView: no answer for ${symbol} within ${TIMEOUT / 1000}s`), { status: 504 })), TIMEOUT);
     sessions.set(id, { resolve, reject, bars: new Map(), timer, symbol, info: null });
     try {
@@ -196,7 +233,7 @@ async function tvRequest(symbol, { bars = BARS } = {}) {
       send('resolve_symbol', [id, 'sym', `=${JSON.stringify({ symbol: tvSymbol(symbol), adjustment: 'splits', session: 'regular' })}`]);
       send('create_series', [id, 's1', 's1', 'sym', '1D', bars, '']);
     } catch (err) {
-      fail(id, err);
+      fail(id, err as Error);
     }
   });
 }

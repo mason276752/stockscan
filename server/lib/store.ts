@@ -36,6 +36,56 @@ import zlib from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { slim, fatten } from './storeFormat.ts';
+import type { DocIndex, SlimResult } from './storeFormat.ts';
+import type { IsoDate, Json, Score, ScrapeResult, FilingHeader } from './types.ts';
+
+/** What the file names tell us about a saved filing, with no file read. */
+export interface FilingRecord {
+  accession: string;
+  cik: number;
+  form: string | null;
+  reportDate: IsoDate | null;
+  version: number;
+  file: string;
+  bytes: number;
+}
+
+/** The same for a saved score. */
+export interface ScoreRecord {
+  accession: string;
+  cik: number;
+  reportDate: IsoDate | null;
+  version: number;
+  file: string;
+}
+
+/** A filing file as it sits on disk: the header fields plus the slimmed result. */
+interface FilingFile {
+  accession: string;
+  cik: number;
+  form: string | null;
+  reportDate: IsoDate | null;
+  version: number;
+  fetchedAt: string;
+  data: SlimResult;
+}
+
+/** A score file. */
+interface ScoreFile {
+  accession: string;
+  cik: number;
+  reportDate: IsoDate | null;
+  version: number;
+  score: Score;
+}
+
+/** A small JSON document in the store, with how long ago it was written. */
+export interface StoredDoc<T> {
+  value: T;
+  ageMs: number;
+}
+
+type StoreKind = 'filings' | 'scores';
 
 // Files are zstd with a dictionary trained on this kind of JSON (server/data/
 // zdict, node server/tools/train-zdict.mjs): a filing is a third smaller than
@@ -47,62 +97,62 @@ const EXT = '.json.zst';
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DATA = path.join(REPO, 'data');
 const ZDICT_DIR = path.join(REPO, 'server', 'data', 'zdict');
-const DICTS = { filings: fs.readFileSync(path.join(ZDICT_DIR, 'filings-v1.zdict')), scores: fs.readFileSync(path.join(ZDICT_DIR, 'scores-v1.zdict')) };
-const ZSTD = (kind) => ({ dictionary: DICTS[kind], params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } });
-const pack = (kind, value) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(value)), ZSTD(kind));
-const unpack = (kind, buf, file) => JSON.parse((file.endsWith('.br') ? zlib.brotliDecompressSync(buf) : zlib.zstdDecompressSync(buf, { dictionary: DICTS[kind] })).toString('utf8'));
+const DICTS: Record<StoreKind, Buffer> = { filings: fs.readFileSync(path.join(ZDICT_DIR, 'filings-v1.zdict')), scores: fs.readFileSync(path.join(ZDICT_DIR, 'scores-v1.zdict')) };
+const ZSTD = (kind: StoreKind) => ({ dictionary: DICTS[kind], params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } });
+const pack = (kind: StoreKind, value: unknown) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(value)), ZSTD(kind));
+const unpack = <T,>(kind: StoreKind, buf: Buffer, file: string): T => JSON.parse((file.endsWith('.br') ? zlib.brotliDecompressSync(buf) : zlib.zstdDecompressSync(buf, { dictionary: DICTS[kind] })).toString('utf8'));
 // the legacy SQLite rows: gzip'd JSON, or plain text from even older versions
-const unpackLegacy = (col) => JSON.parse(col instanceof Uint8Array ? zlib.gunzipSync(col).toString('utf8') : col);
+const unpackLegacy = (col: unknown) => JSON.parse(col instanceof Uint8Array ? zlib.gunzipSync(col).toString('utf8') : (col as string));
 
-let root = null; // data/store
-let cache = null; // the kv SQLite
+let root: string | null = null; // data/store
+let cache: DatabaseSync = null as unknown as DatabaseSync; // the kv SQLite
 
 // kv keys that also live as files in the store (see getKV): what the
 // static build needs from the network and would otherwise fetch again on
 // every CI run - the ETF list, the CUSIP table, each ETF's N-PORT filing
 // list and the parsed N-PORT documents (a filed document never changes)
 const DURABLE_KV = ['etfs', 'cusips', 'nport:', 'nport-list:'];
-const durableKV = (key) => DURABLE_KV.some((p) => (p.endsWith(':') ? key.startsWith(p) : key === p));
+const durableKV = (key: string) => DURABLE_KV.some((p) => (p.endsWith(':') ? key.startsWith(p) : key === p));
 // 'nport:0000036405-26-000480' -> 'kv/nport/0000036405-26-000480.json'
-const durableFile = (key) => `kv/${key.replace(/[^A-Za-z0-9:_.-]/g, '_').replace(/:/g, '/')}.json`;
-const filings = new Map(); // accession -> { cik, form, reportDate, version, file, bytes }
-const scores = new Map(); // accession -> { cik, reportDate, version, file }
+const durableFile = (key: string) => `kv/${key.replace(/[^A-Za-z0-9:_.-]/g, '_').replace(/:/g, '/')}.json`;
+const filings = new Map<string, FilingRecord>();
+const scores = new Map<string, ScoreRecord>();
 // cik -> its filings, built the first time one is asked for and thrown away
 // whenever `filings` changes. Scoring asks per company and the store is
 // heading for six figures, so the scan it replaces is the whole of a
 // rescore's time (store.filingIndex).
-let byCik = null;
+let byCik: Map<number, FilingRecord[]> | null = null;
 const forgetByCik = () => {
   byCik = null;
 };
-let docs = {}; // concept -> SEC documentation (standard concepts)
+let docs: DocIndex = {}; // concept -> SEC documentation (standard concepts)
 let docsDirty = false;
-let docsTimer = null;
+let docsTimer: NodeJS.Timeout | null = null;
 
 // file name <-> record. Forms carry a slash (10-K/A): '~' in the name.
-const safe = (s) => String(s ?? '-').replace(/\//g, '~').replace(/[^A-Za-z0-9.~-]/g, '_') || '-';
-const unsafe = (s) => (s === '-' ? null : s.replace(/~/g, '/'));
-const filingName = (accession, reportDate, form, version) => `${accession}__${safe(reportDate)}__${safe(form)}__v${version}${EXT}`;
-const scoreName = (accession, reportDate, version) => `${accession}__${safe(reportDate)}__v${version}${EXT}`;
+const safe = (s: string | null | undefined) => String(s ?? '-').replace(/\//g, '~').replace(/[^A-Za-z0-9.~-]/g, '_') || '-';
+const unsafe = (s: string) => (s === '-' ? null : s.replace(/~/g, '/'));
+const filingName = (accession: string, reportDate: IsoDate | null, form: string | null, version: number) => `${accession}__${safe(reportDate)}__${safe(form)}__v${version}${EXT}`;
+const scoreName = (accession: string, reportDate: IsoDate | null, version: number) => `${accession}__${safe(reportDate)}__v${version}${EXT}`;
 const FILING_RE = /^(.+?)__(.+?)__(.+?)__v(\d+)\.json\.(?:br|zst)$/;
 const SCORE_RE = /^(.+?)__(.+?)__v(\d+)\.json\.(?:br|zst)$/;
 
-const dir = (kind, cik) => path.join(root, kind, String(cik));
+const dir = (kind: StoreKind, cik: number | string) => path.join(root!, kind, String(cik));
 
-function writeAtomic(file, buf) {
+function writeAtomic(file: string, buf: string | Buffer) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, buf);
   fs.renameSync(tmp, file);
 }
-const unlinkQuiet = (file) => {
+const unlinkQuiet = (file: string) => {
   try {
     fs.unlinkSync(file);
   } catch {
     /* already gone */
   }
 };
-const rmdirQuiet = (d) => {
+const rmdirQuiet = (d: string) => {
   try {
     fs.rmdirSync(d);
   } catch {
@@ -111,10 +161,10 @@ const rmdirQuiet = (d) => {
 };
 
 // scan the tree once: file names carry everything the indexes need
-function scan(kind, re, into, make) {
+function scan<T extends { accession: string; version: number; file: string }>(kind: StoreKind, re: RegExp, into: Map<string, T>, make: (m: RegExpExecArray, cik: number, file: string) => T) {
   into.clear();
   forgetByCik();
-  const base = path.join(root, kind);
+  const base = path.join(root!, kind);
   if (!fs.existsSync(base)) return;
   for (const cikDir of fs.readdirSync(base, { withFileTypes: true })) {
     if (!cikDir.isDirectory() || !/^\d+$/.test(cikDir.name)) continue;
@@ -136,30 +186,30 @@ function scan(kind, re, into, make) {
   }
 }
 const scanFilings = () =>
-  scan('filings', FILING_RE, filings, (m, cik, file) => ({ accession: m[1], cik, reportDate: unsafe(m[2]), form: unsafe(m[3]), version: Number(m[4]), file, bytes: fs.statSync(file).size }));
-const scanScores = () => scan('scores', SCORE_RE, scores, (m, cik, file) => ({ accession: m[1], cik, reportDate: unsafe(m[2]), version: Number(m[3]), file }));
+  scan('filings', FILING_RE, filings, (m, cik, file) => ({ accession: m[1]!, cik, reportDate: unsafe(m[2]!), form: unsafe(m[3]!), version: Number(m[4]), file, bytes: fs.statSync(file).size }));
+const scanScores = () => scan('scores', SCORE_RE, scores, (m, cik, file) => ({ accession: m[1]!, cik, reportDate: unsafe(m[2]!), version: Number(m[3]), file }));
 
 function loadDocs() {
   try {
-    docs = JSON.parse(fs.readFileSync(path.join(root, 'documentation.json'), 'utf8')) || {};
+    docs = JSON.parse(fs.readFileSync(path.join(root!, 'documentation.json'), 'utf8')) || {};
   } catch {
     docs = {};
   }
 }
 function flushDocs() {
-  clearTimeout(docsTimer);
+  if (docsTimer) clearTimeout(docsTimer);
   docsTimer = null;
   if (!docsDirty || !root) return;
   docsDirty = false;
   const sorted = Object.fromEntries(Object.keys(docs).sort().map((k) => [k, docs[k]]));
-  writeAtomic(path.join(root, 'documentation.json'), JSON.stringify(sorted, null, 1));
+  writeAtomic(path.join(root!, 'documentation.json'), JSON.stringify(sorted, null, 1));
 }
 function scheduleDocs() {
   docsDirty = true;
   if (!docsTimer) docsTimer = setTimeout(flushDocs, 5000).unref();
 }
 
-export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(DATA, 'store'), cacheFile = process.env.STOCKSCAN_CACHE || path.join(DATA, 'cache.sqlite')) {
+export function openStore(storeDir: string = process.env.STOCKSCAN_STORE || path.join(DATA, 'store'), cacheFile: string = process.env.STOCKSCAN_CACHE || path.join(DATA, 'cache.sqlite')): string {
   root = storeDir;
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
@@ -188,9 +238,9 @@ export function openStore(storeDir = process.env.STOCKSCAN_STORE || path.join(DA
 // files still in the brotli format: rewrite them as zstd one at a time,
 // spaced out so the server stays responsive (~0.1 s each, ~15 min for 10k)
 function recompress() {
-  const todo = [
-    ...[...filings.values()].filter((f) => f.file.endsWith('.br')).map((f) => ['filings', f]),
-    ...[...scores.values()].filter((f) => f.file.endsWith('.br')).map((f) => ['scores', f]),
+  const todo: [StoreKind, FilingRecord | ScoreRecord][] = [
+    ...[...filings.values()].filter((f) => f.file.endsWith('.br')).map((f): [StoreKind, FilingRecord] => ['filings', f]),
+    ...[...scores.values()].filter((f) => f.file.endsWith('.br')).map((f): [StoreKind, ScoreRecord] => ['scores', f]),
   ];
   if (!todo.length) return;
   console.log(`store: ${todo.length} 個檔案從 brotli 轉成 zstd（背景進行）…`);
@@ -201,7 +251,7 @@ function recompress() {
       console.log(`store: 轉檔完成，省下 ${(saved / 1048576).toFixed(0)} MB`);
       return;
     }
-    const [kind, rec] = todo[i++];
+    const [kind, rec] = todo[i++]!;
     const live = (kind === 'filings' ? filings : scores).get(rec.accession);
     if (live === rec && fs.existsSync(rec.file)) {
       try {
@@ -210,11 +260,12 @@ function recompress() {
         const file = rec.file.replace(/\.json\.br$/, EXT);
         writeAtomic(file, buf);
         unlinkQuiet(rec.file);
-        saved += (rec.bytes || 0) - buf.length;
+        const bytes = (rec as FilingRecord).bytes;
+        saved += (bytes || 0) - buf.length;
         rec.file = file;
-        if (rec.bytes != null) rec.bytes = buf.length;
+        if (bytes != null) (rec as FilingRecord).bytes = buf.length;
       } catch (err) {
-        console.warn(`store: ${path.basename(rec.file)} 轉檔失敗：${err.message}`);
+        console.warn(`store: ${path.basename(rec.file)} 轉檔失敗：${(err as Error).message}`);
       }
     }
     setTimeout(step, 30).unref();
@@ -226,16 +277,16 @@ function recompress() {
 // store (they are data a clone should have, not a cache)
 let kvShrunk = false;
 function migrateSubmissions() {
-  const keys = cache.prepare("SELECT key FROM kv WHERE substr(key, 1, 12) = 'submissions:'").all().map((r) => r.key);
+  const keys = cache.prepare("SELECT key FROM kv WHERE substr(key, 1, 12) = 'submissions:'").all().map((r) => r.key as string);
   if (!keys.length) return;
   const get = cache.prepare('SELECT json, updated_at FROM kv WHERE key = ?');
   for (const key of keys) {
     const row = get.get(key);
     if (!row) continue;
-    const file = path.join(root, 'companies', `${key.slice('submissions:'.length)}.json`);
+    const file = path.join(root!, 'companies', `${key.slice('submissions:'.length)}.json`);
     if (!fs.existsSync(file)) {
       writeAtomic(file, JSON.stringify(kvUnpack(row.json)));
-      const t = new Date(row.updated_at);
+      const t = new Date(row.updated_at as number);
       fs.utimesSync(file, t, t); // keep the fetch time (the TTL reads mtime)
     }
     cache.prepare('DELETE FROM kv WHERE key = ?').run(key);
@@ -248,10 +299,10 @@ function migrateSubmissions() {
 function migrateUniverse() {
   const row = cache.prepare("SELECT json, updated_at FROM kv WHERE key = 'universe'").get();
   if (!row) return;
-  const file = path.join(root, 'universe.json');
+  const file = path.join(root!, 'universe.json');
   if (!fs.existsSync(file)) {
     writeAtomic(file, JSON.stringify(kvUnpack(row.json)));
-    const t = new Date(row.updated_at);
+    const t = new Date(row.updated_at as number);
     fs.utimesSync(file, t, t);
   }
   cache.prepare("DELETE FROM kv WHERE key = 'universe'").run();
@@ -262,7 +313,7 @@ function migrateUniverse() {
 // (first migration pass) get packed and the file is shrunk.
 function compactCache() {
   const stale = 0;
-  const text = cache.prepare("SELECT key FROM kv WHERE typeof(json) = 'text'").all().map((r) => r.key);
+  const text = cache.prepare("SELECT key FROM kv WHERE typeof(json) = 'text'").all().map((r) => r.key as string);
   if (text.length) {
     const get = cache.prepare('SELECT json FROM kv WHERE key = ?');
     const put = cache.prepare('UPDATE kv SET json = ? WHERE key = ?');
@@ -285,24 +336,24 @@ function compactCache() {
 // The previous single-file SQLite store: copy everything over once (the
 // store directory is empty, the old file exists), then leave the old file
 // alone for the user to delete.
-function migrateLegacy(file) {
+function migrateLegacy(file: string) {
   if (filings.size || !fs.existsSync(file)) return;
-  let db;
+  let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(file, { readOnly: true });
-    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name));
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name as string));
     if (!tables.has('filings')) return;
     console.log(`store: 從舊的 ${file} 搬到 ${root}/ …`);
     let n = 0;
     for (const r of db.prepare('SELECT accession, cik, version, fetched_at, json FROM filings').iterate()) {
       const data = unpackLegacy(r.json);
-      store.putFiling(r.accession, r.cik, data, r.version, r.fetched_at);
+      store.putFiling(r.accession as string, r.cik as number, data, r.version as number, r.fetched_at as string);
       if (++n % 1000 === 0) console.log(`store: 財報 ${n} 份…`);
     }
     let s = 0;
     if (tables.has('scores')) {
       for (const r of db.prepare('SELECT accession, cik, report_date, version, json FROM scores').iterate()) {
-        store.putScore(r.accession, r.cik, r.report_date, r.version, unpackLegacy(r.json));
+        store.putScore(r.accession as string, r.cik as number, r.report_date as IsoDate | null, r.version as number, unpackLegacy(r.json));
         s++;
       }
     }
@@ -311,7 +362,7 @@ function migrateLegacy(file) {
       const put = cache.prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)');
       cache.exec('BEGIN');
       for (const r of db.prepare('SELECT key, json, updated_at FROM kv').iterate()) {
-        put.run(r.key, kvPack(unpackLegacy(r.json)), r.updated_at);
+        put.run(r.key as string, kvPack(unpackLegacy(r.json)), r.updated_at as number);
         k++;
       }
       cache.exec('COMMIT');
@@ -319,14 +370,14 @@ function migrateLegacy(file) {
     flushDocs();
     console.log(`store: 搬完 ${n} 份財報、${s} 筆評分、${k} 筆快取；${file} 可以刪掉了`);
   } catch (err) {
-    console.warn(`store: 舊資料庫搬移失敗：${err.message}`);
+    console.warn(`store: 舊資料庫搬移失敗：${(err as Error).message}`);
   } finally {
     db?.close();
   }
 }
 
 // files written by another parser version are thrown away (rebuilt on demand)
-export function requireVersion(version) {
+export function requireVersion(version: number): void {
   let n = 0;
   for (const [acc, f] of filings) {
     if (f.version === version) continue;
@@ -345,22 +396,22 @@ const need = () => {
 };
 // the kv cache is brotli'd too (fast setting: the market snapshot is rewritten every half hour)
 const KV_BROTLI = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } };
-const kvPack = (value) => zlib.brotliCompressSync(Buffer.from(JSON.stringify(value)), KV_BROTLI);
-const kvUnpack = (col) => JSON.parse(col instanceof Uint8Array ? zlib.brotliDecompressSync(col).toString('utf8') : col);
+const kvPack = (value: unknown) => zlib.brotliCompressSync(Buffer.from(JSON.stringify(value)), KV_BROTLI);
+const kvUnpack = (col: unknown) => JSON.parse(col instanceof Uint8Array ? zlib.brotliDecompressSync(col).toString('utf8') : (col as string));
 
 export const store = {
-  get file() {
+  get file(): string | null {
     return root;
   },
 
-  getFiling(accession) {
+  getFiling(accession: string): ScrapeResult | null {
     need();
     const f = filings.get(accession);
     if (!f) return null;
     try {
-      return fatten(unpack('filings', fs.readFileSync(f.file), f.file).data, docs);
+      return fatten(unpack<FilingFile>('filings', fs.readFileSync(f.file), f.file).data, docs);
     } catch (err) {
-      console.warn(`store: ${path.basename(f.file)} unreadable (${err.message}), dropped`);
+      console.warn(`store: ${path.basename(f.file)} unreadable (${(err as Error).message}), dropped`);
       unlinkQuiet(f.file);
       filings.delete(accession);
       forgetByCik();
@@ -368,21 +419,21 @@ export const store = {
     }
   },
   // just the `filing` header of a saved filing (no statements rebuilt): for indexes
-  filingHeader(accession) {
+  filingHeader(accession: string): FilingHeader | null {
     need();
     const f = filings.get(accession);
     if (!f) return null;
     try {
-      return unpack('filings', fs.readFileSync(f.file), f.file).data?.filing || null;
+      return unpack<FilingFile>('filings', fs.readFileSync(f.file), f.file).data?.filing || null;
     } catch {
       return null;
     }
   },
-  hasFiling(accession) {
+  hasFiling(accession: string): boolean {
     need();
     return filings.has(accession);
   },
-  putFiling(accession, cik, result, version, fetchedAt = new Date().toISOString()) {
+  putFiling(accession: string, cik: number | string, result: ScrapeResult, version: number, fetchedAt: string = new Date().toISOString()): void {
     need();
     const reportDate = result.filing?.periodEnd ?? null;
     const form = result.filing?.form ?? null;
@@ -394,7 +445,7 @@ export const store = {
     filings.set(accession, { accession, cik: Number(cik), form, reportDate, version, file, bytes: buf.length });
     forgetByCik();
   },
-  filingCount(cik = null) {
+  filingCount(cik: number | string | null = null): number {
     need();
     if (cik == null) return filings.size;
     let n = 0;
@@ -403,19 +454,19 @@ export const store = {
   },
   // every saved filing / score (light: from the file names), with the file's
   // path relative to the store - for the static-site build
-  allFilings() {
+  allFilings(): FilingRecord[] {
     need();
-    return [...filings.values()].map((f) => ({ accession: f.accession, cik: f.cik, form: f.form, reportDate: f.reportDate, version: f.version, bytes: f.bytes, file: path.relative(root, f.file) }));
+    return [...filings.values()].map((f) => ({ accession: f.accession, cik: f.cik, form: f.form, reportDate: f.reportDate, version: f.version, bytes: f.bytes, file: path.relative(root!, f.file) }));
   },
-  allScores() {
+  allScores(): ScoreRecord[] {
     need();
-    return [...scores.values()].map((s) => ({ accession: s.accession, cik: s.cik, reportDate: s.reportDate, version: s.version, file: path.relative(root, s.file) }));
+    return [...scores.values()].map((s) => ({ accession: s.accession, cik: s.cik, reportDate: s.reportDate, version: s.version, file: path.relative(root!, s.file) }));
   },
   // accession -> report_date of every saved filing of a company (cheap: no file reads)
-  filingIndex(cik) {
+  filingIndex(cik: number | string): { accession: string; form: string | null; report_date: IsoDate | null }[] {
     need();
     if (!byCik) {
-      byCik = new Map();
+      byCik = new Map<number, FilingRecord[]>();
       for (const f of filings.values()) {
         const list = byCik.get(f.cik);
         if (list) list.push(f);
@@ -427,23 +478,23 @@ export const store = {
 
   // small plain-JSON documents in the store (companies/<cik>.json …): git-
   // friendly, with the write time so callers can apply their own TTL
-  getDoc(name) {
+  getDoc<T = Json>(name: string): StoredDoc<T> | null {
     need();
     try {
-      const st = fs.statSync(path.join(root, name));
-      return { value: JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')), ageMs: Date.now() - st.mtimeMs };
+      const st = fs.statSync(path.join(root!, name));
+      return { value: JSON.parse(fs.readFileSync(path.join(root!, name), 'utf8')), ageMs: Date.now() - st.mtimeMs };
     } catch {
       return null;
     }
   },
-  putDoc(name, value) {
+  putDoc(name: string, value: unknown): void {
     need();
-    writeAtomic(path.join(root, name), JSON.stringify(value));
+    writeAtomic(path.join(root!, name), JSON.stringify(value));
   },
-  listDocs(dir) {
+  listDocs(dir: string): string[] {
     need();
     try {
-      return fs.readdirSync(path.join(root, dir)).filter((n) => n.endsWith('.json')).map((n) => `${dir}/${n}`);
+      return fs.readdirSync(path.join(root!, dir)).filter((n) => n.endsWith('.json')).map((n) => `${dir}/${n}`);
     } catch {
       return [];
     }
@@ -454,44 +505,44 @@ export const store = {
   // the write time inside, so they travel with the store (the data ref, a
   // fresh CI runner) and the TTL still works after a git checkout; the
   // SQLite row is only a faster copy of the file.
-  getKV(key) {
+  getKV<T = Json>(key: string): StoredDoc<T> | null {
     const row = cache.prepare('SELECT json, updated_at FROM kv WHERE key = ?').get(key);
     if (row) {
       const value = kvUnpack(row.json);
       // a row written as plain text (first migration pass): re-pack it on the way out
       if (typeof row.json === 'string') cache.prepare('UPDATE kv SET json = ? WHERE key = ?').run(kvPack(value), key);
-      return { value, ageMs: Date.now() - row.updated_at };
+      return { value, ageMs: Date.now() - (row.updated_at as number) };
     }
     if (!durableKV(key)) return null;
-    const doc = this.getDoc(durableFile(key))?.value;
+    const doc = this.getDoc<{ updatedAt?: string; value: T }>(durableFile(key))?.value;
     if (!doc || typeof doc !== 'object' || !('value' in doc)) return null;
     const at = Date.parse(doc.updatedAt || '') || 0;
     cache.prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, kvPack(doc.value), at);
     return { value: doc.value, ageMs: Date.now() - at };
   },
-  putKV(key, value) {
+  putKV(key: string, value: unknown): void {
     const now = Date.now();
     cache.prepare('INSERT OR REPLACE INTO kv (key, json, updated_at) VALUES (?, ?, ?)').run(key, kvPack(value), now);
     if (durableKV(key)) this.putDoc(durableFile(key), { key, updatedAt: new Date(now).toISOString(), value });
   },
-  kvKeys(prefix) {
-    return cache.prepare('SELECT key FROM kv WHERE substr(key, 1, ?) = ?').all(prefix.length, prefix).map((r) => r.key);
+  kvKeys(prefix: string): string[] {
+    return cache.prepare('SELECT key FROM kv WHERE substr(key, 1, ?) = ?').all(prefix.length, prefix).map((r) => r.key as string);
   },
-  deleteKV(key) {
+  deleteKV(key: string): void {
     cache.prepare('DELETE FROM kv WHERE key = ?').run(key);
   },
-  compactKV() {
+  compactKV(): void {
     cache.exec('VACUUM; PRAGMA wal_checkpoint(TRUNCATE);');
   },
 
   // scores: one per filing, keyed by accession, invalidated by version
-  getScore(accession, version) {
+  getScore(accession: string, version: number): Score | null {
     need();
     const s = scores.get(accession);
     if (!s || s.version !== version) return null;
     return this.scoreJson(accession);
   },
-  putScore(accession, cik, reportDate, version, score) {
+  putScore(accession: string, cik: number | string, reportDate: IsoDate | null, version: number, score: Score): void {
     need();
     const file = path.join(dir('scores', cik), scoreName(accession, reportDate, version));
     writeAtomic(file, pack('scores', { accession, cik, reportDate, version, score }));
@@ -499,44 +550,44 @@ export const store = {
     if (prev && prev.file !== file) unlinkQuiet(prev.file);
     scores.set(accession, { accession, cik: Number(cik), reportDate: reportDate ?? null, version, file });
   },
-  scoreCount(version) {
+  scoreCount(version: number): number {
     need();
     let n = 0;
     for (const s of scores.values()) if (s.version === version) n++;
     return n;
   },
   // newest scored filing per company
-  latestScoreRows(version) {
-    const best = new Map();
+  latestScoreRows(version: number): Score[] {
+    const best = new Map<number, ScoreRecord>();
     for (const s of scores.values()) {
       if (s.version !== version || !s.reportDate) continue;
       const b = best.get(s.cik);
-      if (!b || s.reportDate > b.reportDate) best.set(s.cik, s);
+      if (!b || s.reportDate > b.reportDate!) best.set(s.cik, s);
     }
-    return [...best.values()].map((s) => this.scoreJson(s.accession)).filter(Boolean);
+    return [...best.values()].map((s) => this.scoreJson(s.accession)).filter((x): x is Score => !!x);
   },
   // every scored filing (light: no file reads), newest first within a company
-  scoreIndex(version) {
+  scoreIndex(version: number): { accession: string; cik: number; report_date: IsoDate | null }[] {
     need();
-    const rows = [];
+    const rows: { accession: string; cik: number; report_date: IsoDate | null }[] = [];
     for (const s of scores.values()) if (s.version === version) rows.push({ accession: s.accession, cik: s.cik, report_date: s.reportDate });
-    return rows.sort((a, b) => a.cik - b.cik || (a.report_date < b.report_date ? 1 : a.report_date > b.report_date ? -1 : 0));
+    return rows.sort((a, b) => a.cik - b.cik || (a.report_date! < b.report_date! ? 1 : a.report_date! > b.report_date! ? -1 : 0));
   },
-  scoreJson(accession) {
+  scoreJson(accession: string): Score | null {
     need();
     const s = scores.get(accession);
     if (!s) return null;
     try {
-      return unpack('scores', fs.readFileSync(s.file), s.file).score;
+      return unpack<ScoreFile>('scores', fs.readFileSync(s.file), s.file).score;
     } catch {
       unlinkQuiet(s.file);
       scores.delete(accession);
       return null;
     }
   },
-  unscoredAccessions(version) {
+  unscoredAccessions(version: number): string[] {
     need();
-    const out = [];
+    const out: string[] = [];
     for (const acc of filings.keys()) {
       const s = scores.get(acc);
       if (!s || s.version !== version) out.push(acc);
@@ -545,10 +596,10 @@ export const store = {
   },
   // drop every saved filing / score of companies outside `ciks` (delisted
   // filers: nothing to buy, so nothing to keep) -> { companies, filings, scores }
-  purgeExcept(ciks) {
+  purgeExcept(ciks: readonly (number | string)[]): { companies: number; filings: number; scores: number; docs: number } {
     need();
     const keep = new Set(ciks.map(Number));
-    const gone = new Set();
+    const gone = new Set<number>();
     let nf = 0;
     let ns = 0;
     for (const [acc, f] of filings) {
@@ -576,16 +627,16 @@ export const store = {
     for (const name of this.listDocs('companies')) {
       const cik = Number(/(\d{6,10})/.exec(path.basename(name))?.[1]);
       if (!cik || keep.has(cik)) continue;
-      unlinkQuiet(path.join(root, name));
+      unlinkQuiet(path.join(root!, name));
       nd++;
     }
     return { companies: gone.size, filings: nf, scores: ns, docs: nd };
   },
-  size() {
+  size(): { filings: number; filingsBytes: number; scores: number; kv: number; kvBytes: number } {
     need();
     let bytes = 0;
     for (const f of filings.values()) bytes += f.bytes;
-    const k = cache.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM kv').get();
-    return { filings: filings.size, filingsBytes: bytes, scores: scores.size, kv: k.n, kvBytes: k.bytes };
+    const k = cache.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM kv').get()!;
+    return { filings: filings.size, filingsBytes: bytes, scores: scores.size, kv: k.n as number, kvBytes: k.bytes as number };
   },
 };

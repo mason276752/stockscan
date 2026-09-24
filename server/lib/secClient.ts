@@ -10,8 +10,54 @@ const MIN_INTERVAL_MS = 101;
 const MAX_IN_FLIGHT = 4;
 const IDLE_MS = 3000; // low-priority (prefetch) requests wait for this much user quiet
 
-export class SecClient {
-  constructor({ userAgent = process.env.SEC_USER_AGENT, timeoutMs = 60_000 } = {}) {
+/** High priority is a user waiting; low yields until the server is quiet. */
+export type Priority = 'high' | 'low';
+
+export interface SecClientOptions {
+  userAgent?: string | undefined;
+  timeoutMs?: number;
+}
+
+export interface FetchOptions {
+  retries?: number;
+  priority?: Priority | undefined;
+  headers?: Record<string, string>;
+  method?: string;
+}
+
+/** What text()/json()/buffer()/head() take. */
+export interface RequestOptions {
+  ttlMs?: number;
+  priority?: Priority | undefined;
+  /** inclusive byte range, to pull one member out of a large zip */
+  range?: readonly [number, number];
+}
+
+/** The read methods, as the low-priority view and the callers that only fetch see them. */
+export interface Fetcher {
+  text(url: string, opts?: RequestOptions): Promise<string>;
+  json<T = unknown>(url: string, opts?: RequestOptions): Promise<T>;
+  buffer(url: string, opts?: RequestOptions): Promise<Buffer>;
+  head(url: string, opts?: RequestOptions): Promise<{ size: number | null }>;
+}
+
+/** An error carrying the HTTP status SEC answered with. */
+export interface HttpError extends Error {
+  status?: number;
+}
+
+export class SecClient implements Fetcher {
+  readonly userAgent: string;
+  readonly timeoutMs: number;
+  private queue: Promise<void>;
+  private lastRequest: number;
+  private inFlight: number;
+  private waiters: (() => void)[];
+  private userInFlight: number;
+  private lastUserActivity: number;
+  private cache: Map<string, { expires: number; value: unknown }>;
+
+  constructor({ userAgent = process.env.SEC_USER_AGENT, timeoutMs = 60_000 }: SecClientOptions = {}) {
     if (!userAgent) {
       throw new Error(
         'SEC requires a User-Agent that identifies you, e.g. "MyCompany contact@example.com". ' +
@@ -30,20 +76,20 @@ export class SecClient {
   }
 
   // Mark user activity (also called by the API layer for cache hits).
-  touch() {
+  touch(): void {
     this.lastUserActivity = Date.now();
   }
 
-  get idle() {
+  get idle(): boolean {
     return this.userInFlight === 0 && Date.now() - this.lastUserActivity > IDLE_MS;
   }
 
   // Serialise requests so the gap holds even under concurrent API calls
   // (MAX_IN_FLIGHT of them may be open at once; only their starts are spaced).
-  _slot() {
+  private _slot(): Promise<void> {
     const run = this.queue.then(async () => {
       for (let wait = MIN_INTERVAL_MS - (performance.now() - this.lastRequest); wait > 0; wait = MIN_INTERVAL_MS - (performance.now() - this.lastRequest)) {
-        await new Promise((r) => setTimeout(r, wait));
+        await new Promise<void>((r) => setTimeout(r, wait));
       }
       this.lastRequest = performance.now();
     });
@@ -51,25 +97,25 @@ export class SecClient {
     return run;
   }
 
-  async _acquire() {
+  private async _acquire(): Promise<void> {
     if (this.inFlight < MAX_IN_FLIGHT) {
       this.inFlight++;
       return;
     }
-    await new Promise((r) => this.waiters.push(r));
+    await new Promise<void>((r) => this.waiters.push(r));
     this.inFlight++;
   }
 
-  _release() {
+  private _release(): void {
     this.inFlight--;
     const next = this.waiters.shift();
     if (next) next();
   }
 
-  async fetch(url, { retries = 4, priority = 'high', headers = {}, method = 'GET' } = {}) {
+  async fetch(url: string, { retries = 4, priority = 'high', headers = {}, method = 'GET' }: FetchOptions = {}): Promise<Response> {
     if (priority === 'low') {
       // background work yields to anything the user is waiting for
-      while (!this.idle) await new Promise((r) => setTimeout(r, 500));
+      while (!this.idle) await new Promise<void>((r) => setTimeout(r, 500));
     } else {
       this.touch();
       this.userInFlight++;
@@ -87,23 +133,23 @@ export class SecClient {
   }
 
   // Same client, but every request is low priority.
-  lowPriority() {
+  lowPriority(): Fetcher {
     return {
-      text: (url, opts = {}) => this.text(url, { ...opts, priority: 'low' }),
-      json: (url, opts = {}) => this.json(url, { ...opts, priority: 'low' }),
-      buffer: (url, opts = {}) => this.buffer(url, { ...opts, priority: 'low' }),
-      head: (url, opts = {}) => this.head(url, { ...opts, priority: 'low' }),
+      text: (url: string, opts: RequestOptions = {}) => this.text(url, { ...opts, priority: 'low' }),
+      json: <T,>(url: string, opts: RequestOptions = {}) => this.json<T>(url, { ...opts, priority: 'low' }),
+      buffer: (url: string, opts: RequestOptions = {}) => this.buffer(url, { ...opts, priority: 'low' }),
+      head: (url: string, opts: RequestOptions = {}) => this.head(url, { ...opts, priority: 'low' }),
     };
   }
 
-  async _fetchWithRetry(url, retries, headers, method) {
-    let lastErr;
+  private async _fetchWithRetry(url: string, retries: number, headers: Record<string, string>, method: string): Promise<Response> {
+    let lastErr: Error | undefined;
     for (let attempt = 0; attempt < retries; attempt++) {
       await this._slot();
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
       try {
-        let res;
+        let res: Response;
         try {
           res = await fetch(url, {
             method,
@@ -112,13 +158,14 @@ export class SecClient {
           });
         } catch (err) {
           // network hiccup / timeout: back off and try again
-          lastErr = new Error(`${err.cause?.message || err.message} while fetching ${url}`);
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          const e = err as Error & { cause?: { message?: string } };
+          lastErr = new Error(`${e.cause?.message || e.message} while fetching ${url}`);
+          await new Promise<void>((r) => setTimeout(r, 1000 * (attempt + 1)));
           continue;
         }
         if (res.status === 429 || res.status >= 500) {
           lastErr = new Error(`SEC returned ${res.status} for ${url}`);
-          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+          await new Promise<void>((r) => setTimeout(r, 2000 * (attempt + 1)));
           continue;
         }
         if (res.status === 403) {
@@ -137,38 +184,38 @@ export class SecClient {
     throw lastErr;
   }
 
-  async _cached(url, ttlMs, loader) {
+  private async _cached<T>(url: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
     if (ttlMs > 0) {
       const hit = this.cache.get(url);
-      if (hit && hit.expires > Date.now()) return hit.value;
+      if (hit && hit.expires > Date.now()) return hit.value as T;
     }
     const value = await loader();
     if (ttlMs > 0) {
       this.cache.set(url, { expires: Date.now() + ttlMs, value });
-      if (this.cache.size > 500) this.cache.delete(this.cache.keys().next().value);
+      if (this.cache.size > 500) this.cache.delete(this.cache.keys().next().value!);
     }
     return value;
   }
 
-  text(url, { ttlMs = 0, priority } = {}) {
+  text(url: string, { ttlMs = 0, priority }: RequestOptions = {}): Promise<string> {
     return this._cached(url, ttlMs, async () => (await this.fetch(url, { priority })).text());
   }
 
-  json(url, { ttlMs = 0, priority } = {}) {
-    return this._cached(url, ttlMs, async () => (await this.fetch(url, { priority })).json());
+  json<T = unknown>(url: string, { ttlMs = 0, priority }: RequestOptions = {}): Promise<T> {
+    return this._cached(url, ttlMs, async () => (await this.fetch(url, { priority })).json() as Promise<T>);
   }
 
   // Raw bytes; with `range` ([from, to], inclusive) only that slice of the
   // file is requested - used to pull one member out of a large zip.
-  async buffer(url, { priority, range } = {}) {
-    const headers = range ? { Range: `bytes=${range[0]}-${range[1]}` } : {};
+  async buffer(url: string, { priority, range }: RequestOptions = {}): Promise<Buffer> {
+    const headers: Record<string, string> = range ? { Range: `bytes=${range[0]}-${range[1]}` } : {};
     const res = await this.fetch(url, { priority, headers });
     if (range && res.status !== 206) throw new Error(`SEC did not honour the Range request for ${url}`);
     return Buffer.from(await res.arrayBuffer());
   }
 
   // Content-Length (null when the server does not say).
-  async head(url, { priority } = {}) {
+  async head(url: string, { priority }: RequestOptions = {}): Promise<{ size: number | null }> {
     const res = await this.fetch(url, { priority, method: 'HEAD' });
     const len = res.headers.get('content-length');
     return { size: len ? Number(len) : null };

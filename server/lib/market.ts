@@ -8,6 +8,34 @@ import { store } from './store.ts';
 import { MARKET_FIELDS } from './marketFields.ts';
 
 export { MARKET_FIELDS };
+import type { MarketQuote } from './types.ts';
+
+/** One line of the snapshot: what the scanner answered for a symbol. */
+export interface MarketRow extends MarketQuote {
+  symbol: string;
+  sharesOutstanding?: number | null;
+  high52?: number | null;
+  low52?: number | null;
+  type?: string | null;
+  subtype?: string | null;
+  sector?: string | null;
+  industry?: string | null;
+}
+
+/** Every US-listed symbol, keyed by its EDGAR ticker. */
+export interface MarketSnapshot {
+  updatedAt: string;
+  count: number;
+  byTicker: Record<string, MarketRow>;
+  /** when this copy was taken (memory only) */
+  at?: number;
+}
+
+/** The scanner's answer to one page. */
+interface ScannerPage {
+  totalCount?: number;
+  data?: { s: string; d: unknown[] }[];
+}
 
 const URL = 'https://scanner.tradingview.com/america/scan';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
@@ -15,7 +43,7 @@ const TTL = 30 * 60 * 1000;
 const PAGE = 5000;
 
 // [scanner column, our key]
-export const COLUMNS = [
+export const COLUMNS: [string, string][] = [
   ['name', 'symbol'],
   ['close', 'price'],
   ['currency', 'currency'],
@@ -43,12 +71,12 @@ export const COLUMNS = [
   ['industry', 'industry'],
 ];
 
-let memo = null; // { at, byTicker, count, updatedAt }
-let refreshing = null;
+let memo: (MarketSnapshot & { at: number }) | null = null;
+let refreshing: Promise<void> | null = null;
 
-const edgarTicker = (s) => String(s).toUpperCase().replace(/\./g, '-');
+const edgarTicker = (s: string) => String(s).toUpperCase().replace(/\./g, '-');
 
-async function page(from) {
+async function page(from: number): Promise<ScannerPage> {
   const body = {
     filter: [{ left: 'type', operation: 'in_range', right: ['stock', 'dr'] }],
     options: { lang: 'en' },
@@ -59,19 +87,19 @@ async function page(from) {
   };
   const res = await fetch(URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': UA, Origin: 'https://www.tradingview.com' }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`scanner.tradingview.com returned ${res.status}`);
-  return res.json();
+  return res.json() as Promise<ScannerPage>;
 }
 
-async function fetchSnapshot() {
-  const byTicker = {};
+async function fetchSnapshot(): Promise<MarketSnapshot> {
+  const byTicker: Record<string, MarketRow> = {};
   let total = Infinity;
   for (let from = 0; from < total && from < 40_000; from += PAGE) {
     const j = await page(from);
     total = j.totalCount ?? 0;
     for (const row of j.data || []) {
-      const rec = {};
+      const rec = {} as MarketRow & Record<string, unknown>;
       COLUMNS.forEach(([, key], i) => (rec[key] = row.d[i] ?? null));
-      if (!rec.symbol || !(rec.price > 0)) continue;
+      if (!rec.symbol || !(rec.price! > 0)) continue;
       // one record per EDGAR ticker: the common share, not a preferred / warrant with the same root
       if (rec.subtype && !/^(common|foreign-issuer|dr|)$/.test(rec.subtype)) continue;
       const t = edgarTicker(rec.symbol);
@@ -85,9 +113,9 @@ async function fetchSnapshot() {
 }
 
 // The snapshot: memory, else the saved copy, refreshed when older than TTL.
-export async function marketSnapshot({ wait = false } = {}) {
+export async function marketSnapshot({ wait = false }: { wait?: boolean } = {}): Promise<MarketSnapshot | null> {
   if (!memo) {
-    const saved = store.getKV('market:snapshot');
+    const saved = store.getKV<MarketSnapshot>('market:snapshot');
     if (saved) memo = { ...saved.value, at: Date.now() - saved.ageMs };
   }
   const stale = !memo || Date.now() - memo.at > TTL;
@@ -98,7 +126,7 @@ export async function marketSnapshot({ wait = false } = {}) {
         store.putKV('market:snapshot', snap);
         console.log(`market snapshot: ${snap.count.toLocaleString()} tickers from TradingView`);
       })
-      .catch((err) => console.warn(`market snapshot failed: ${err.message}`))
+      .catch((err) => console.warn(`market snapshot failed: ${(err as Error).message}`))
       .finally(() => (refreshing = null));
   }
   if (memo && !(wait && stale)) return memo;

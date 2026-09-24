@@ -7,6 +7,8 @@
 import { SecClient } from '../lib/secClient.ts';
 import { coverSharesFor, indexCoverShares } from '../lib/coverShares.ts';
 import { openStore, store } from '../lib/store.ts';
+import type { FilingRecord } from '../lib/store.ts';
+import type { CoverShareIndex, CoverShareRecord, ScrapeResult } from '../lib/types.ts';
 
 const dryRun = process.argv.includes('--dry-run');
 const onlyCik = process.argv.find((x, i, a) => a[i - 1] === '--cik');
@@ -15,7 +17,7 @@ const client = new SecClient({ timeoutMs: 15_000 });
 openStore();
 
 const CONCEPT_API = 'https://data.sec.gov/api/xbrl/companyconcept/';
-const byCik = new Map();
+const byCik = new Map<number, FilingRecord[]>();
 for (const f of store.allFilings()) {
   const a = byCik.get(f.cik) || [];
   a.push(f);
@@ -27,22 +29,22 @@ let skipped = 0;
 let ambiguous = 0;
 let failed = 0;
 
-async function companyConcept(cik) {
+async function companyConcept(cik: number): Promise<CoverShareIndex> {
   const padded = String(cik).padStart(10, '0');
-  const rows = [];
+  const rows: CoverShareRecord[] = [];
   for (const [tax, concept] of [
     ['dei', 'EntityCommonStockSharesOutstanding'],
     ['us-gaap', 'CommonStockSharesOutstanding'],
   ]) {
     try {
-      const j = await client.json(`${CONCEPT_API}CIK${padded}/${tax}/${concept}.json`);
+      const j = await client.json<{ units?: { shares?: { val?: unknown; accn?: string; end?: string }[] } }>(`${CONCEPT_API}CIK${padded}/${tax}/${concept}.json`);
       rows.push(
         ...(Array.isArray(j.units?.shares) ? j.units.shares : [])
           .filter((f) => typeof f.val === 'number' && Number.isFinite(f.val) && f.val > 0 && f.accn && /^\d{4}-\d{2}-\d{2}$/.test(f.end || ''))
-          .map((f) => ({ accession: f.accn, end: f.end, value: f.val, source: 'companyconcept', concept: `${tax}:${concept}`, basis: `${tax}:${concept}` })),
+          .map((f) => ({ accession: f.accn!, end: f.end!, value: f.val as number, source: 'companyconcept', concept: `${tax}:${concept}`, basis: `${tax}:${concept}` })),
       );
     } catch (err) {
-      if (err.status !== 404) throw err;
+      if ((err as { status?: number }).status !== 404) throw err;
     }
   }
   return indexCoverShares(rows);
@@ -52,7 +54,7 @@ for (const [cik, filings] of byCik) {
   if (onlyCik && Number(onlyCik) !== Number(cik)) continue;
   // Decode first so a resumed run does not keep making SEC requests for CIKs
   // whose complete batch was enriched before an interruption.
-  const pending = [];
+  const pending: { f: FilingRecord; result: ScrapeResult }[] = [];
   for (const f of filings) {
     scanned++;
     const result = store.getFiling(f.accession);
@@ -63,12 +65,12 @@ for (const [cik, filings] of byCik) {
     pending.push({ f, result });
   }
   if (!pending.length) continue;
-  let shares;
+  let shares: CoverShareIndex;
   try {
     shares = await companyConcept(cik);
   } catch (err) {
     failed++;
-    console.warn(`enrich-cover-shares ${cik}: ${err.message}`);
+    console.warn(`enrich-cover-shares ${cik}: ${(err as Error).message}`);
     continue;
   }
   for (const { f, result } of pending) {
@@ -80,7 +82,7 @@ for (const [cik, filings] of byCik) {
       else skipped++;
       continue;
     }
-    result.coverShares = [{ end: hit.end, entity: null, value: hit.value, concept: hit.basis, basis: 'companyconcept', classes: 1, source: 'companyconcept' }];
+    result.coverShares = [{ end: hit.end, entity: null as unknown as string, value: hit.value, concept: hit.basis!, basis: 'companyconcept' as never, classes: 1, source: 'companyconcept' }];
     if (!dryRun) store.putFiling(f.accession, f.cik, result, f.version, result.fetchedAt);
     changed++;
   }

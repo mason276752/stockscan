@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { yearQuarterPoints } from '../server/lib/quarters.ts';
 import { C, first } from '../server/lib/indicators.ts';
+import type { Concept, FilingRef, IsoDate, QuarterKey, QuarterPoint, ScrapeResult } from '../server/lib/types.ts';
+
+/** concept -> the year-to-date amount a fixture filing reports. */
+type Rows = Record<Concept, number>;
 
 // a filer's cash flow statement, year-to-date column only (the usual shape)
-const END = { Q1: '2026-03-31', Q2: '2026-06-30', Q3: '2026-09-30', FY: '2026-12-31' };
-const doc = (end, rows) => ({
+const END: Record<QuarterKey, IsoDate> = { Q1: '2026-03-31', Q2: '2026-06-30', Q3: '2026-09-30', FY: '2026-12-31' };
+const doc = (end: IsoDate, rows: Rows) => ({
   allStatements: [],
   statements: {
     cash_flow: {
@@ -13,17 +17,17 @@ const doc = (end, rows) => ({
       lineItems: Object.entries(rows).map(([concept, value]) => ({ concept, label: concept, abstract: false, values: { c1: { value } } })),
     },
   },
-});
-const quarters = (byPeriod) => {
-  const docs = {};
-  const filings = {};
-  for (const [q, rows] of Object.entries(byPeriod)) {
+}) as unknown as ScrapeResult;
+const quarters = (byPeriod: Partial<Record<QuarterKey, Rows>>) => {
+  const docs: Partial<Record<QuarterKey, ScrapeResult>> = {};
+  const filings: Partial<Record<QuarterKey, FilingRef>> = {};
+  for (const [q, rows] of Object.entries(byPeriod) as [QuarterKey, Rows][]) {
     docs[q] = doc(END[q], rows);
     filings[q] = { accession: `acc-${q}`, reportDate: END[q], form: q === 'FY' ? '10-K' : '10-Q' };
   }
   return yearQuarterPoints(docs, filings);
 };
-const flowsOf = (points, period) => points.find((p) => p.period === period).flows;
+const flowsOf = (points: readonly QuarterPoint[], period: string) => points.find((p) => p.period === period)!.flows;
 
 const DIV = 'us-gaap:PaymentsOfDividends';
 const ORDINARY = 'us-gaap:PaymentsOfOrdinaryDividends';
@@ -42,7 +46,7 @@ test('the renamed line carries on: Q3 subtracts its own cumulative', () => {
 
 test('a rename in the 10-K gives Q4 = year − nine months', () => {
   const points = quarters({ Q1: { [DIV]: 2542 }, Q2: { [DIV]: 5231 }, Q3: { [DIV]: 7900 }, FY: { [ORDINARY]: 10700 } });
-  assert.equal(points.find((p) => p.period === 'Q4').flows[ORDINARY], 2800);
+  assert.equal(points.find((p) => p.period === 'Q4')!.flows[ORDINARY], 2800);
 });
 
 test('a line that is still reported is a second line, not a new name', () => {
@@ -62,7 +66,7 @@ test('concepts that are not interchangeable do not bridge', () => {
 });
 
 test('basic and diluted per-share lines are a preference order, not one series', () => {
-  const eps = (rows) => ({
+  const eps = (rows: Rows) => ({
     allStatements: [],
     statements: {
       income_statement: {
@@ -70,7 +74,7 @@ test('basic and diluted per-share lines are a preference order, not one series',
         lineItems: Object.entries(rows).map(([concept, value]) => ({ concept, label: concept, abstract: false, values: { c1: { value } } })),
       },
     },
-  });
+  }) as unknown as ScrapeResult;
   const points = yearQuarterPoints(
     { Q1: eps({ 'us-gaap:EarningsPerShareBasic': 1 }), Q2: eps({ 'us-gaap:EarningsPerShareDiluted': 1.9 }) },
     { Q1: { accession: 'a1', reportDate: END.Q1, form: '10-Q' }, Q2: { accession: 'a2', reportDate: END.Q2, form: '10-Q' } },

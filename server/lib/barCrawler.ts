@@ -24,11 +24,36 @@ const LOG_EVERY = 60_000;
 const RUN_KEY = 'barcrawl:last'; // not 'bars:…' - the bar store's kv migration sweeps that prefix
 const FAILS_KEY = 'barcrawl:fails';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const n = (x) => x.toLocaleString('en-US');
+import type { Fetcher } from './secClient.ts';
 
-export function createBarCrawler(client, { enabled = true } = {}) {
-  const state = {
+/** How far the crawl has got. */
+interface CrawlState {
+  enabled: boolean;
+  phase: 'waiting' | 'running';
+  round: number;
+  total: number;
+  position: number;
+  fetched: number;
+  fresh: number;
+  failed: number;
+  bars: number;
+  current: string | null;
+  startedAt: string | null;
+  lastRun: string | null;
+}
+
+/** A symbol TradingView could not answer for, and how often. */
+interface FailRecord {
+  n: number;
+  at: string;
+  error: string;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const n = (x: number) => x.toLocaleString('en-US');
+
+export function createBarCrawler(client: Fetcher, { enabled = true }: { enabled?: boolean } = {}) {
+  const state: CrawlState = {
     enabled: enabled && tvStatus().enabled,
     phase: 'waiting', // waiting | running
     round: 0,
@@ -40,10 +65,10 @@ export function createBarCrawler(client, { enabled = true } = {}) {
     bars: 0, // bars downloaded this run
     current: null,
     startedAt: null,
-    lastRun: store.getKV(RUN_KEY)?.value || null,
+    lastRun: store.getKV<string>(RUN_KEY)?.value || null,
   };
-  const fails = store.getKV(FAILS_KEY)?.value || {};
-  const inFlight = new Set();
+  const fails: Record<string, FailRecord> = store.getKV<Record<string, FailRecord>>(FAILS_KEY)?.value || {};
+  const inFlight = new Set<string>();
 
   async function run() {
     state.phase = 'running';
@@ -76,8 +101,8 @@ export function createBarCrawler(client, { enabled = true } = {}) {
           if (f) delete fails[symbol];
         } catch (err) {
           state.failed++;
-          fails[symbol] = { n: (f?.n || 0) + 1, at: new Date().toISOString(), error: err.message };
-          if ((f?.n || 0) + 1 >= MAX_FAILS) console.warn(`bars crawl ${symbol}: ${err.message}（放棄一週）`);
+          fails[symbol] = { n: (f?.n || 0) + 1, at: new Date().toISOString(), error: (err as Error).message };
+          if ((f?.n || 0) + 1 >= MAX_FAILS) console.warn(`bars crawl ${symbol}: ${(err as Error).message}（放棄一週）`);
         } finally {
           inFlight.delete(symbol);
           state.current = inFlight.size ? [...inFlight].join(', ') : null;
@@ -115,7 +140,7 @@ export function createBarCrawler(client, { enabled = true } = {}) {
           await run();
         } catch (err) {
           state.phase = 'waiting';
-          console.warn(`bars crawl failed: ${err.message}`);
+          console.warn(`bars crawl failed: ${(err as Error).message}`);
           await sleep(10 * 60 * 1000);
         }
       }

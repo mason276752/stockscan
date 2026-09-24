@@ -11,26 +11,34 @@
 import { pickFiling } from './filings.ts';
 import { yearQuarterPoints } from './quarters.ts';
 import { C } from './concepts.ts';
+import type { FilingLoader } from './quarters.ts';
+import type {
+  Adequacy, Company, CompanyMeta, Concept, Facts, FilingRef, IndicatorColumn, IndicatorRow, Indicators,
+  QuarterKey, QuarterPoint, RatioInputs, RatioValues, ScrapeResult,
+} from './types.ts';
 
-// the concept fallback lists (concepts.js), re-exported: this is where the
+/** A quarter point with the fiscal year it belongs to. */
+export type YearPoint = QuarterPoint & { year: number };
+
+// the concept fallback lists (concepts.ts), re-exported: this is where the
 // rest of the code has always taken them from
 export { C };
 
-export const first = (map, keys) => {
-  for (const k of keys) if (map && map[k] != null) return map[k];
+export const first = (map: Record<Concept, number | null> | null | undefined, keys: readonly Concept[]): number | null => {
+  for (const k of keys) if (map && map[k] != null) return map[k]!;
   return null;
 };
-const sum = (...xs) => (xs.every((x) => x == null) ? null : xs.reduce((a, x) => a + (x ?? 0), 0));
-const div = (a, b) => (a == null || b == null || b === 0 ? null : a / b);
-const pct = (a, b) => (div(a, b) == null ? null : (a / b) * 100);
+const sum = (...xs: (number | null | undefined)[]): number | null => (xs.every((x) => x == null) ? null : xs.reduce<number>((a, x) => a + (x ?? 0), 0));
+const div = (a: number | null, b: number | null): number | null => (a == null || b == null || b === 0 ? null : a / b);
+const pct = (a: number | null, b: number | null): number | null => (div(a, b) == null ? null : (a! / b!) * 100);
 // average of the period-end and comparative balances; one side missing (a
 // line that dropped off the statement) falls back to the other
-const avg = (a, b) => (a == null ? b : b == null ? a : (a + b) / 2);
+const avg = (a: number | null, b: number | null): number | null => (a == null ? b : b == null ? a : (a + b) / 2);
 
 // Row catalogue: group, name, unit, kind (ratio | flow amount | balance) and the formula shown in the tooltip.
 // benchmark: the rule of thumb a value is judged against (the indicators page
 // colours the hovered row green / red by it)
-export const ROWS = [
+export const ROWS: IndicatorRow[] = [
   { key: 'cashPct', group: '資產負債結構', name: '現金與約當現金（佔總資產%）', unit: '%', kind: 'ratio', formula: '現金及約當現金 ÷ 總資產', benchmark: { op: '>=', value: 25 } },
   { key: 'arPct', group: '資產負債結構', name: '應收帳款（佔總資產%）', unit: '%', kind: 'ratio', formula: '應收帳款淨額 ÷ 總資產' },
   { key: 'invPct', group: '資產負債結構', name: '存貨（佔總資產%）', unit: '%', kind: 'ratio', formula: '存貨 ÷ 總資產' },
@@ -77,13 +85,19 @@ export const ROWS = [
   { key: 'fcf', group: '現金流量', name: '籌資活動現金流量', unit: '百萬', kind: 'flow', formula: '來自現金流量表' },
 ];
 
-function stepBack(year, q) {
+function stepBack(year: number, q: number): [number, number] {
   return q === 1 ? [year - 1, 4] : [year, q - 1];
 }
 
+/** One fiscal quarter, as the loaders address it. */
+export interface QuarterRef {
+  year: number;
+  q: number;
+}
+
 // Ordered (oldest first) list of quarter keys ending at (year, q), `count` long.
-export function quarterKeys(year, q, count) {
-  const out = [];
+export function quarterKeys(year: number, q: number, count: number): QuarterRef[] {
+  const out: QuarterRef[] = [];
   let y = year;
   let k = q;
   for (let i = 0; i < count; i++) {
@@ -94,34 +108,34 @@ export function quarterKeys(year, q, count) {
 }
 
 // Load the quarter points needed and index them by "year-Qn" (or "year-FY").
-export async function loadPoints(load, company, keys, quarterly) {
+export async function loadPoints(load: FilingLoader, company: Company, keys: readonly QuarterRef[], quarterly: boolean): Promise<Record<string, YearPoint>> {
   const years = [...new Set(keys.map((k) => k.year))];
-  const filingsByYear = {};
+  const filingsByYear: Record<number, Partial<Record<QuarterKey, FilingRef>>> = {};
   for (const y of years) {
     filingsByYear[y] = {};
-    for (const p of quarterly ? ['Q1', 'Q2', 'Q3', 'FY'] : ['FY']) {
+    for (const p of (quarterly ? ['Q1', 'Q2', 'Q3', 'FY'] : ['FY']) as QuarterKey[]) {
       // a year's Q4 needs the 10-K and the 10-Qs (cumulative nine months)
       const needed = keys.some((k) => k.year === y && (!quarterly || k.q === 4 || p === `Q${k.q}`));
       const f = needed ? pickFiling(company.filings, { year: y, period: p }) : null;
-      if (f) filingsByYear[y][p] = f;
+      if (f) filingsByYear[y]![p] = f;
     }
   }
-  const docsByYear = {};
+  const docsByYear: Record<number, Partial<Record<QuarterKey, ScrapeResult>>> = {};
   await Promise.all(
     years.flatMap((y) =>
-      Object.entries(filingsByYear[y]).map(async ([p, f]) => {
+      (Object.entries(filingsByYear[y]!) as [QuarterKey, FilingRef][]).map(async ([p, f]) => {
         (docsByYear[y] ||= {})[p] = await load(f);
       }),
     ),
   );
-  const byKey = {};
+  const byKey: Record<string, YearPoint> = {};
   for (const y of years) {
     if (!docsByYear[y]) continue;
     if (quarterly) {
-      for (const pt of yearQuarterPoints(docsByYear[y], filingsByYear[y])) byKey[`${y}-${pt.period}`] = { ...pt, year: y };
-    } else if (docsByYear[y].FY) {
-      const [pt] = yearQuarterPoints({ FY: docsByYear[y].FY }, { FY: filingsByYear[y].FY });
-      byKey[`${y}-FY`] = { ...pt, period: 'FY', flows: pt.fy, year: y };
+      for (const pt of yearQuarterPoints(docsByYear[y]!, filingsByYear[y]!)) byKey[`${y}-${pt.period}`] = { ...pt, year: y };
+    } else if (docsByYear[y]!.FY) {
+      const [pt] = yearQuarterPoints({ FY: docsByYear[y]!.FY }, { FY: filingsByYear[y]!.FY });
+      byKey[`${y}-FY`] = { ...pt!, period: 'FY', flows: pt!.fy!, year: y };
     }
   }
   return byKey;
@@ -132,22 +146,22 @@ export async function loadPoints(load, company, keys, quarterly) {
 //   flowA(key)  the same on an annual basis
 //   bal(key)    closing balance, balPrev(key) opening balance
 //   adequacy()  { ocf, out, periods } sums for the cash-flow-adequacy ratio
-export function ratios(g) {
-  const v = {};
+export function ratios(g: RatioInputs): { values: RatioValues; flowsAnnualized: RatioValues } {
+  const v: RatioValues = {};
   const currentAssets = g.bal('currentAssets');
   // total assets: the line, else current + non-current, else the other side of the balance sheet
-  const totalAssets = g.bal('totalAssets') ?? (currentAssets != null && g.bal('nonCurrentAssets') != null ? currentAssets + g.bal('nonCurrentAssets') : null) ?? g.bal('liabilitiesAndEquity');
+  const totalAssets = g.bal('totalAssets') ?? (currentAssets != null && g.bal('nonCurrentAssets') != null ? currentAssets + g.bal('nonCurrentAssets')! : null) ?? g.bal('liabilitiesAndEquity');
   const currentLiabilities = g.bal('currentLiabilities');
   const lse = g.bal('liabilitiesAndEquity') ?? totalAssets;
   // equity and total liabilities: the concept, or the other one subtracted from total liabilities & equity
-  const equityTotal = g.bal('equityTotal') ?? (lse != null && g.bal('totalLiabilities') != null ? lse - g.bal('totalLiabilities') : null);
+  const equityTotal = g.bal('equityTotal') ?? (lse != null && g.bal('totalLiabilities') != null ? lse - g.bal('totalLiabilities')! : null);
   const totalLiabilities =
     g.bal('totalLiabilities') ??
     (lse != null && equityTotal != null ? lse - equityTotal : null) ??
-    (currentLiabilities != null && g.bal('nonCurrentLiabilities') != null ? currentLiabilities + g.bal('nonCurrentLiabilities') : null);
+    (currentLiabilities != null && g.bal('nonCurrentLiabilities') != null ? currentLiabilities + g.bal('nonCurrentLiabilities')! : null);
   const ncl = g.bal('nonCurrentLiabilities') ?? (totalLiabilities != null && currentLiabilities != null ? totalLiabilities - currentLiabilities : null);
   const inventory = g.bal('inventory');
-  const avgBal = (key) => avg(g.bal(key), g.balPrev(key));
+  const avgBal = (key: string) => avg(g.bal(key), g.balPrev(key));
 
   v.cashPct = pct(g.bal('cash'), totalAssets);
   v.arPct = pct(g.bal('ar'), totalAssets);
@@ -168,7 +182,7 @@ export function ratios(g) {
   // listed amortisation / depreciation; the estimate from the expense lines
   // when there is nothing else - or when it is bigger than the concept (it
   // then is that concept plus the direct-cost lines listed beside it)
-  const cogsOf = (f) => {
+  const cogsOf = (f: (key: string) => number | null): number | null => {
     const syn = f('cogsSynthetic');
     const total = f('cogsTotal');
     const partial = f('cogsPartialReal');
@@ -180,7 +194,7 @@ export function ratios(g) {
   const cogsA = cogsOf(g.flowA);
 
   // revenue: banks have no revenue line - use net interest income + non-interest income
-  const revenueOf = (f) => {
+  const revenueOf = (f: (key: string) => number | null): number | null => {
     const direct = f('revenue');
     const nii = f('netInterestIncome') ?? f('interestIncome');
     const bank = nii == null ? null : nii + (f('noninterestIncome') ?? 0);
@@ -192,21 +206,21 @@ export function ratios(g) {
   // operating income: the concept; else revenue − total costs and expenses;
   // else gross profit (or revenue) − total operating expenses; else pre-tax
   // income with the non-operating lines (interest, other) added back
-  const opIncomeOf = (f) => {
+  const opIncomeOf = (f: (key: string) => number | null): number | null => {
     const direct = f('operatingIncome');
     if (direct != null) return direct;
     if (f('revenue') == null && f('bdcRevenue') != null && f('bdcNetInvestmentIncome') != null) return f('bdcNetInvestmentIncome');
     // banks: interest paid on deposits is their cost of doing business, not a financing item - pre-tax income is the operating result
     if ((f('netInterestIncome') != null || f('interestIncome') != null) && f('pretaxIncome') != null) return f('pretaxIncome');
     const rev = revenueOf(f);
-    if (rev != null && f('costsAndExpenses') != null) return rev - f('costsAndExpenses');
+    if (rev != null && f('costsAndExpenses') != null) return rev - f('costsAndExpenses')!;
     if (rev != null && f('opexTotal') != null) {
       const cogs = cogsOf(f);
       const gross = f('grossProfit') ?? (cogs != null ? rev - cogs : null);
-      return (gross ?? rev) - f('opexTotal');
+      return (gross ?? rev) - f('opexTotal')!;
     }
     const pretax = f('pretaxIncome');
-    if (pretax != null && f('nonoperating') != null) return pretax - f('nonoperating');
+    if (pretax != null && f('nonoperating') != null) return pretax - f('nonoperating')!;
     if (pretax != null && (f('interestExpenseNonop') != null || f('interestIncomeNonop') != null || f('otherNonop') != null)) {
       return pretax + (f('interestExpenseNonop') ?? 0) - (f('interestIncomeNonop') ?? 0) - (f('otherNonop') ?? 0);
     }
@@ -245,19 +259,19 @@ export function ratios(g) {
   // a cost of revenue pieced together from expense lines is an estimate: when
   // it says the gross margin is deeply negative or below the operating margin
   // it picked up the wrong lines - better no figure than a wrong one
-  const baseCogs = g.flow('cogsTotal') ?? (g.flow('cogsPartialReal') == null ? null : g.flow('cogsPartialReal') + (g.flow('cogsAmort') ?? 0) + (g.flow('cogsDA') ?? 0));
-  const usedEstimate = g.flow('cogsSynthetic') != null && (baseCogs == null || g.flow('cogsSynthetic') > baseCogs);
+  const baseCogs = g.flow('cogsTotal') ?? (g.flow('cogsPartialReal') == null ? null : g.flow('cogsPartialReal')! + (g.flow('cogsAmort') ?? 0) + (g.flow('cogsDA') ?? 0));
+  const usedEstimate = g.flow('cogsSynthetic') != null && (baseCogs == null || g.flow('cogsSynthetic')! > baseCogs);
   const bankLike = g.flow('netInterestIncome') != null || g.flow('interestIncome') != null || g.flow('bdcRevenue') != null;
-  const implausible = (gm) => gm != null && (gm < -50 || (v.opMargin != null && gm < v.opMargin - 1));
+  const implausible = (gm: number | null) => gm != null && (gm < -50 || (v.opMargin != null && gm < v.opMargin - 1));
   if (usedEstimate && (bankLike || implausible(v.grossMargin))) {
     // the estimate picked up the wrong lines: back to the concept alone, or to nothing
-    v.grossMargin = baseCogs != null && !bankLike ? pct(revenue - baseCogs, revenue) : null;
+    v.grossMargin = baseCogs != null && !bankLike ? pct(revenue! - baseCogs, revenue) : null;
     if (implausible(v.grossMargin)) v.grossMargin = null;
   }
   // no cost of revenue anywhere on the statement (licensing biotech, SPAC, franchisor: only R&D,
   // administration, depreciation): the whole revenue is gross profit. Only with a real revenue
   // line - banks and investment companies get their revenue by construction and no such figure.
-  if (v.grossMargin == null && cogs == null && g.flow('noCogs') && g.flow('revenue') > 0 && !bankLike) v.grossMargin = 100;
+  if (v.grossMargin == null && cogs == null && g.flow('noCogs') && g.flow('revenue')! > 0 && !bankLike) v.grossMargin = 100;
   v.opexRatio = v.grossMargin != null && v.opMargin != null ? v.grossMargin - v.opMargin : null;
   v.safetyMargin = pct(v.opMargin, v.grossMargin);
   v.netMargin = pct(g.flow('netIncome'), revenue);
@@ -278,23 +292,23 @@ export function ratios(g) {
   const reinvestBase = sum(g.bal('ppeGross') ?? g.bal('ppe'), g.bal('ltInvestments'), g.bal('otherAssets'), currentAssets != null && currentLiabilities != null ? currentAssets - currentLiabilities : null);
   v.cfReinvest = pct(ocfA == null ? null : ocfA - (g.flowA('dividends') ?? 0), reinvestBase);
 
-  const flowsAnnualized = {};
+  const flowsAnnualized: RatioValues = {};
   for (const k of ['eps', 'netIncome', 'revenue', 'ocf', 'icf', 'fcf']) flowsAnnualized[k] = g.flowA(k);
   return { values: v, flowsAnnualized };
 }
 
 // Cash-flow adequacy inputs over the trailing `span` points ending at index i.
-export function adequacyOver(points, i, span, minPeriods) {
+export function adequacyOver(points: readonly (QuarterPoint | undefined)[], i: number, span: number, minPeriods: number): Adequacy | null {
   let ocf = 0;
   let out = 0;
   let periods = 0;
-  const flow = (k, key) => first(points[k]?.flows, C[key]);
-  const bal = (k, key) => first(points[k]?.balances, C[key]);
+  const flow = (k: number, key: keyof typeof C) => first(points[k]?.flows, C[key]);
+  const bal = (k: number, key: keyof typeof C) => first(points[k]?.balances, C[key]);
   for (let k = i; k > Math.max(0, i - span); k--) {
     const o = flow(k, 'ocf');
     const capex = (flow(k, 'capex') ?? 0) + (flow(k, 'capexIntangibles') ?? 0); // no line: nothing spent
     if (o == null) break;
-    const invInc = bal(k, 'inventory') != null && bal(k - 1, 'inventory') != null ? Math.max(0, bal(k, 'inventory') - bal(k - 1, 'inventory')) : 0;
+    const invInc = bal(k, 'inventory') != null && bal(k - 1, 'inventory') != null ? Math.max(0, bal(k, 'inventory')! - bal(k - 1, 'inventory')!) : 0;
     ocf += o;
     out += capex + invInc + (flow(k, 'dividends') ?? 0);
     periods++;
@@ -305,21 +319,30 @@ export function adequacyOver(points, i, span, minPeriods) {
 // Inputs for ratios() at points[i] the way the quarter view computes a
 // column: the quarter's flows ×4, balances averaged with the quarter before.
 // The filing score uses the same so its numbers match the table.
-export function quarterInputs(points, i, adequacy) {
-  const flowAt = (key) => first(points[i]?.flows, C[key]);
+export function quarterInputs(points: readonly (QuarterPoint | undefined)[], i: number, adequacy: () => Adequacy | null): RatioInputs {
+  const flowAt = (key: string) => first(points[i]?.flows, C[key as keyof typeof C]);
   return {
     flow: flowAt,
     flowA: (key) => {
       const x = flowAt(key);
       return x == null ? null : x * 4;
     },
-    bal: (key) => first(points[i]?.balances, C[key]),
-    balPrev: (key) => first(points[i - 1]?.balances, C[key]),
+    bal: (key) => first(points[i]?.balances, C[key as keyof typeof C]),
+    balPrev: (key) => first(points[i - 1]?.balances, C[key as keyof typeof C]),
     adequacy,
   };
 }
 
-export async function buildIndicators(load, company, { year, period, n = 20, basis = 'x4', mode = 'quarter' }) {
+/** What the indicator page asks for. */
+export interface IndicatorQuery {
+  year: number;
+  period: string;
+  n?: number;
+  basis?: string;
+  mode?: string;
+}
+
+export async function buildIndicators(load: FilingLoader, company: Company, { year, period, n = 20, basis = 'x4', mode = 'quarter' }: IndicatorQuery): Promise<Indicators> {
   const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
   const endQ = period === 'FY' ? 4 : Number(period.slice(1));
   const yearMode = mode === 'year' && quarterly;
@@ -327,20 +350,20 @@ export async function buildIndicators(load, company, { year, period, n = 20, bas
 
   // --- annual filers: one point per fiscal year -------------------------
   if (!quarterly) {
-    const keys = [];
+    const keys: QuarterRef[] = [];
     for (let i = 0; i < n + 1; i++) keys.unshift({ year: year - i, q: 4 });
     const byKey = await loadPoints(load, company, keys, false);
-    const points = keys.map((k) => byKey[`${k.year}-FY`] || { year: k.year, period: 'FY', flows: {}, balances: {}, missing: true });
-    const columns = [];
+    const points: YearPoint[] = keys.map((k) => byKey[`${k.year}-FY`] || { year: k.year, period: 'FY', periodEnd: null, flows: {}, balances: {}, sources: [], missing: true });
+    const columns: IndicatorColumn[] = [];
     for (let i = 1; i < points.length; i++) {
-      const g = {
-        flow: (key) => first(points[i].flows, C[key]),
-        flowA: (key) => first(points[i].flows, C[key]),
-        bal: (key) => first(points[i].balances, C[key]),
-        balPrev: (key) => first(points[i - 1].balances, C[key]),
+      const g: RatioInputs = {
+        flow: (key) => first(points[i]!.flows, C[key as keyof typeof C]),
+        flowA: (key) => first(points[i]!.flows, C[key as keyof typeof C]),
+        bal: (key) => first(points[i]!.balances, C[key as keyof typeof C]),
+        balPrev: (key) => first(points[i - 1]!.balances, C[key as keyof typeof C]),
         adequacy: () => adequacyOver(points, i, 5, 1),
       };
-      columns.push({ label: `FY${points[i].year}`, year: points[i].year, period: 'FY', periodEnd: points[i].periodEnd || null, missing: !!points[i].missing, sources: points[i].sources || [], ...ratios(g) });
+      columns.push({ label: `FY${points[i]!.year}`, year: points[i]!.year, period: 'FY', periodEnd: points[i]!.periodEnd || null, missing: !!points[i]!.missing, sources: points[i]!.sources || [], ...ratios(g) });
     }
     return { fetchedAt: new Date().toISOString(), company: meta(company), quarterly: false, mode: 'year', basis: 'annual', end: { year, period }, rows: ROWS, columns };
   }
@@ -351,10 +374,10 @@ export async function buildIndicators(load, company, { year, period, n = 20, bas
   const count = yearMode || sameMode ? n * 4 + 4 : n + 1;
   const keys = quarterKeys(year, endQ, count);
   const byKey = await loadPoints(load, company, keys, true);
-  const points = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { year: k.year, period: `Q${k.q}`, flows: {}, balances: {}, missing: true });
-  const flowAt = (i, key) => first(points[i]?.flows, C[key]);
-  const balAt = (i, key) => first(points[i]?.balances, C[key]);
-  const sumFlows = (i, len, key) => {
+  const points: YearPoint[] = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { year: k.year, period: `Q${k.q}`, periodEnd: null, flows: {}, balances: {}, sources: [], missing: true });
+  const flowAt = (i: number, key: string) => first(points[i]?.flows, C[key as keyof typeof C]);
+  const balAt = (i: number, key: string) => first(points[i]?.balances, C[key as keyof typeof C]);
+  const sumFlows = (i: number, len: number, key: string): number | null => {
     let total = 0;
     for (let k = i - len + 1; k <= i; k++) {
       const x = flowAt(k, key);
@@ -364,20 +387,20 @@ export async function buildIndicators(load, company, { year, period, n = 20, bas
     return total;
   };
 
-  const columns = [];
+  const columns: IndicatorColumn[] = [];
   if (yearMode) {
     for (let j = n - 1; j >= 0; j--) {
       const i = points.length - 1 - j * 4; // closing quarter of this "year"
       const span = points.slice(i - 3, i + 1);
-      const g = {
+      const g: RatioInputs = {
         flow: (key) => sumFlows(i, 4, key),
         flowA: (key) => sumFlows(i, 4, key),
         bal: (key) => balAt(i, key),
         balPrev: (key) => balAt(i - 4, key),
         adequacy: () => adequacyOver(points, i, 20, 4),
       };
-      const end = points[i];
-      const start = points[i - 3];
+      const end = points[i]!;
+      const start = points[i - 3]!;
       const isFiscalYear = endQ === 4;
       columns.push({
         label: isFiscalYear ? `FY${end.year}` : `${end.year} ${end.period}`,
@@ -394,7 +417,7 @@ export async function buildIndicators(load, company, { year, period, n = 20, bas
     for (let i = 1; i < points.length; i++) {
       const g = quarterInputs(points, i, () => adequacyOver(points, i, 20, 4));
       if (basis === 'ttm') g.flowA = (key) => (i < 3 ? null : sumFlows(i, 4, key));
-      const p = points[i];
+      const p = points[i]!;
       // same-quarter view: the first four points only feed opening balances / trailing sums
       if (sameMode && (p.period !== `Q${endQ}` || i < points.length - n * 4)) continue;
       columns.push({ label: `${p.year} ${p.period}`, year: p.year, period: p.period, periodEnd: p.periodEnd || null, missing: !!p.missing, sources: p.sources || [], ...ratios(g) });
@@ -413,4 +436,4 @@ export async function buildIndicators(load, company, { year, period, n = 20, bas
   };
 }
 
-const meta = (company) => ({ cik: company.cik, name: company.name, tickers: company.tickers, fiscalYearEnd: company.fiscalYearEnd });
+const meta = (company: Company): CompanyMeta => ({ cik: company.cik, name: company.name, tickers: company.tickers, fiscalYearEnd: company.fiscalYearEnd });

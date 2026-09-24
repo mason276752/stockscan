@@ -8,16 +8,18 @@ import { createBasket } from '../baskets';
 import { t, tr } from '../i18n';
 import Note from './Note.vue';
 import Loading from './Loading.vue';
+import type { ScoreBadge as ScoreBadgeData } from '../../../server/lib/types.ts';
+import type { WatchEntry } from '../watchlist';
 
 const emit = defineEmits(['open', 'basket']);
-const scores = ref({});
+const scores = ref<Record<string, ScoreBadgeData | null>>({});
 const loading = ref(false);
 const sortKey = ref('addedAt');
 const sortDir = ref(-1);
 const current = ref('all'); // 'all' | '__none' | group name
-const editing = ref(null); // cik whose group chips are being edited
+const editing = ref<number | null>(null); // cik whose group chips are being edited
 const newGroup = ref('');
-const renaming = ref(null); // { from, to }
+const renaming = ref<{ from: string; to: string } | null>(null);
 const addMsg = ref('');
 
 async function refresh() {
@@ -36,7 +38,7 @@ onMounted(refresh);
 watch(() => watchlist.items.length, refresh);
 
 const counts = computed(() => {
-  const c = { all: watchlist.items.length, __none: watchlist.items.filter((x) => !x.groups.length).length };
+  const c: Record<string, number> = { all: watchlist.items.length, __none: watchlist.items.filter((x) => !x.groups.length).length };
   for (const g of watchlist.groups) c[g] = watchlist.items.filter((x) => x.groups.includes(g)).length;
   return c;
 });
@@ -46,7 +48,7 @@ const filtered = computed(() => {
   return watchlist.items.filter((x) => x.groups.includes(current.value));
 });
 
-function sortBy(k) {
+function sortBy(k: string) {
   if (sortKey.value === k) sortDir.value = -sortDir.value;
   else {
     sortKey.value = k;
@@ -55,12 +57,12 @@ function sortBy(k) {
 }
 const rows = computed(() => {
   const k = sortKey.value;
-  const val = (x) => {
+  const val = (x: WatchEntry): string | number | null => {
     const s = scores.value[x.cik];
     if (k === 'score') return s?.score ?? null;
     if (k === 'periodEnd') return s?.periodEnd ?? '';
     if (k === 'filingDate') return s?.filingDate ?? '';
-    return x[k] ?? '';
+    return (x as unknown as Record<string, string | number>)[k] ?? '';
   };
   return [...filtered.value].sort((a, b) => {
     const x = val(a) ?? -Infinity;
@@ -69,9 +71,9 @@ const rows = computed(() => {
     return (x < y ? -1 : 1) * sortDir.value;
   });
 });
-const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
+const arrow = (k: string) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
 const CATS = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
-const catCls = (v) => (v == null ? '' : v >= 70 ? 'good' : v >= 40 ? 'mid' : 'bad');
+const catCls = (v: number | null | undefined) => (v == null ? '' : v >= 70 ? 'good' : v >= 40 ? 'mid' : 'bad');
 
 // ---- groups ----
 function createGroup() {
@@ -79,18 +81,18 @@ function createGroup() {
   if (g) current.value = g;
   newGroup.value = '';
 }
-function toggleInGroup(item, g) {
+function toggleInGroup(item: WatchEntry, g: string) {
   const has = item.groups.includes(g);
   setGroups(item.cik, has ? item.groups.filter((x) => x !== g) : [...item.groups, g]);
 }
-function startRename(g) {
+function startRename(g: string) {
   renaming.value = { from: g, to: g };
 }
 function finishRename() {
   if (renaming.value && renameGroup(renaming.value.from, renaming.value.to) && current.value === renaming.value.from) current.value = renaming.value.to;
   renaming.value = null;
 }
-function deleteGroup(g) {
+function deleteGroup(g: string) {
   if (!confirm(t('wl.confirmDeleteGroup', { g }))) return;
   removeGroup(g);
   if (current.value === g) current.value = 'all';
@@ -104,7 +106,7 @@ function makeBasket() {
   emit('basket');
 }
 // add a company straight into the current group from the search box
-async function addFromSearch(ticker) {
+async function addFromSearch(ticker: string) {
   addMsg.value = '';
   try {
     const c = await api.company(ticker);
@@ -112,7 +114,7 @@ async function addFromSearch(ticker) {
     toggleWatch({ cik: c.cik, ticker: c.tickers?.[0] || null, name: c.name }, group);
     addMsg.value = t('wl.added', { name: c.tickers?.[0] || c.name, group: group ? ` → ${group}` : '' });
   } catch (e) {
-    addMsg.value = t('notFound', { msg: e.message });
+    addMsg.value = t('notFound', { msg: (e as Error).message });
   }
 }
 </script>
@@ -196,7 +198,7 @@ async function addFromSearch(ticker) {
                 <td><ScoreBadge :score="scores[x.cik] ?? null" /></td>
                 <td v-for="(c, i) in CATS" :key="c" class="num small hide-p" :class="catCls(scores[x.cik]?.categories?.[i])">{{ scores[x.cik]?.categories?.[i] ?? '—' }}</td>
                 <td class="small hide-p">
-                  <template v-if="scores[x.cik]">{{ scores[x.cik].form }} {{ scores[x.cik].fiscalYear }} {{ scores[x.cik].fiscalPeriod }} <span class="muted">{{ t('meta.periodEnd') }} {{ scores[x.cik].periodEnd }}</span></template>
+                  <template v-if="scores[x.cik]">{{ scores[x.cik]!.form }} {{ scores[x.cik]!.fiscalYear }} {{ scores[x.cik]!.fiscalPeriod }} <span class="muted">{{ t('meta.periodEnd') }} {{ scores[x.cik]!.periodEnd }}</span></template>
                   <span v-else class="muted">{{ t('wl.notDownloaded') }}</span>
                 </td>
                 <td class="small hide-t">{{ scores[x.cik]?.filingDate || '—' }}</td>

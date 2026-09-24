@@ -9,18 +9,32 @@ import { dateLocale, isZh, pick, t, tr } from '../i18n';
 import { isNarrow } from '../viewport';
 import Note from './Note.vue';
 import Loading from './Loading.vue';
+import type { PropType } from 'vue';
+import type { BrowseCompaniesResponse, BrowseEtfsResponse, BrowseFilerResponse, BrowseSicResponse, EtfHoldingsResponse } from '../apiTypes.ts';
+import type { ScoreBadge as ScoreBadgeData, UniverseCompany } from '../../../server/lib/types.ts';
+import type { Etf, MappedHolding } from '../../../server/lib/etf.ts';
+import type { LiveHolding } from '../../../server/lib/liveHoldings.ts';
+import type { BasketSync } from '../baskets';
+
+/** Which list the page is on, and what is picked in it. */
+interface BrowseParams {
+  cat?: 'sic' | 'filer' | 'etf';
+  code?: string;
+  afs?: string;
+  etf?: string;
+}
 
 // params: { cat: 'sic'|'filer'|'etf', code, afs, etf }
-const props = defineProps({ params: { type: Object, default: () => ({}) } });
+const props = defineProps({ params: { type: Object as PropType<BrowseParams>, default: () => ({}) } });
 const emit = defineEmits(['open', 'navigate', 'basket']);
 
-const cat = ref(props.params.cat || 'sic');
+const cat = ref<'sic' | 'filer' | 'etf'>(props.params.cat || 'sic');
 const code = ref(props.params.code || '');
 const afs = ref(props.params.afs || '');
 const etf = ref(props.params.etf || '');
 const listedOnly = ref(true);
 const filter = ref('');
-const error = ref(null);
+const error = ref<string | null>(null);
 
 watch([cat, code, afs, etf], () => {
   emit('navigate', { cat: cat.value, code: cat.value === 'sic' ? code.value : '', afs: cat.value === 'filer' ? afs.value : '', etf: cat.value === 'etf' ? etf.value : '' });
@@ -38,16 +52,16 @@ watch(
 );
 
 // ---------- SIC ----------
-const sic = ref(null);
+const sic = ref<BrowseSicResponse | null>(null);
 const sicFilter = ref('');
-const openDivisions = ref(new Set());
+const openDivisions = ref(new Set<string>());
 
 const sicGroups = computed(() => {
   if (!sic.value) return [];
   const q = sicFilter.value.trim().toUpperCase();
   return sic.value.divisions
     .map((d) => {
-      const codes = sic.value.codes
+      const codes = sic.value!.codes
         .filter((c) => c.division === d.id && (listedOnly.value ? c.listed : c.total))
         .filter((c) => !q || c.code.startsWith(q) || (c.zh || '').toUpperCase().includes(q) || (c.title || '').toUpperCase().includes(q))
         .sort((a, b) => a.code.localeCompare(b.code));
@@ -57,7 +71,7 @@ const sicGroups = computed(() => {
 });
 const selectedSic = computed(() => sic.value?.codes.find((c) => c.code === code.value) || null);
 
-function toggleDivision(id) {
+function toggleDivision(id: string) {
   const s = new Set(openDivisions.value);
   if (s.has(id)) s.delete(id);
   else s.add(id);
@@ -65,10 +79,10 @@ function toggleDivision(id) {
 }
 
 // ---------- filer status ----------
-const filer = ref(null);
+const filer = ref<BrowseFilerResponse | null>(null);
 
 // ---------- company list (SIC / filer) ----------
-const companies = ref(null);
+const companies = ref<BrowseCompaniesResponse | null>(null);
 const loadingCompanies = ref(false);
 const companiesKey = computed(() => (cat.value === 'sic' && code.value ? `sic=${code.value}` : cat.value === 'filer' && afs.value ? `afs=${afs.value}` : ''));
 
@@ -83,7 +97,7 @@ async function loadCompanies() {
     const params = cat.value === 'sic' ? { sic: code.value } : { afs: afs.value };
     companies.value = await api.browseCompanies({ ...params, listed: listedOnly.value ? '1' : '0', limit: 5000 });
   } catch (e) {
-    error.value = e.message;
+    error.value = (e as Error).message;
     companies.value = null;
   } finally {
     loadingCompanies.value = false;
@@ -92,8 +106,8 @@ async function loadCompanies() {
 watch([companiesKey, listedOnly], loadCompanies);
 
 // latest-filing scores for whatever is on screen (batched; server reads them from SQLite)
-const scores = ref({});
-async function loadScores(ciks) {
+const scores = ref<Record<string, ScoreBadgeData | null>>({});
+async function loadScores(ciks: readonly (number | null | undefined)[]) {
   const need = [...new Set(ciks.filter((c) => c && !(c in scores.value)))];
   for (let i = 0; i < need.length; i += 1500) {
     try {
@@ -114,13 +128,13 @@ const visibleCompanies = computed(() => {
 });
 
 // ---------- ETF ----------
-const etfs = ref(null);
+const etfs = ref<BrowseEtfsResponse | null>(null);
 const etfQuery = ref('');
-const etfResults = ref([]);
-const holdings = ref(null);
+const etfResults = ref<Etf[]>([]);
+const holdings = ref<EtfHoldingsResponse | null>(null);
 const loadingHoldings = ref(false);
 const equityOnly = ref(true);
-let etfTimer = null;
+let etfTimer: ReturnType<typeof setTimeout> | undefined;
 
 watch(etfQuery, (q) => {
   clearTimeout(etfTimer);
@@ -128,7 +142,7 @@ watch(etfQuery, (q) => {
     try {
       etfResults.value = (await api.browseEtfs(q)).etfs;
     } catch (e) {
-      error.value = e.message;
+      error.value = (e as Error).message;
     }
   }, 200);
 });
@@ -144,7 +158,7 @@ async function loadHoldings() {
     holdings.value = await api.etfHoldings(etf.value);
     loadScores(holdings.value.holdings.map((h) => h.cik));
   } catch (e) {
-    error.value = e.message;
+    error.value = (e as Error).message;
     holdings.value = null;
   } finally {
     loadingHoldings.value = false;
@@ -166,22 +180,22 @@ const visibleHoldings = computed(() => {
 // so it can be resynced later.
 const copyN = ref('');
 const copying = ref(false);
-const copyable = computed(() => visibleHoldings.value.filter((h) => h.symbol && h.pctVal > 0));
+const copyable = computed(() => visibleHoldings.value.filter((h) => h.symbol && h.pctVal! > 0));
 async function copyToBasket() {
   const n = Number(copyN.value) > 0 ? Math.floor(Number(copyN.value)) : 0;
-  const ticker = holdings.value.etf.ticker;
+  const ticker = holdings.value!.etf.ticker;
   copying.value = true;
   try {
-    let rows;
-    let sync = null;
+    let rows: { ticker: string | null; cik: number | null; name: string; weight: number | null }[];
+    let sync: BasketSync;
     try {
-      const live = await api.etfLive(ticker);
+      const live = (await api.etfLive(ticker)) as { holdings: LiveHolding[]; asOf: string | null; source: string };
       const all = live.holdings.filter((h) => h.symbol && h.weight > 0).sort((a, b) => b.weight - a.weight);
-      rows = (n ? all.slice(0, n) : all).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.weight }));
+      rows = (n ? all.slice(0, n) : all).map((h) => ({ ticker: h.symbol, cik: h.cik ?? null, name: h.name, weight: h.weight }));
       sync = { at: new Date().toISOString(), asOf: live.asOf, sourceName: live.source, added: [], removed: [], changed: 0 };
     } catch {
       rows = (n ? copyable.value.slice(0, n) : copyable.value).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.pctVal }));
-      sync = { at: new Date().toISOString(), asOf: holdings.value.filing.reportDate, sourceName: `N-PORT (${holdings.value.filing.reportDate})`, added: [], removed: [], changed: 0 };
+      sync = { at: new Date().toISOString(), asOf: holdings.value!.filing.reportDate, sourceName: `N-PORT (${holdings.value!.filing.reportDate})`, added: [], removed: [], changed: 0 };
     }
     if (!rows.length) return;
     createBasket(t('br.copyName', { ticker, top: n ? t('br.copyNameTop', { n: rows.length }) : '' }), rows, { prune: true, source: { type: 'etf', ticker, n: n || null }, sync });
@@ -193,15 +207,15 @@ async function copyToBasket() {
 const popular = computed(() => {
   if (!etfs.value) return [];
   const by = new Map(etfs.value.etfs.map((e) => [e.ticker, e]));
-  return etfs.value.popular.map((t) => by.get(t)).filter(Boolean);
+  return etfs.value.popular.map((t) => by.get(t)).filter((e): e is Etf => !!e);
 });
 
-const pct = (v) => (v == null ? '—' : `${v.toFixed(2)}%`);
+const pct = (v: number | null | undefined) => (v == null ? '—' : `${v.toFixed(2)}%`);
 const usd = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
-const money = (v) => (v == null ? '—' : usd.format(v / 1e6));
+const money = (v: number | null | undefined) => (v == null ? '—' : usd.format(v / 1e6));
 const num = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
-function pickCat(c) {
+function pickCat(c: 'sic' | 'filer' | 'etf') {
   cat.value = c;
   filter.value = '';
   sideOpen.value = !selected.value;
@@ -215,7 +229,7 @@ watch(selected, (v) => {
 });
 const pickLabel = computed(() => {
   if (cat.value === 'sic') return selectedSic.value ? `SIC ${selectedSic.value.code} · ${pick(selectedSic.value, 'zh', 'title')}` : t('br.pickBarSic');
-  if (cat.value === 'filer') return companies.value?.filer ? pick(companies.value.filer, 'zh', 'label') : t('br.pickBarFiler');
+  if (cat.value === 'filer') return companies.value?.filer ? pick(companies.value.filer as unknown as Record<string, unknown>, 'zh', 'label') : t('br.pickBarFiler');
   return holdings.value ? `${holdings.value.etf.ticker} · ${holdings.value.etf.name}` : t('br.pickBarEtf');
 });
 
@@ -227,12 +241,12 @@ onMounted(async () => {
     etfs.value = e;
     etfResults.value = e.etfs;
     if (code.value) {
-      openDivisions.value = new Set([s.codes.find((c) => c.code === code.value)?.division].filter(Boolean));
+      openDivisions.value = new Set([s.codes.find((c) => c.code === code.value)?.division].filter((x): x is string => !!x));
       nextTick(() => document.querySelector('.code.active')?.scrollIntoView({ block: 'center' }));
     } else openDivisions.value = new Set(['D']);
     nextTick(() => document.querySelector('.etf.active')?.scrollIntoView({ block: 'center' }));
   } catch (err) {
-    error.value = err.message;
+    error.value = (err as Error).message;
   }
   loadCompanies();
   loadHoldings();
@@ -245,7 +259,7 @@ onMounted(async () => {
       <button :class="{ active: cat === 'sic' }" @click="pickCat('sic')">{{ t('br.tabSic') }}</button>
       <button :class="{ active: cat === 'filer' }" @click="pickCat('filer')">{{ t('br.tabFiler') }}</button>
       <button :class="{ active: cat === 'etf' }" @click="pickCat('etf')">{{ t('br.tabEtf') }}</button>
-      <span v-if="sic" class="muted small src">{{ t('br.dataSource', { sets: sic.datasets.join(' / '), date: new Date(sic.updatedAt).toLocaleDateString(dateLocale) }) }}</span>
+      <span v-if="sic" class="muted small src">{{ t('br.dataSource', { sets: sic.datasets.join(' / '), date: new Date(sic.updatedAt!).toLocaleDateString(dateLocale) }) }}</span>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
 
@@ -263,7 +277,7 @@ onMounted(async () => {
             {{ d.id }} · {{ pick(d, 'zh', 'en') }} <span class="muted small">({{ listedOnly ? d.listed : d.total }})</span>
           </div>
           <div v-if="openDivisions.has(d.id) || sicFilter" class="codes">
-            <div v-for="c in d.codes" :key="c.code" class="code" :class="{ active: c.code === code }" :title="c.title" @click="code = c.code">
+            <div v-for="c in d.codes" :key="c.code" class="code" :class="{ active: c.code === code }" :title="c.title ?? undefined" @click="code = c.code">
               <span class="mono">{{ c.code }}</span> {{ pick(c, 'zh', 'title') }}
               <span class="muted count">{{ listedOnly ? c.listed : c.total }}</span>
             </div>
@@ -296,7 +310,7 @@ onMounted(async () => {
         <label class="small"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
         <Loading v-if="!filer" small :text="t('br.loadingFiler')" />
         <div v-for="c in filer?.categories || []" :key="c.key" class="card" :class="{ active: c.key === afs }" @click="afs = c.key">
-          <div class="card-title">{{ pick(c, 'zh', 'label') }}</div>
+          <div class="card-title">{{ pick(c as unknown as Record<string, unknown>, 'zh', 'label') }}</div>
           <div v-if="isZh" class="muted small">{{ c.label }}</div>
           <div class="small">{{ tr(c.note) }}</div>
           <div class="muted small">{{ t('companies', { n: listedOnly ? c.listed : c.total }) }}<span v-if="c.wksi"> · WKSI {{ c.wksi }}</span></div>
@@ -352,7 +366,7 @@ onMounted(async () => {
                 {{ holdings.etf.entity }} · {{ t('br.holdingsDate') }} {{ holdings.filing.reportDate }} · {{ t('meta.filingDate') }} {{ holdings.filing.filingDate }} ·
                 {{ t('br.netAssets') }} {{ money(holdings.filing.netAssets) }} {{ t('millionUsd') }} ·
                 <a :href="holdings.filing.viewerUrl" target="_blank" rel="noopener">N-PORT</a> ·
-                <a v-if="!api.isStatic" :href="api.etfHoldingsUrl(holdings.etf.ticker)" target="_blank" rel="noopener">JSON</a>
+                <a v-if="!api.isStatic" :href="api.etfHoldingsUrl(holdings.etf.ticker) ?? undefined" target="_blank" rel="noopener">JSON</a>
               </div>
             </div>
             <div class="options">

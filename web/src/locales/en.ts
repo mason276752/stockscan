@@ -1,5 +1,7 @@
-// English. Keys mirror zh.js; `data` / `dataRules` translate the Chinese
+// English. Keys mirror zh.ts; `data` / `dataRules` translate the Chinese
 // strings the shared computation modules (server/lib) produce.
+import type { Messages } from './translate.ts';
+
 export default {
   sep: ', ',
   usd: 'USD',
@@ -912,7 +914,7 @@ export default {
   },
   // patterned strings: [regex, (match) => english]
   dataRules: [
-    [/^N-PORT（(.+?) 持股，(.+?) 申報）$/, (m) => `N-PORT (holdings ${m[1]}, filed ${m[2]})`],
-    [/^N-PORT（(.+?)）$/, (m) => `N-PORT (${m[1]})`],
+    [/^N-PORT（(.+?) 持股，(.+?) 申報）$/, (m: RegExpExecArray) => `N-PORT (holdings ${m[1]}, filed ${m[2]})`],
+    [/^N-PORT（(.+?)）$/, (m: RegExpExecArray) => `N-PORT (${m[1]})`],
   ],
-};
+} satisfies Messages;

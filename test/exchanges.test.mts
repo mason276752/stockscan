@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isMajorExchange, onMajorExchange, tickerRows } from '../server/lib/edgar.ts';
+import type { TickerRow } from '../server/lib/edgar.ts';
 
 test('only the real exchanges count', () => {
   for (const x of ['Nasdaq', 'NYSE', 'NYSE American', 'NYSEAmer', 'CBOE', 'BATS', 'IEX', 'NYSE Arca']) assert.equal(isMajorExchange(x), true, x);
@@ -8,15 +9,15 @@ test('only the real exchanges count', () => {
 });
 
 test('a blank venue is decided by the company’s own submissions record', () => {
-  const venues = { 1: ['Nasdaq'], 2: ['OTC'], 3: ['NYSE', 'OTC'] };
-  const of = (cik) => venues[cik];
-  assert.equal(onMajorExchange({ cik: 1, exchange: null }, of), true);
-  assert.equal(onMajorExchange({ cik: 2, exchange: null }, of), false);
-  assert.equal(onMajorExchange({ cik: 3, exchange: null }, of), true, 'one real listing is enough');
+  const venues: Record<number, string[]> = { 1: ['Nasdaq'], 2: ['OTC'], 3: ['NYSE', 'OTC'] };
+  const of = (cik: number) => venues[cik];
+  assert.equal(onMajorExchange({ cik: 1, exchange: null } as TickerRow, of), true);
+  assert.equal(onMajorExchange({ cik: 2, exchange: null } as TickerRow, of), false);
+  assert.equal(onMajorExchange({ cik: 3, exchange: null } as TickerRow, of), true, 'one real listing is enough');
   // the record of a company dropped as OTC is dropped with it, so "keep what
   // is unknown" would take it back on the next refresh and drop it again
-  assert.equal(onMajorExchange({ cik: 9, exchange: null }, of), false, 'nothing says it is listed anywhere: not covered');
-  assert.equal(onMajorExchange({ cik: 2, exchange: 'Nasdaq' }, of), true, 'the table wins when it has an answer');
+  assert.equal(onMajorExchange({ cik: 9, exchange: null } as TickerRow, of), false, 'nothing says it is listed anywhere: not covered');
+  assert.equal(onMajorExchange({ cik: 2, exchange: 'Nasdaq' } as TickerRow, of), true, 'the table wins when it has an answer');
 });
 
 test('company_tickers_exchange.json is read by its field names', () => {

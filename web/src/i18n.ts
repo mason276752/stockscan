@@ -10,24 +10,25 @@
 import { computed, ref, watch } from 'vue';
 import en from './locales/en.ts';
 import { MESSAGES, translate } from './locales/translate.ts';
+import type { DataRule } from './locales/translate.ts';
 
-export const LOCALES = [
+export const LOCALES: [string, string][] = [
   ['zh', '中文'],
   ['en', 'English'],
 ];
 
 const browserLocale = () => ((navigator.languages?.[0] || navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en');
-let saved = null;
+let saved: string | null = null;
 try {
   saved = localStorage.getItem('stockscan.lang');
 } catch {
   /* no storage */
 }
-export const locale = ref(MESSAGES[saved] ? saved : browserLocale());
+export const locale = ref<string>(saved && MESSAGES[saved] ? saved : browserLocale());
 export const isZh = computed(() => locale.value === 'zh');
 watch(
   locale,
-  (v) => {
+  (v: string) => {
     try {
       localStorage.setItem('stockscan.lang', v);
     } catch {
@@ -38,15 +39,18 @@ watch(
   { immediate: true },
 );
 
-export const t = (key, params) => translate(locale.value, key, params);
+export const t = (key: string, params?: Record<string, unknown> | null): string => translate(locale.value, key, params);
 
 // Chinese text from the shared computation modules (server/lib) -> English
-export function tr(s) {
+export function tr(s: string): string;
+export function tr(s: null | undefined): null | undefined;
+export function tr(s: string | null | undefined): string | null | undefined;
+export function tr(s: string | null | undefined): string | null | undefined {
   if (s == null || locale.value === 'zh') return s;
   const str = String(s);
-  const hit = en.data[str];
+  const hit = (en.data as Record<string, string>)[str];
   if (hit != null) return hit;
-  for (const [re, fn] of en.dataRules) {
+  for (const [re, fn] of en.dataRules as unknown as DataRule[]) {
     const m = re.exec(str);
     if (m) return fn(m);
   }
@@ -54,9 +58,9 @@ export function tr(s) {
 }
 
 // a record with both languages, e.g. SIC { zh, title } or filer status { zh, label }
-export function pick(obj, zhKey, enKey) {
+export function pick(obj: Record<string, unknown> | null | undefined, zhKey: string, enKey: string): string {
   if (!obj) return '';
-  return (locale.value === 'zh' ? obj[zhKey] || obj[enKey] : obj[enKey] || obj[zhKey]) || '';
+  return String((locale.value === 'zh' ? obj[zhKey] || obj[enKey] : obj[enKey] || obj[zhKey]) || '');
 }
 
 // number formatting locale for dates etc.
@@ -67,7 +71,7 @@ export const dateLocale = computed(() => (locale.value === 'zh' ? 'zh-TW' : 'en-
 const grouped = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const f1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
 const f2 = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-export function bigMoney(v) {
+export function bigMoney(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—';
   if (locale.value === 'zh') {
     if (v >= 1e12) return `${f2.format(v / 1e12)} 兆`;
@@ -80,7 +84,7 @@ export function bigMoney(v) {
   if (v >= 1e6) return `${grouped.format(v / 1e6)}M`;
   return `${f2.format(v / 1e6)}M`;
 }
-export function bigShares(v) {
+export function bigShares(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—';
   if (locale.value === 'zh') return v >= 1e8 ? `${f2.format(v / 1e8)} 億股` : `${grouped.format(v / 1e6)} 百萬股`;
   return v >= 1e9 ? `${f2.format(v / 1e9)}B shares` : `${grouped.format(v / 1e6)}M shares`;

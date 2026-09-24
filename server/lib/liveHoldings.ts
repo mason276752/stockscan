@@ -12,39 +12,62 @@ import { unzipBuffer } from './remoteZip.ts';
 import { tickerTable } from './edgar.ts';
 import { etfHoldings, findEtf } from './etf.ts';
 
+import type { Fetcher } from './secClient.ts';
+import type { IsoDate } from './types.ts';
+
+/** One constituent, as a daily-holdings source lists it. */
+export interface LiveHolding {
+  symbol: string;
+  name: string;
+  weight: number;
+  shares: number | null;
+  cik?: number | null;
+}
+
+/** What one source answered with. */
+interface HoldingsSource {
+  source: string;
+  asOf: IsoDate | null;
+  holdings: LiveHolding[];
+  url?: string;
+  /** the weights are derived (market cap), not the fund's own */
+  approximate?: boolean;
+  nport?: boolean;
+}
+
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
 const TTL = 6 * 3600 * 1000;
 
 // funds tracking an index another source covers daily
-const PROXY = {
+const PROXY: Record<string, { via: string; note: string }> = {
   IVV: { via: 'SPY', note: 'IVV 與 SPY 同追蹤 S&P 500，成分取自 SPDR 的每日持股' },
   VOO: { via: 'SPY', note: 'VOO 與 SPY 同追蹤 S&P 500，成分取自 SPDR 的每日持股' },
   SPLG: { via: 'SPY', note: 'SPLG 與 SPY 同追蹤 S&P 500，成分取自 SPDR 的每日持股' },
   QQQM: { via: 'QQQ', note: 'QQQM 與 QQQ 同追蹤 Nasdaq-100' },
 };
-const NASDAQ_INDEX = { QQQ: 'nasdaq100' };
+const NASDAQ_INDEX: Record<string, string> = { QQQ: 'nasdaq100' };
 
-async function fetchBuf(url, accept = '*/*') {
+async function fetchBuf(url: string, accept = '*/*'): Promise<Buffer> {
   const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: accept }, redirect: 'follow', signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`${new URL(url).host} returned ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }
 
 // State Street: https://www.ssga.com/.../holdings-daily-us-en-<ticker>.xlsx
-async function ssga(ticker) {
+async function ssga(ticker: string): Promise<HoldingsSource> {
   const t = ticker.toLowerCase();
   const buf = await fetchBuf(`https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/holdings-daily-us-en-${t}.xlsx`);
   if (buf.subarray(0, 2).toString() !== 'PK') throw new Error('not an xlsx');
   const files = await unzipBuffer(buf, ['xl/sharedStrings.xml', 'xl/worksheets/sheet1.xml']);
-  const unesc = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
-  const sst = [...(files['xl/sharedStrings.xml']?.toString() || '').matchAll(/<si>(.*?)<\/si>/gs)].map((m) => unesc([...m[1].matchAll(/<t[^>]*>(.*?)<\/t>/gs)].map((x) => x[1]).join('')));
-  const rows = [];
-  for (const r of files['xl/worksheets/sheet1.xml'].toString().matchAll(/<row [^>]*>(.*?)<\/row>/gs)) {
-    const cells = {};
-    for (const c of r[1].matchAll(/<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>(.*?)<\/c>)/gs)) {
-      const [, col, attrs, inner] = c;
-      let v = inner ? (/<v>(.*?)<\/v>/s.exec(inner)?.[1] ?? /<t[^>]*>(.*?)<\/t>/s.exec(inner)?.[1] ?? null) : null;
-      if (v != null && /t="s"/.test(attrs)) v = sst[Number(v)];
+  const unesc = (s: string) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  const sst = [...(files['xl/sharedStrings.xml']?.toString() || '').matchAll(/<si>(.*?)<\/si>/gs)].map((m) => unesc([...m[1]!.matchAll(/<t[^>]*>(.*?)<\/t>/gs)].map((x) => x[1]).join('')));
+  const rows: Record<string, string | null>[] = [];
+  for (const r of files['xl/worksheets/sheet1.xml']!.toString().matchAll(/<row [^>]*>(.*?)<\/row>/gs)) {
+    const cells: Record<string, string | null> = {};
+    for (const c of r[1]!.matchAll(/<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>(.*?)<\/c>)/gs)) {
+      const [, col, attrs, inner] = c as unknown as [string, string, string, string | undefined];
+      let v: string | null = inner ? (/<v>(.*?)<\/v>/s.exec(inner)?.[1] ?? /<t[^>]*>(.*?)<\/t>/s.exec(inner)?.[1] ?? null) : null;
+      if (v != null && /t="s"/.test(attrs)) v = sst[Number(v)]!;
       else if (v != null && /t="inlineStr"/.test(attrs)) v = unesc(v);
       cells[col] = v;
     }
@@ -54,23 +77,23 @@ async function ssga(ticker) {
   const asOf = asOfRow ? isoDate(String(asOfRow.B || '').replace(/^As of\s*/i, '')) : null;
   const head = rows.findIndex((r) => r.A === 'Name' && r.B === 'Ticker');
   if (head < 0) throw new Error('holdings table not found');
-  const cols = Object.fromEntries(Object.entries(rows[head]).map(([k, v]) => [String(v).toLowerCase(), k]));
-  const holdings = [];
+  const cols = Object.fromEntries(Object.entries(rows[head]!).map(([k, v]) => [String(v).toLowerCase(), k])) as Record<string, string>;
+  const holdings: LiveHolding[] = [];
   for (const r of rows.slice(head + 1)) {
-    const symbol = String(r[cols.ticker] || '').trim();
-    const weight = Number(r[cols.weight]);
+    const symbol = String(r[cols.ticker!] || '').trim();
+    const weight = Number(r[cols.weight!]);
     if (!symbol || symbol === '-' || !(weight > 0)) continue;
-    if (/^(CASH|USD|-)/i.test(symbol) || /cash|money market|futures?\b/i.test(String(r[cols.name] || ''))) continue;
-    holdings.push({ symbol: symbol.replace(/\./g, '-').toUpperCase(), name: String(r[cols.name] || '').trim(), weight, shares: Number(r[cols['shares held']]) || null });
+    if (/^(CASH|USD|-)/i.test(symbol) || /cash|money market|futures?\b/i.test(String(r[cols.name!] || ''))) continue;
+    holdings.push({ symbol: symbol.replace(/\./g, '-').toUpperCase(), name: String(r[cols.name!] || '').trim(), weight, shares: Number(r[cols['shares held']!]) || null });
   }
   return { source: 'SSGA 每日持股（State Street）', asOf, holdings, url: `https://www.ssga.com/us/en/intermediary/etfs/funds/spdr-${t}` };
 }
 
 // Nasdaq's constituent list of an index: symbols with market caps; weight ≈ cap share
-async function nasdaqIndex(list) {
+async function nasdaqIndex(list: string): Promise<HoldingsSource> {
   const res = await fetch(`https://api.nasdaq.com/api/quote/list-type/${list}`, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`api.nasdaq.com returned ${res.status}`);
-  const j = await res.json();
+  const j = (await res.json()) as { data?: { date?: string; data?: { rows?: { symbol: string; companyName?: string; marketCap?: string }[] } } };
   const rows = j?.data?.data?.rows || [];
   const caps = rows.map((r) => ({ symbol: String(r.symbol).trim().replace(/\./g, '-').toUpperCase(), name: String(r.companyName || '').replace(/ Common Stock| Class [A-C] .*$/i, '').trim(), cap: Number(String(r.marketCap || '').replace(/[^0-9.]/g, '')) || 0 }));
   const tot = caps.reduce((s, c) => s + c.cap, 0);
@@ -79,7 +102,7 @@ async function nasdaqIndex(list) {
 }
 
 // "14-Sep-2026", "Sep 15, 2026": a calendar date, not an instant - keep the day as written
-function isoDate(s) {
+function isoDate(s: string | null | undefined): IsoDate | null {
   if (!s) return null;
   const m = /(\d{1,2})-([A-Za-z]{3})-(\d{4})/.exec(s);
   const d = new Date(`${m ? `${m[2]} ${m[1]}, ${m[3]}` : s} UTC`);
@@ -88,16 +111,16 @@ function isoDate(s) {
 
 // Freshest constituents of an ETF, with the source they came from:
 // { etf, source, asOf, approximate, note, holdings: [{ symbol, name, weight, cik }] }
-export async function liveHoldings(client, ticker) {
+export async function liveHoldings(client: Fetcher, ticker: string) {
   const T = String(ticker).toUpperCase();
   const key = `live-holdings:${T}`;
-  const saved = store.getKV(key);
+  const saved = store.getKV<Record<string, unknown>>(key);
   if (saved && saved.ageMs < TTL) return saved.value;
-  const etf = await findEtf(client, T).catch(() => ({ ticker: T, name: T }));
+  const etf = await findEtf(client, T).catch(() => ({ ticker: T, name: T }) as { ticker: string; name: string });
   const proxy = PROXY[T];
   const src = proxy ? proxy.via : T;
-  let out = null;
-  const tried = [];
+  let out: HoldingsSource | null = null;
+  const tried: string[] = [];
   for (const attempt of [() => (NASDAQ_INDEX[src] ? nasdaqIndex(NASDAQ_INDEX[src]) : null), () => ssga(src)]) {
     try {
       const r = await attempt();
@@ -106,7 +129,7 @@ export async function liveHoldings(client, ticker) {
         break;
       }
     } catch (err) {
-      tried.push(err.message);
+      tried.push((err as Error).message);
     }
   }
   if (!out) {
@@ -115,7 +138,7 @@ export async function liveHoldings(client, ticker) {
     out = {
       source: `N-PORT（${np.filing.reportDate} 持股，${np.filing.filingDate} 申報）`,
       asOf: np.filing.reportDate,
-      holdings: np.holdings.filter((h) => h.symbol && h.pctVal > 0 && h.assetCat === 'EC').map((h) => ({ symbol: h.symbol, name: h.name, weight: h.pctVal, shares: h.balance ?? null, cik: h.cik })),
+      holdings: np.holdings.filter((h) => h.symbol && h.pctVal! > 0 && h.assetCat === 'EC').map((h) => ({ symbol: h.symbol!, name: h.name, weight: h.pctVal!, shares: h.balance ?? null, cik: h.cik })),
       nport: true,
       url: np.filing.viewerUrl,
     };

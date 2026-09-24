@@ -17,10 +17,9 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true,
-    // The port was mechanical: the code is the JavaScript it always was, so
-    // nothing is annotated yet and the checks that demand annotations are off.
-    "strict": false,
-    "noImplicitAny": false
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
   },
   "include": ["server/**/*.ts", "server/**/*.mts", "shared/**/*.ts", "test/**/*.mts"]
 }

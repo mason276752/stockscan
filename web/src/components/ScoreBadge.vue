@@ -1,12 +1,14 @@
 <script setup lang="ts">
 // Small coloured pill for a company's latest-filing score.
+import type { PropType } from 'vue';
 import { api } from '../api';
 import { t, tr } from '../i18n';
+import type { ScoreBadge } from '../../../server/lib/types.ts';
 const props = defineProps({
-  score: { type: Object, default: null }, // { score, coverage, form, fiscalYear, fiscalPeriod, categories[] } or null
+  score: { type: Object as PropType<ScoreBadge | null>, default: null },
 });
 const CATS = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
-const cls = (s) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
+const cls = (s: number | null | undefined) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
 const title = () => {
   if (!props.score) return t(api.isStatic ? 'sb.noneStatic' : 'sb.none');
   const c = props.score.categories.map((v, i) => `${tr(CATS[i])} ${v == null ? '—' : v}`).join(t('sep'));

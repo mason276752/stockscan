@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../server/lib/store.ts';
 import { barStore, openBarStore } from '../server/lib/barStore.ts';
+import type { BarSeries } from '../server/lib/types.ts';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stockscan-bars-'));
 openStore(path.join(tmp, 'store'));
@@ -13,8 +14,8 @@ test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 // 2020, so the bars land in a finished year file rather than the running head
 const DAYS = ['2020-03-09', '2020-03-10', '2020-03-11', '2020-03-12', '2020-03-13', '2020-03-16'];
-const series = (prices, fetchedAt, vol = 1000) => ({ symbol: 'TEST', source: 'test', currency: 'USD', fetchedAt, days: DAYS.map((date, i) => ({ date, open: prices[i], high: prices[i], low: prices[i], close: prices[i], volume: vol })) });
-const closes = (src, symbol) => barStore.get(src, symbol).days.map((b) => b.close);
+const series = (prices: number[], fetchedAt: string, vol = 1000): BarSeries => ({ symbol: 'TEST', source: 'test', currency: 'USD', fetchedAt, days: DAYS.map((date, i) => ({ date, open: prices[i], high: prices[i], low: prices[i], close: prices[i], volume: vol })) });
+const closes = (src: string, symbol: string) => barStore.get(src, symbol)!.days.map((b) => b.close);
 
 test('a reverse split is one line of meta, and the series still reads back as the source sends it', () => {
   const before = [0.4, 0.42, 0.39, 0.4, 0.41, 0.4];

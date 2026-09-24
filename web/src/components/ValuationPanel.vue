@@ -1,10 +1,24 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import type { PropType } from 'vue';
 import { MODELS, impliedPrice, multiplesAt, runModels } from '../../../shared/valuation.ts';
+import type { MultipleDef, ValuationAssumptions } from '../../../shared/valuation.ts';
+import type { Valuation } from '../../../server/lib/valuation.ts';
 import { bigMoney, bigShares, dateLocale, t, tr } from '../i18n';
 
+/** The assumptions as the inputs hold them: percentages, not fractions. */
+interface AssumptionInputs {
+  r: number;
+  g1: number;
+  gT: number;
+  years: number;
+  taxRate: number;
+  aaaYield: number | null;
+  gGraham: number | null;
+}
+
 const props = defineProps({
-  data: { type: Object, required: true }, // /api/company/:id/valuation response
+  data: { type: Object as PropType<Valuation>, required: true }, // /api/company/:id/valuation response
   adr: { type: Number, default: 1 }, // ordinary shares per listed share (ADR ratio)
 });
 const emit = defineEmits(['update:adr']);
@@ -51,14 +65,14 @@ const nowMultiples = computed(() => (nowPs.value && price.value != null ? multip
 const marketCap = computed(() => (latest.value?.shares && price.value != null ? (price.value * latest.value.shares) / (props.data.currency?.adr || 1) : null));
 
 // ---- assumptions for the absolute models (editable, in %) ----
-const a = ref({});
+const a = ref<AssumptionInputs>({} as AssumptionInputs);
 function resetAssumptions() {
   const d = props.data.assumptions;
-  const p = (x) => Math.round(x * 1000) / 10;
-  a.value = { r: p(d.r), g1: p(d.g1), gT: p(d.gT), years: d.years, taxRate: p(d.taxRate), aaaYield: d.aaaYield, gGraham: d.gGraham };
+  const p = (x: number) => Math.round(x * 1000) / 10;
+  a.value = { r: p(d.r), g1: p(d.g1), gT: p(d.gT), years: d.years, taxRate: p(d.taxRate!), aaaYield: d.aaaYield ?? null, gGraham: d.gGraham ?? null };
 }
 watch(() => props.data, resetAssumptions, { immediate: true });
-const assumptions = computed(() => ({
+const assumptions = computed((): ValuationAssumptions => ({
   r: a.value.r / 100,
   g1: a.value.g1 / 100,
   gT: a.value.gT / 100,
@@ -73,21 +87,21 @@ const absolute = computed(() => (modelInputs.value ? runModels(modelInputs.value
 // ---- formatting ----
 const f2 = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const f1 = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const money = (v) => (v == null || !Number.isFinite(v) ? '—' : f2.format(v));
-const mult = (def, v) => (v == null || !Number.isFinite(v) ? '—' : def.unit === '%' ? `${f2.format(v)}%` : `${f1.format(v)}×`);
-const pctOf = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${f1.format(v * 100)}%`);
+const money = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : f2.format(v));
+const mult = (def: { unit?: string }, v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : def.unit === '%' ? `${f2.format(v)}%` : `${f1.format(v)}×`);
+const pctOf = (v: number | null | undefined) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${f1.format(v * 100)}%`);
 
 // relative to the current price: for price/EV multiples lower is cheaper, for yields higher is cheaper
-function cheapness(def, current, avg) {
+function cheapness(def: MultipleDef, current: number | null | undefined, avg: number | null | undefined) {
   if (current == null || avg == null) return '';
   const cheaper = def.kind === 'yield' ? current > avg : current < avg;
   return cheaper ? 'good' : 'bad';
 }
-function upside(v) {
+function upside(v: number | null | undefined) {
   if (v == null || price.value == null) return null;
   return v / price.value - 1;
 }
-const fair = (def, m) => (nowPs.value ? impliedPrice(def, m, nowPs.value, nowNetDebt.value) : null);
+const fair = (def: MultipleDef, m: number | null | undefined) => (nowPs.value ? impliedPrice(def, m, nowPs.value, nowNetDebt.value) : null);
 
 const inputRows = computed(() => {
   const i = modelInputs.value;
@@ -110,7 +124,7 @@ const inputRows = computed(() => {
 const growthRows = computed(() => {
   const g = props.data.growth;
   if (!g) return [];
-  const p = (v) => (v == null ? '—' : `${f1.format(v * 100)}%`);
+  const p = (v: number | null | undefined) => (v == null ? '—' : `${f1.format(v * 100)}%`);
   return [
     [t('vp.g.revenue'), p(g.revenue)],
     ['EPS', p(g.eps)],
@@ -121,16 +135,16 @@ const growthRows = computed(() => {
 });
 
 // history table scrolls to the newest column
-const wrap = ref(null);
+const wrap = ref<HTMLElement | null>(null);
 const scrollToEnd = () => nextTick(() => wrap.value && (wrap.value.scrollLeft = wrap.value.scrollWidth));
 onMounted(scrollToEnd);
 watch(() => props.data, scrollToEnd);
 
 // tooltips (teleported, like the other tables)
-const tip = ref(null);
-const showTip = (title, text, e) => (tip.value = { title, text, x: e.clientX, y: e.clientY });
+const tip = ref<{ title: string; text: string; x: number; y: number } | null>(null);
+const showTip = (title: string, text: string, e: MouseEvent) => (tip.value = { title, text, x: e.clientX, y: e.clientY });
 const hideTip = () => (tip.value = null);
-const tipStyle = computed(() => {
+const tipStyle = computed((): Record<string, string> => {
   if (!tip.value) return {};
   const w = 380;
   const x = Math.min(tip.value.x + 16, window.innerWidth - w - 12);
@@ -209,7 +223,7 @@ const tipStyle = computed(() => {
             <td class="num">{{ mult(s, s.median) }}</td>
             <td class="num">{{ mult(s, s.min) }}</td>
             <td class="num">{{ mult(s, s.max) }}</td>
-            <td class="num" :class="{ good: upside(fair(s, s.avg)) > 0, bad: upside(fair(s, s.avg)) < 0 }" :title="t('vp.vsPrice', { pct: pctOf(upside(fair(s, s.avg))) })">{{ money(fair(s, s.avg)) }}</td>
+            <td class="num" :class="{ good: upside(fair(s, s.avg))! > 0, bad: upside(fair(s, s.avg))! < 0 }" :title="t('vp.vsPrice', { pct: pctOf(upside(fair(s, s.avg))) })">{{ money(fair(s, s.avg)) }}</td>
             <td class="num" :title="t('vp.vsPrice', { pct: pctOf(upside(fair(s, s.median))) })">{{ money(fair(s, s.median)) }}</td>
             <td class="num">{{ money(fair(s, s.kind === 'yield' ? s.max : s.min)) }}</td>
             <td class="num">{{ money(fair(s, s.kind === 'yield' ? s.min : s.max)) }}</td>
@@ -296,8 +310,8 @@ const tipStyle = computed(() => {
             <tbody>
               <tr v-for="m in MODELS" :key="m.key">
                 <td class="name" @mouseenter="showTip(tr(m.name), tr(m.formula), $event)" @mouseleave="hideTip">{{ tr(m.name) }}</td>
-                <td class="num" :class="{ good: upside(absolute[m.key]) > 0, bad: upside(absolute[m.key]) < 0 }">{{ money(absolute[m.key]) }}</td>
-                <td class="num" :class="{ good: upside(absolute[m.key]) > 0, bad: upside(absolute[m.key]) < 0 }">{{ pctOf(upside(absolute[m.key])) }}</td>
+                <td class="num" :class="{ good: upside(absolute[m.key])! > 0, bad: upside(absolute[m.key])! < 0 }">{{ money(absolute[m.key]) }}</td>
+                <td class="num" :class="{ good: upside(absolute[m.key])! > 0, bad: upside(absolute[m.key])! < 0 }">{{ pctOf(upside(absolute[m.key])) }}</td>
                 <td class="desc muted small">{{ tr(m.formula) }}</td>
               </tr>
             </tbody>

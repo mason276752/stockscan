@@ -12,17 +12,40 @@ import { watchlist } from '../watchlist';
 import { dateLocale, t, tr } from '../i18n';
 import Note from './Note.vue';
 import Loading from './Loading.vue';
+import type { Basket, BasketSource, Constituent, SourceHolding } from '../baskets';
+import type { IndexConstituent, IndexResult } from '../basketTypes.ts';
+import type { StreamEvent } from '../apiTypes.ts';
+import type { LiveHolding } from '../../../server/lib/liveHoldings.ts';
+
+/** GET /api/quotes/status. */
+interface QuotesStatus {
+  tv?: { enabled: boolean; connected: boolean; lastError?: string | null };
+  ib?: { enabled: boolean; connected: boolean; lastError?: string | null; host?: string; port?: number };
+  source?: string;
+  tvLibrary?: boolean;
+  bars?: unknown;
+  builtAt?: string;
+  [key: string]: unknown;
+}
+
+/** How far the bars have come while an index is being assembled. */
+interface Progress {
+  done: number;
+  total: number;
+  current: string | null;
+  members: StreamEvent[];
+}
 
 const emit = defineEmits(['open', 'screen']);
 
-const RANGES = [
+const RANGES: [string, number][] = [
   ['1y', 1],
   ['3y', 3],
   ['5y', 5],
   ['10y', 10],
 ];
-const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
-const BENCHMARKS = [
+const isDate = (v: string | null | undefined) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+const BENCHMARKS: [string, () => string][] = [
   ['SPY', () => 'S&P 500 (SPY)'],
   ['QQQ', () => 'Nasdaq 100 (QQQ)'],
   ['DIA', () => t('bk.dow')],
@@ -37,7 +60,7 @@ const ruleRange = ref(localStorage.getItem('stockscan.rule.range') || 'all');
 // enough - "from here on", "up to here"), shared by both kinds of ETF
 const from = ref(localStorage.getItem('stockscan.basket.from') || '');
 const to = ref(localStorage.getItem('stockscan.basket.to') || '');
-let lastPreset = { basket: range.value === 'custom' ? '3y' : range.value, rule: ruleRange.value === 'custom' ? 'all' : ruleRange.value };
+const lastPreset: Record<'basket' | 'rule', string> = { basket: range.value === 'custom' ? '3y' : range.value, rule: ruleRange.value === 'custom' ? 'all' : ruleRange.value };
 const activeRange = computed({
   get: () => (isRule.value ? ruleRange.value : range.value),
   set: (v) => {
@@ -46,8 +69,8 @@ const activeRange = computed({
       // switching to a custom window starts from the one on screen, so the
       // dates are something to nudge, not something to type from scratch
       if (!isDate(from.value) && !isDate(to.value) && result.value?.start) {
-        from.value = result.value.start;
-        to.value = result.value.end;
+        from.value = result.value.start!;
+        to.value = result.value.end!;
       }
     } else lastPreset[kind] = v;
     if (isRule.value) ruleRange.value = v;
@@ -87,7 +110,7 @@ watch(colors, (v) => localStorage.setItem('stockscan.kcolors', v));
 // buttons are not shown for one - what can be set is how often the book is
 // rebuilt and how the weights are worked out, not which names are in it.
 const isRule = computed(() => current.value?.mode === 'rule');
-const schedule = ref(null); // the replay's summary, before the bars land
+const schedule = ref<StreamEvent | null>(null); // the replay's summary, before the bars land
 // A screen on the statements alone admits shells quoted at $0.000001, where
 // one tick is a 100% move and a few of them at equal weight are the whole
 // index. Under this price a name is held by the rules but not bought (0 =
@@ -108,25 +131,25 @@ watch(weighting, (v) => localStorage.setItem('stockscan.rule.weighting', v));
 watch(maxWeight, (v) => localStorage.setItem('stockscan.rule.maxweight', v));
 watch(special, (v) => localStorage.setItem('stockscan.rule.special', v ? '1' : '0'));
 
-const quotes = ref(null); // /api/quotes/status
+const quotes = ref<QuotesStatus | null>(null); // /api/quotes/status
 const advanced = ref(false); // TradingView Advanced Charts loaded
-const result = ref(null);
+const result = ref<IndexResult | null>(null);
 const loading = ref(false);
-const progress = ref(null); // { done, total, current, members[] } while the bars stream in
-let aborter = null;
-const error = ref(null);
+const progress = ref<Progress | null>(null); // while the bars stream in
+let aborter: AbortController | null = null;
+const error = ref<string | null>(null);
 const newName = ref('');
 const addMsg = ref('');
 const renaming = ref(false); // title inline rename
 const pruned = ref(''); // "removed X, Y" message after an automatic prune
-const sideRename = ref(null); // { id, to } rename in the sidebar list
+const sideRename = ref<{ id: string; to: string } | null>(null); // rename in the sidebar list
 
 // temporarily hidden constituents (eye toggle): left out of the index, weights
 // untouched, so their effect on the chart can be checked; not saved
-const hidden = ref({}); // basket id -> Set of tickers
-const hiddenOf = (id) => hidden.value[id] || new Set();
-const isHidden = (c) => current.value && hiddenOf(current.value.id).has(c.ticker);
-function toggleHidden(c) {
+const hidden = ref<Record<string, Set<string>>>({}); // basket id -> Set of tickers
+const hiddenOf = (id: string) => hidden.value[id] || new Set<string>();
+const isHidden = (c: Constituent) => !!current.value && hiddenOf(current.value.id).has(c.ticker);
+function toggleHidden(c: Constituent) {
   if (!current.value) return;
   const set = new Set(hiddenOf(current.value.id));
   if (set.has(c.ticker)) set.delete(c.ticker);
@@ -148,10 +171,10 @@ const delisted = computed(() => {
 });
 const delistedSet = computed(() => new Set(delisted.value));
 // why a name counts as delisted: what the server saw for it
-function delistedWhy(c) {
+function delistedWhy(c: Constituent) {
   const p = perf.value[c.ticker];
   const f = result.value?.failed?.find((x) => x.ticker === c.ticker);
-  const l = p || f;
+  const l = (p || f) as (IndexConstituent & { listed?: boolean; renamed?: string }) | undefined;
   if (l?.renamed) return { text: t('bk.whyRenamed', { to: l.renamed }), renamed: l.renamed };
   if (l && l.listed === false) return { text: p?.last ? t('bk.whyUnlistedSince', { last: p.last }) : t('bk.whyUnlisted'), renamed: null };
   if (p?.delisted) return { text: t('bk.whyNoQuotes', { last: p.last }), renamed: null };
@@ -162,30 +185,30 @@ function removeDelisted() {
   const n = removeConstituents(current.value.id, delisted.value);
   pruned.value = t('bk.removedN', { n });
 }
-function followRename(c, to) {
-  if (renameConstituent(current.value.id, c.ticker, to)) run(true);
+function followRename(c: Constituent, to: string) {
+  if (renameConstituent(current.value!.id, c.ticker, to)) run(true);
 }
 
 // ---- source resync ----
 const syncing = ref(false);
 const syncMsg = ref('');
 const syncFailed = ref(false);
-const sourceLabel = (src) =>
+const sourceLabel = (src: BasketSource | null) =>
   !src ? '' : src.type === 'etf' ? t('bk.srcEtf', { ticker: src.ticker, top: src.n ? t('bk.topParen', { n: src.n }) : '' }) : src.type === 'screen' ? t('bk.srcScreen', { label: src.label || '', top: src.n ? t('bk.topParen', { n: src.n }) : '' }) : src.type === 'watch' ? t('bk.srcWatch', { group: src.group === 'all' ? t('wl.all') : src.group }) : '';
-async function fetchSource(src) {
+async function fetchSource(src: BasketSource): Promise<{ holdings: SourceHolding[]; sourceName: string; asOf: string | null; note?: string; approximate?: boolean }> {
   if (src.type === 'etf') {
-    const r = await api.etfLive(src.ticker);
+    const r = (await api.etfLive(src.ticker!)) as { holdings: LiveHolding[]; source: string; asOf: string | null; note?: string; approximate?: boolean };
     const rows = r.holdings.filter((h) => h.symbol && h.weight > 0).sort((a, b) => b.weight - a.weight);
-    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((h) => ({ ticker: h.symbol, cik: h.cik, name: h.name, weight: h.weight })), sourceName: r.source, asOf: r.asOf, note: r.note, approximate: r.approximate };
+    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((h) => ({ ticker: h.symbol, cik: h.cik ?? null, name: h.name, weight: h.weight })), sourceName: r.source, asOf: r.asOf, note: r.note, approximate: r.approximate };
   }
   if (src.type === 'screen') {
     const r = await api.screen({ ...src.params, limit: src.n || 2000 });
     const rows = r.rows.filter((x) => x.ticker);
-    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), sourceName: '尋找股票（最新財報指標）', asOf: new Date().toISOString().slice(0, 10) }; // tr() words it
+    return { holdings: (src.n ? rows.slice(0, src.n) : rows).map((x) => ({ ticker: x.ticker ?? undefined, cik: x.cik, name: x.name, weight: 1 })), sourceName: '尋找股票（最新財報指標）', asOf: new Date().toISOString().slice(0, 10) }; // tr() words it
   }
   if (src.type === 'watch') {
-    const items = (src.group === 'all' ? watchlist.items : watchlist.items.filter((x) => x.groups.includes(src.group))).filter((x) => x.ticker);
-    return { holdings: items.map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), sourceName: '觀察名單', asOf: new Date().toISOString().slice(0, 10) };
+    const items = (src.group === 'all' ? watchlist.items : watchlist.items.filter((x) => x.groups.includes(src.group!))).filter((x) => x.ticker);
+    return { holdings: items.map((x) => ({ ticker: x.ticker ?? undefined, cik: x.cik, name: x.name, weight: 1 })), sourceName: '觀察名單', asOf: new Date().toISOString().slice(0, 10) };
   }
   throw new Error('unknown source');
 }
@@ -205,7 +228,7 @@ async function resync() {
     syncMsg.value = t('bk.synced', { source: tr(r.sourceName), asOf: r.asOf || '—', changes: parts.length ? parts.join(t('bk.semicolon')) : t('bk.noChange') });
     syncFailed.value = false;
   } catch (e) {
-    syncMsg.value = t('bk.syncFailed', { msg: e.message });
+    syncMsg.value = t('bk.syncFailed', { msg: (e as Error).message });
     syncFailed.value = true;
   } finally {
     syncing.value = false;
@@ -216,8 +239,8 @@ const manualCount = computed(() => (current.value ? current.value.constituents.f
 const groups = computed(() => {
   if (!current.value) return [];
   const live = rows.value.filter((c) => !delistedSet.value.has(c.ticker));
-  const rowsOf = (pred) => live.filter(pred);
-  if (!current.value.source) return [{ key: 'all', title: '', rows: live }];
+  const rowsOf = (pred: (c: Constituent) => boolean) => live.filter(pred);
+  if (!current.value.source) return [{ key: 'all', title: '', rows: live, hint: '' }];
   return [
     { key: 'source', title: t('bk.groupSource', { src: sourceLabel(current.value.source) }), rows: rowsOf((c) => c.origin === 'source' && !c.gone), hint: t('bk.groupSourceHint') },
     { key: 'manual', title: t('bk.groupManual'), rows: rowsOf((c) => c.origin === 'manual'), hint: t('bk.groupManualHint') },
@@ -225,17 +248,17 @@ const groups = computed(() => {
   ].filter((g) => g.rows.length);
 });
 // put an excluded name back: off the list, then a resync brings it in with the source's weight
-async function restore(ticker = null) {
+async function restore(ticker: string | null = null) {
   if (!current.value) return;
   restoreExcluded(current.value.id, ticker);
   await resync();
 }
-function onWeightInput(c, ev) {
-  const v = ev.target.value;
+function onWeightInput(c: Constituent, ev: Event) {
+  const v = (ev.target as HTMLInputElement).value;
   if (v === '' || v == null) return;
-  setManualWeight(current.value.id, c.ticker, Number(v));
+  setManualWeight(current.value!.id, c.ticker, Number(v));
 }
-const inIndex = (c) => Number(c.weight) > 0 && !isHidden(c);
+const inIndex = (c: Constituent) => Number(c.weight) > 0 && !isHidden(c);
 
 const current = computed(() => basketOf(baskets.current) || baskets.items[0] || null);
 watch(
@@ -247,12 +270,12 @@ watch(
 
 async function loadQuotes() {
   try {
-    quotes.value = await api.quotesStatus();
+    quotes.value = (await api.quotesStatus()) as QuotesStatus;
     if (isStatic) {
-      noBars.value = !quotes.value.bars;
+      noBars.value = !quotes.value!.bars;
       if (!noBars.value && localStorage.getItem('stockscan.basket.chart') !== 'widget') chartSource.value = 'own';
     }
-    if (quotes.value.tvLibrary && !window.TradingView?.widget) await loadTvLibrary();
+    if (quotes.value!.tvLibrary && !window.TradingView?.widget) await loadTvLibrary();
     advanced.value = !!window.TradingView?.widget;
   } catch {
     quotes.value = null;
@@ -260,17 +283,17 @@ async function loadQuotes() {
 }
 // the licensed library, served by the backend from web/assets/tradingview/
 function loadTvLibrary() {
-  return new Promise((resolve) => {
+  return new Promise<void>((resolve) => {
     const s = document.createElement('script');
     s.src = url('/tradingview/charting_library/charting_library.standalone.js');
-    s.onload = resolve;
-    s.onerror = resolve;
+    s.onload = () => resolve();
+    s.onerror = () => resolve();
     document.head.appendChild(s);
   });
 }
 async function reconnect() {
   try {
-    const r = await api.ibConnect();
+    const r = (await api.ibConnect()) as { ib: { enabled: boolean; connected: boolean } };
     quotes.value = { ...(quotes.value || {}), ib: r.ib };
     if (r.ib.connected) run();
   } catch {
@@ -298,7 +321,7 @@ async function run(force = false) {
   // a rule ETF's default range is 'all': the whole replay, from the first
   // filing that passed. Both kinds take the same window otherwise.
   const w = window_.value;
-  const body = rule
+  const body: Record<string, unknown> = rule
     ? {
         rule: true,
         params: b.source?.params || {},
@@ -328,47 +351,47 @@ async function run(force = false) {
   aborter?.abort(); // a superseded request stops the server's work too
   aborter = new AbortController();
   try {
-    let r = null;
+    let r: IndexResult | null = null;
     // bars stream in one constituent at a time: progress shows as they land, the
     // chart (the previous one stays up meanwhile) is replaced once by the final index
     await (rule ? api.ruleEtfStream : api.basketStream)(
       rule ? { params: body.params, range: body.range, from: body.from, to: body.to, benchmark: body.benchmark, minPrice: body.minPrice, rebalance: body.rebalance, weighting: body.weighting, maxWeight: body.maxWeight, special: body.special } : body,
-      (ev) => {
+      (ev: StreamEvent) => {
         if (id !== seq) return;
         if (ev.type === 'schedule') schedule.value = ev;
-        else if (ev.type === 'start') progress.value = { done: 0, total: ev.total, current: null, members: [] };
+        else if (ev.type === 'start') progress.value = { done: 0, total: ev.total as number, current: null, members: [] };
         else if (ev.type === 'member') {
-          const p = progress.value || { done: 0, total: ev.total, current: null, members: [] };
-          p.done = ev.done;
-          p.total = ev.total;
-          p.current = ev.symbol;
+          const p: Progress = progress.value || { done: 0, total: ev.total as number, current: null, members: [] };
+          p.done = ev.done as number;
+          p.total = ev.total as number;
+          p.current = ev.symbol as string;
           p.members.unshift(ev);
           p.members.length = Math.min(p.members.length, 6);
           progress.value = { ...p };
         } else if (ev.type === 'series') {
-          if (!ev.partial) r = ev;
-        } else if (ev.type === 'error') throw new Error(ev.tooMany ? t('rule.tooMany', ev.tooMany) : ev.error);
+          if (!ev.partial) r = ev as unknown as IndexResult;
+        } else if (ev.type === 'error') throw new Error(ev.tooMany ? t('rule.tooMany', ev.tooMany as Record<string, unknown>) : (ev.error as string));
       },
       aborter.signal,
     );
     if (id !== seq) return;
     if (!r) throw new Error(t('bk.disconnected'));
-    result.value = r;
+    result.value = r as IndexResult;
     // a basket copied from an ETF / list: names that no longer trade go now that the prices show which they are
     if (!rule && b.prune) {
       b.prune = false;
-      const gone = r.constituents.filter((c) => c.delisted).map((c) => c.symbol);
-      for (const f of r.failed || []) gone.push(f.ticker); // no price data anywhere: not tradeable either
+      const gone = (r as IndexResult).constituents.filter((c) => c.delisted).map((c) => c.symbol);
+      for (const f of (r as IndexResult).failed || []) gone.push(f.ticker); // no price data anywhere: not tradeable either
       if (gone.length) {
         removeConstituents(b.id, gone);
         pruned.value = t('bk.pruned', { n: gone.length, list: gone.join(t('sep')) });
       }
     }
     // TWS may have come up (or gone) since the page loaded
-    if (quotes.value && (r.ib !== quotes.value.ib?.connected || r.tv !== quotes.value.tv?.connected)) api.quotesStatus().then((q) => (quotes.value = q)).catch(() => {});
+    if (quotes.value && ((r as IndexResult).ib !== quotes.value.ib?.connected || (r as IndexResult).tv !== quotes.value.tv?.connected)) api.quotesStatus().then((q) => (quotes.value = q as QuotesStatus)).catch(() => {});
   } catch (e) {
-    if (id !== seq || e.name === 'AbortError') return;
-    error.value = e.message;
+    if (id !== seq || (e as Error).name === 'AbortError') return;
+    error.value = (e as Error).message;
     result.value = null;
   } finally {
     if (id === seq) {
@@ -384,12 +407,12 @@ onMounted(async () => {
 });
 watch([current, range, ruleRange, benchmark, hidden, ruleRebalance, weighting, special], () => run());
 // dates are typed in (a half-typed year is a window of its own): wait
-let dateTimer = null;
+let dateTimer: ReturnType<typeof setTimeout> | undefined;
 watch([from, to], () => {
   clearTimeout(dateTimer);
   dateTimer = setTimeout(run, 600);
 });
-let priceTimer = null;
+let priceTimer: ReturnType<typeof setTimeout> | undefined;
 watch([minPrice, maxWeight], () => {
   clearTimeout(priceTimer);
   if (isRule.value) priceTimer = setTimeout(run, 500);
@@ -402,7 +425,7 @@ watch(current, () => {
   schedule.value = null;
 });
 // weights are typed in: wait for the typing to stop before refetching
-let editTimer = null;
+let editTimer: ReturnType<typeof setTimeout> | undefined;
 watch(
   () => current.value && [current.value.rebalance, current.value.constituents.map((c) => `${c.ticker}:${c.weight}`).join(',')],
   () => {
@@ -417,11 +440,11 @@ function create() {
   createBasket(name, []);
   newName.value = '';
 }
-function remove(b) {
+function remove(b: Basket) {
   if (!confirm(t('bk.confirmDelete', { name: b.name }))) return;
   removeBasket(b.id);
 }
-function startSideRename(b) {
+function startSideRename(b: Basket) {
   sideRename.value = { id: b.id, to: b.name };
 }
 function finishSideRename() {
@@ -433,12 +456,12 @@ function finishSideRename() {
   }
   sideRename.value = null;
 }
-function duplicate(b) {
-  if (b.mode === 'rule') createRuleBasket(t('bk.copyOf', { name: b.name }), { ...b.source });
+function duplicate(b: Basket) {
+  if (b.mode === 'rule') createRuleBasket(t('bk.copyOf', { name: b.name }), { ...b.source! });
   else createBasket(t('bk.copyOf', { name: b.name }), b.constituents.map((c) => ({ ...c })), { rebalance: b.rebalance });
 }
 // every stock of a watchlist group (or the whole list) into a new basket
-const groupOptions = computed(() => [['all', `${t('bk.wholeWatchlist')} (${watchlist.items.length})`], ...watchlist.groups.map((g) => [g, `${g} (${watchlist.items.filter((x) => x.groups.includes(g)).length})`])]);
+const groupOptions = computed((): [string, string][] => [['all', `${t('bk.wholeWatchlist')} (${watchlist.items.length})`], ...watchlist.groups.map((g): [string, string] => [g, `${g} (${watchlist.items.filter((x) => x.groups.includes(g)).length})`])]);
 const fromGroup = ref('');
 function createFromGroup() {
   const g = fromGroup.value;
@@ -448,29 +471,29 @@ function createFromGroup() {
   createBasket(g === 'all' ? t('nav.watch') : g, items);
   fromGroup.value = '';
 }
-async function addFromSearch(ticker) {
+async function addFromSearch(ticker: string) {
   addMsg.value = '';
   if (!current.value) return;
   try {
     const c = await api.company(ticker);
     const tk = c.tickers?.[0];
     if (!tk) throw new Error(t('bk.noTicker'));
-    addMsg.value = addConstituent(current.value.id, { ticker: tk, cik: c.cik, name: c.name }) ? t('bk.addedTicker', { t: tk }) : t('bk.alreadyIn', { t: tk });
+    addMsg.value = addConstituent(current.value!.id, { ticker: tk, cik: c.cik, name: c.name }) ? t('bk.addedTicker', { t: tk }) : t('bk.alreadyIn', { t: tk });
   } catch (e) {
-    addMsg.value = t('notFound', { msg: e.message });
+    addMsg.value = t('notFound', { msg: (e as Error).message });
   }
 }
 
 // ---- display ----
 const f2 = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
-const pct = (v, sign = true) => (v == null || !Number.isFinite(v) ? '—' : `${sign && v > 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
-const cls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '');
+const pct = (v: number | null | undefined, sign = true) => (v == null || !Number.isFinite(v) ? '—' : `${sign && v > 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
+const cls = (v: number | null | undefined) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '');
 // weights are percentages; when they do not add up to 100 the index uses them
 // proportionally, and the footer offers to rescale
 const totalWeight = computed(() => (current.value ? current.value.constituents.reduce((s, c) => s + (Number(c.weight) > 0 ? Number(c.weight) : 0), 0) : 0));
 // what the index actually uses: hidden rows drop out and the rest share their weight
 const activeWeight = computed(() => (current.value ? current.value.constituents.reduce((s, c) => s + (inIndex(c) ? Number(c.weight) : 0), 0) : 0));
-const weightPct = (c) => (activeWeight.value && inIndex(c) ? Number(c.weight) / activeWeight.value : 0);
+const weightPct = (c: Constituent) => (activeWeight.value && inIndex(c) ? Number(c.weight) / activeWeight.value : 0);
 const totalOff = computed(() => Math.abs(totalWeight.value - 100) > 0.5); // 30 × 3.33 is 100 enough
 const scaled = computed(() => totalOff.value || hiddenCount.value > 0);
 const f1 = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 });
@@ -478,22 +501,22 @@ const perf = computed(() => Object.fromEntries((result.value?.constituents || []
 const benchStats = computed(() => {
   const p = result.value?.benchmark?.points;
   if (!p?.length) return null;
-  return { total: p.at(-1).value / p[0].value - 1 };
+  return { total: p.at(-1)!.value / p[0]!.value - 1 };
 });
 const sortKey = ref('weight');
 const sortDir = ref(-1);
-function sortBy(k) {
+function sortBy(k: string) {
   if (sortKey.value === k) sortDir.value = -sortDir.value;
   else {
     sortKey.value = k;
     sortDir.value = k === 'ticker' || k === 'name' ? 1 : -1;
   }
 }
-const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
+const arrow = (k: string) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
 const rows = computed(() => {
   if (!current.value) return [];
   const k = sortKey.value;
-  const val = (c) => (k === 'weight' ? weightPct(c) : k === 'return' ? (perf.value[c.ticker]?.return ?? null) : k === 'contribution' ? (perf.value[c.ticker]?.contribution ?? null) : c[k] ?? '');
+  const val = (c: Constituent): string | number | null => (k === 'weight' ? weightPct(c) : k === 'return' ? (perf.value[c.ticker]?.return ?? null) : k === 'contribution' ? (perf.value[c.ticker]?.contribution ?? null) : ((c as unknown as Record<string, string | number>)[k] ?? ''));
   return [...current.value.constituents].sort((a, b) => {
     const x = val(a) ?? -Infinity;
     const y = val(b) ?? -Infinity;
@@ -504,9 +527,9 @@ const rows = computed(() => {
 // ---- TradingView spread symbol for the basket ----
 const TV_SPREAD_MAX = 10; // TradingView's limit on tickers in one spread
 // 60M is a TradingView preset that switches to weekly bars; 61M keeps daily
-const TV_RANGE = { '1y': '12M', '3y': '36M', '5y': '61M', '10y': '120M' };
-const tvSymbol = (t) => String(t).toUpperCase().replace(/-/g, '.'); // BRK-B -> BRK.B
-const sig = (v) => Number(v.toPrecision(6));
+const TV_RANGE: Record<string, string> = { '1y': '12M', '3y': '36M', '5y': '61M', '10y': '120M' };
+const tvSymbol = (t: string) => String(t).toUpperCase().replace(/-/g, '.'); // BRK-B -> BRK.B
+const sig = (v: number) => Number(v.toPrecision(6));
 const tvIncluded = computed(() => (current.value ? current.value.constituents.filter(inIndex) : []));
 const tvTooMany = computed(() => tvIncluded.value.length > TV_SPREAD_MAX);
 // coefficient = holding units at the basket's start (base 100), so the level
@@ -647,7 +670,7 @@ const sourceText = computed(() => {
           <div class="small">
             <b>{{ isRule ? t('rule.filters') : t('bk.source') }}</b> {{ isRule ? current.source.label || t('nav.screen') : sourceLabel(current.source) }}
             <span v-if="isRule" class="muted">· {{ t('rule.filtersHint') }}</span>
-            <span v-if="!isRule && current.sync" class="muted">· {{ tr(current.sync.sourceName) }}<template v-if="current.sync.asOf">{{ t('bk.asOf', { date: current.sync.asOf }) }}</template> · {{ t('bk.lastSync', { time: new Date(current.sync.at).toLocaleString(dateLocale.value) }) }}</span>
+            <span v-if="!isRule && current.sync" class="muted">· {{ tr(current.sync.sourceName) }}<template v-if="current.sync.asOf">{{ t('bk.asOf', { date: current.sync.asOf }) }}</template> · {{ t('bk.lastSync', { time: new Date(current.sync.at).toLocaleString(dateLocale) }) }}</span>
             <span v-if="manualCount" class="muted">· {{ t('bk.manualCount', { n: manualCount }) }}</span>
             <span v-if="current.excluded?.length" class="muted">· {{ t('bk.excludedCount', { n: current.excluded.length }) }}</span>
           </div>
@@ -668,7 +691,7 @@ const sourceText = computed(() => {
             <template v-if="progress">
               <b>{{ progress.done }} / {{ progress.total }}</b> {{ t('bk.barsArrived') }}<template v-if="progress.done < progress.total">{{ t(isStatic ? 'bk.barsFetchingStatic' : 'bk.barsFetching') }}</template><template v-else>{{ t('bk.barsComputing') }}</template>…
               <span class="chips">
-                <span v-for="m in progress.members" :key="m.symbol" class="chip mono" :class="{ bad: m.error, bench: m.bench }" :title="m.error ? m.error : `${m.source} · ${m.first} ～ ${m.last} (${t('bk.days', { n: m.days })})`">{{ m.symbol }}</span>
+                <span v-for="m in progress.members" :key="String(m.symbol)" class="chip mono" :class="{ bad: m.error, bench: m.bench }" :title="m.error ? String(m.error) : `${m.source} · ${m.first} ～ ${m.last} (${t('bk.days', { n: m.days })})`">{{ m.symbol }}</span>
               </span>
             </template>
             <Loading v-else inline small :text="t('bk.connecting')" />
@@ -676,10 +699,10 @@ const sourceText = computed(() => {
         </div>
         <div v-if="useTv || result?.bars?.length" class="panel chart">
           <TvEmbedChart v-if="useTv" :expression="tvExpression" :compare="tvCompare" :range="TV_RANGE[range] || 'ALL'" :colors="colors" />
-          <KlineChart v-else :bars="result.bars" :overlay="result.benchmark?.points || []" :overlay-label="result.benchmark?.symbol || ''" :label="current.name" :colors="colors" :advanced="advanced" />
+          <KlineChart v-else :bars="result!.bars" :overlay="result!.benchmark?.points || []" :overlay-label="result!.benchmark?.symbol || ''" :label="current.name" :colors="colors" :advanced="advanced" />
           <div v-if="result?.stats" class="stats">
             <div><span class="muted small">{{ t('bk.periodReturn') }}</span><b class="mono" :class="cls(result.stats.total)">{{ pct(result.stats.total) }}</b></div>
-            <div v-if="benchStats"><span class="muted small">{{ t('bk.samePeriod', { symbol: result.benchmark.symbol }) }}</span><b class="mono" :class="cls(benchStats.total)">{{ pct(benchStats.total) }}</b></div>
+            <div v-if="benchStats"><span class="muted small">{{ t('bk.samePeriod', { symbol: result!.benchmark!.symbol }) }}</span><b class="mono" :class="cls(benchStats.total)">{{ pct(benchStats.total) }}</b></div>
             <div><span class="muted small">{{ t('bk.cagr') }}</span><b class="mono" :class="cls(result.stats.cagr)">{{ pct(result.stats.cagr) }}</b></div>
             <div><span class="muted small">{{ t('bk.vol') }}</span><b class="mono">{{ pct(result.stats.vol, false) }}</b></div>
             <div :title="t('bk.drawdownTitle', { from: result.stats.drawdownFrom, to: result.stats.drawdownTo })"><span class="muted small">{{ t('bk.maxDrawdown') }}</span><b class="mono down">{{ pct(result.stats.maxDrawdown) }}</b></div>
@@ -741,14 +764,14 @@ const sourceText = computed(() => {
                   <button v-if="c.origin === 'source' && c.manualWeight" class="mini ghost" :title="c.gone ? t('bk.revertGone') : t('bk.revert', { w: c.sourceWeight })" @click="revertWeight(current.id, c.ticker)">↺</button>
                 </td>
                 <td v-if="current.source" class="num mono small muted hide-p">{{ c.origin === 'source' && c.sourceWeight != null && !c.gone ? f1.format(c.sourceWeight) + '%' : '—' }}</td>
-                <td class="num mono hide-p">{{ perf[c.ticker]?.startClose != null ? f2.format(perf[c.ticker].startClose) : '—' }}</td>
-                <td class="num mono hide-p">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}</td>
+                <td class="num mono hide-p">{{ perf[c.ticker]?.startClose != null ? f2.format(perf[c.ticker]!.startClose!) : '—' }}</td>
+                <td class="num mono hide-p">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker]!.endClose!) : '—' }}</td>
                 <td class="num mono" :class="cls(perf[c.ticker]?.return)">{{ pct(perf[c.ticker]?.return) }}</td>
                 <td class="num mono hide-p" :class="cls(perf[c.ticker]?.contribution)">{{ pct(perf[c.ticker]?.contribution) }}</td>
                 <td class="small muted hide-t">
                   <template v-if="perf[c.ticker]">
                     <span v-if="perf[c.ticker].illiquid" class="warn" :title="t('bk.illiquidTitle')">{{ t('bk.illiquid') }}</span>
-                    {{ perf[c.ticker].source }} · {{ t('bk.from', { date: perf[c.ticker].first }) }}<span v-if="perf[c.ticker].joined && perf[c.ticker].joined !== result.start" class="warn">{{ t('bk.joinedOn', { date: perf[c.ticker].joined }) }}</span><span v-if="perf[c.ticker].delisted" class="warn" :title="t('bk.delistedTitle')">{{ t('bk.noQuotesAfter', { date: perf[c.ticker].last }) }}</span><span v-else-if="perf[c.ticker].left" class="warn">{{ t('bk.leftOn', { date: perf[c.ticker].left }) }}</span><span v-else-if="!perf[c.ticker].joined" class="warn">{{ t('bk.noDataInRange') }}</span>
+                    {{ perf[c.ticker].source }} · {{ t('bk.from', { date: perf[c.ticker].first }) }}<span v-if="perf[c.ticker].joined && perf[c.ticker]!.joined !== result!.start" class="warn">{{ t('bk.joinedOn', { date: perf[c.ticker].joined }) }}</span><span v-if="perf[c.ticker].delisted" class="warn" :title="t('bk.delistedTitle')">{{ t('bk.noQuotesAfter', { date: perf[c.ticker].last }) }}</span><span v-else-if="perf[c.ticker].left" class="warn">{{ t('bk.leftOn', { date: perf[c.ticker].left }) }}</span><span v-else-if="!perf[c.ticker].joined" class="warn">{{ t('bk.noDataInRange') }}</span>
                   </template>
                   <span v-else-if="result?.failed?.find((f) => f.ticker === c.ticker)" class="down">{{ t('bk.noData') }}</span>
                   <template v-else>{{ inIndex(c) && !noBars ? '…' : '—' }}</template>
@@ -756,7 +779,7 @@ const sourceText = computed(() => {
                 <td class="del" :title="t('bk.removeTitle', { t: c.ticker, src: c.origin === 'source' ? t('bk.removeSourceNote') : '' })" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
               </tr>
             </tbody>
-            <tfoot v-if="g.key === groups.at(-1).key">
+            <tfoot v-if="g.key === groups.at(-1)!.key">
               <tr>
                 <td colspan="3" class="muted small">
                   {{ t('bk.included', { n: current.constituents.filter(inIndex).length }) }}<template v-if="hiddenCount">{{ t('bk.hiddenN', { n: hiddenCount }) }} <button class="mini ghost" @click="showAll">{{ t('bk.showAll') }}</button></template>
@@ -793,10 +816,10 @@ const sourceText = computed(() => {
                 <td class="mono"><a :href="`?company=${c.ticker}`" @click.prevent>{{ c.ticker }}</a></td>
                 <td class="name">{{ c.name }}</td>
                 <td class="num mono">{{ f1.format(c.weight) }}%</td>
-                <td class="num mono">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker].endClose) : '—' }}<span v-if="perf[c.ticker]?.last" class="small muted"> ({{ perf[c.ticker].last }})</span></td>
+                <td class="num mono">{{ perf[c.ticker]?.endClose != null ? f2.format(perf[c.ticker]!.endClose!) : '—' }}<span v-if="perf[c.ticker]?.last" class="small muted"> ({{ perf[c.ticker].last }})</span></td>
                 <td class="small warn">
                   {{ delistedWhy(c).text }}
-                  <button v-if="delistedWhy(c).renamed" class="mini" @click.stop="followRename(c, delistedWhy(c).renamed)">{{ t('bk.useRenamed', { t: delistedWhy(c).renamed }) }}</button>
+                  <button v-if="delistedWhy(c).renamed" class="mini" @click.stop="followRename(c, delistedWhy(c).renamed!)">{{ t('bk.useRenamed', { t: delistedWhy(c).renamed }) }}</button>
                 </td>
                 <td class="del" :title="t('bk.removeTitle', { t: c.ticker, src: '' })" @click.stop="removeConstituent(current.id, c.ticker)"><Icon name="trash" /></td>
               </tr>
@@ -823,7 +846,7 @@ const sourceText = computed(() => {
                 <td class="mono"><a :href="`?company=${e.ticker}`" @click.prevent>{{ e.ticker }}</a></td>
                 <td class="name">{{ e.name }}</td>
                 <td class="num mono small muted">{{ e.sourceWeight != null ? f1.format(e.sourceWeight) + '%' : '—' }}</td>
-                <td class="small muted">{{ e.at ? new Date(e.at).toLocaleString(dateLocale.value) : '—' }}</td>
+                <td class="small muted">{{ e.at ? new Date(e.at).toLocaleString(dateLocale) : '—' }}</td>
                 <td class="del" @click.stop><button class="mini" :disabled="syncing" :title="t('bk.restoreTitle')" @click="restore(e.ticker)">{{ t('bk.restore') }}</button></td>
               </tr>
             </tbody>

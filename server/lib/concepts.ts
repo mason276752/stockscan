@@ -1,6 +1,6 @@
 // The concept fallback lists: what each figure can be called in US-GAAP or
-// IFRS, in the order they are tried (indicators.js `first`), plus which
-// concepts that makes interchangeable (quarters.js, for a filer that renames
+// IFRS, in the order they are tried (indicators.ts `first`), plus which
+// concepts that makes interchangeable (quarters.ts, for a filer that renames
 // a line mid-year). Its own module so both can have it without a cycle.
 
 // Concept fallbacks (US-GAAP first, then IFRS). Lists are tried in order.
@@ -8,6 +8,8 @@
 // for what is now Revenues): they are only reached when none of the current
 // ones is in the filing, and they are what the filings the quarterly
 // datasets reach back into are tagged with (server/lib/dera.js).
+import type { Concept } from './types.ts';
+
 export const C = {
   revenue: ['us-gaap:Revenues', 'us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax', 'us-gaap:SalesRevenueNet', 'us-gaap:SalesRevenueGoodsNet', 'us-gaap:SalesRevenueServicesNet', 'us-gaap:RevenuesNetOfInterestExpense', 'us-gaap:RegulatedAndUnregulatedOperatingRevenue', 'us-gaap:RevenuesExcludingInterestAndDividends', 'us-gaap:RealEstateRevenueNet', 'ifrs-full:Revenue', 'ifrs-full:RevenueFromContractsWithCustomers', 'ifrs-full:RevenueFromSaleOfGoods', 'ifrs-full:RevenueFromRenderingOfServices', 'ifrs-full:RevenueAndOperatingIncome', 'ifrs-full:InsuranceRevenue', 'ifrs-full:RevenueFromRenderingOfTelecommunicationServices', 'ifrs-full:RevenueFromRenderingOfTransportServices', 'ifrs-full:RevenueFromRenderingOfCargoAndMailTransportServices', 'us-gaap:RegulatedOperatingRevenue', 'us-gaap:RegulatedOperatingRevenueGas', 'us-gaap:RegulatedOperatingRevenueElectric', 'us-gaap:OilAndGasRevenue', 'us-gaap:OperatingLeaseLeaseIncome', 'us-gaap:FeeIncome'],
   // banks: net revenue = net interest income + non-interest income
@@ -85,7 +87,7 @@ export const C = {
 };
 
 // Concepts in the same list mean the same figure, so a series reported under
-// one name and then another is still one series: quarters.js needs that to
+// one name and then another is still one series: quarters.ts needs that to
 // subtract a year-to-date column from the one before it (Alphabet's dividends
 // paid went from us-gaap:PaymentsOfDividends to us-gaap:PaymentsOfOrdinary-
 // Dividends in its 2026 Q2 10-Q). `synthetic:` values are estimates this code
@@ -93,12 +95,15 @@ export const C = {
 // lists that are a preference order rather than one figure: basic and diluted
 // per-share numbers are genuinely different, and subtracting a year-to-date
 // column of one from the other would mix the two bases.
-const PREFERENCE_ONLY = new Set(['eps', 'sharesDiluted']);
-export const SIBLINGS = (() => {
-  const m = new Map();
+const PREFERENCE_ONLY = new Set<string>(['eps', 'sharesDiluted']);
+/** The figure names the rest of the code asks for by key. */
+export type ConceptKey = keyof typeof C;
+
+export const SIBLINGS: Map<Concept, Set<Concept>> = (() => {
+  const m = new Map<Concept, Set<Concept>>();
   for (const [key, list] of Object.entries(C)) {
     if (PREFERENCE_ONLY.has(key)) continue;
-    const real = [...new Set(list)].filter((c) => !c.startsWith('synthetic:'));
+    const real = [...new Set(list as readonly Concept[])].filter((c) => !c.startsWith('synthetic:'));
     if (real.length < 2) continue;
     for (const c of real) {
       const set = m.get(c) || new Set();

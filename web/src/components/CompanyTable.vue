@@ -1,22 +1,24 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import type { PropType } from 'vue';
 
 import ScoreBadge from './ScoreBadge.vue';
 import { isWatched, toggleWatch } from '../watchlist';
 import { bigMoney, isZh, t } from '../i18n';
+import type { ScoreBadge as ScoreBadgeData, UniverseCompany } from '../../../server/lib/types.ts';
 
 const props = defineProps({
-  companies: { type: Array, required: true },
+  companies: { type: Array as PropType<UniverseCompany[]>, required: true },
   showSic: { type: Boolean, default: true },
   showAfs: { type: Boolean, default: true },
-  scores: { type: Object, default: () => ({}) }, // cik -> score summary | null
+  scores: { type: Object as PropType<Record<string, ScoreBadgeData | null>>, default: () => ({}) }, // cik -> score summary | null
 });
 const emit = defineEmits(['open']);
 
 const sortKey = ref('float');
 const sortDir = ref(-1);
 
-function sortBy(key) {
+function sortBy(key: string) {
   if (sortKey.value === key) sortDir.value = -sortDir.value;
   else {
     sortKey.value = key;
@@ -27,7 +29,7 @@ function sortBy(key) {
 const rows = computed(() => {
   const k = sortKey.value;
   const d = sortDir.value;
-  const val = (c) => (k === 'score' ? props.scores[c.cik]?.score ?? null : c[k]);
+  const val = (c: UniverseCompany): string | number | null => (k === 'score' ? (props.scores[c.cik]?.score ?? null) : ((c as unknown as Record<string, string | number | null>)[k] ?? null));
   return [...props.companies].sort((a, b) => {
     const x = val(a) ?? (typeof val(b) === 'number' ? -Infinity : '');
     const y = val(b) ?? (typeof val(a) === 'number' ? -Infinity : '');
@@ -37,9 +39,9 @@ const rows = computed(() => {
 });
 
 const fmtFloat = bigMoney;
-const afsShort = (k) => (!k ? '—' : ['LAF', 'ACC', 'NON'].includes(k) ? t(`afs.${k}`) : k);
-const fmtDate = (s) => (s && /^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}` : s || '—');
-const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
+const afsShort = (k: string | null | undefined) => (!k ? '—' : ['LAF', 'ACC', 'NON'].includes(k) ? t(`afs.${k}`) : k);
+const fmtDate = (s: string | null | undefined) => (s && /^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}` : s || '—');
+const arrow = (k: string) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
 </script>
 
 <template>

@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { collapseAmendments, filingPeriodKey, pickFiling } from '../server/lib/filings.ts';
+import type { FilingRef, IsoDate } from '../server/lib/types.ts';
 
 // a company's filings as EDGAR lists them: newest filing date first
-const f = (accession, form, filingDate, periodEnd, extra = {}) => ({
+const f = (accession: string, form: string, filingDate: IsoDate, periodEnd: IsoDate, extra: Partial<FilingRef> = {}): FilingRef => ({
   accession,
   form,
   filingDate,
@@ -19,15 +20,15 @@ test('an amendment supersedes the original of its period', () => {
   const kept = collapseAmendments(list);
   assert.deepEqual(kept.map((x) => x.accession), ['a2', 'q1'], 'one filing per period, the corrected one');
   assert.equal(kept.length, 2, 'the original is not a second period');
-  assert.equal(pickFiling(list, { year: 2025, period: 'FY' }).accession, 'a2');
+  assert.equal(pickFiling(list, { year: 2025, period: 'FY' })!.accession, 'a2');
 });
 
 test('an amendment with no statements in it corrects nothing', () => {
   // the Part III-only 10-K/A: the build and the server flag it `thin`
   const list = [f('a2', '10-K/A', '2026-08-14', '2025-12-31', { thin: 1 }), f('a1', '10-K', '2026-03-01', '2025-12-31')];
   assert.deepEqual(collapseAmendments(list).map((x) => x.accession), ['a1']);
-  assert.equal(pickFiling(list, { year: 2025, period: 'FY' }).accession, 'a1');
-  // the caller can answer it its own way instead (screen.js passes a score's coverage)
+  assert.equal(pickFiling(list, { year: 2025, period: 'FY' })!.accession, 'a1');
+  // the caller can answer it its own way instead (screen.ts passes a score's coverage)
   assert.deepEqual(collapseAmendments(list, () => false).map((x) => x.accession), ['a2'], 'a test that trusts them all');
 });
 

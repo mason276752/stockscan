@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inWindow, periodEndOf, publishBudget, publishFrom } from '../server/lib/publish.ts';
+import type { PublishableFiling } from '../server/lib/publish.ts';
+import type { IsoDate } from '../server/lib/types.ts';
 
-const filing = (accession, reportDate, mb) => ({ accession, reportDate, bytes: mb * 1048576, file: `filings/1/${accession}__${reportDate}__10-Q__v2.json.zst` });
+const filing = (accession: string, reportDate: IsoDate, mb: number): PublishableFiling => ({ accession, reportDate, bytes: mb * 1048576, file: `filings/1/${accession}__${reportDate}__10-Q__v2.json.zst` });
 
 test('the site takes the newest filings that fit its budget', () => {
   const filings = [filing('a', '2020-03-31', 3), filing('d', '2026-03-31', 3), filing('b', '2022-03-31', 3), filing('c', '2024-03-31', 3)];

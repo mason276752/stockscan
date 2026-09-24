@@ -24,12 +24,42 @@ import { memoize } from './memo';
 import { isWatched, toggleWatch, watchlist } from './watchlist';
 import { baskets } from './baskets';
 import { bigMoney, dateLocale, isZh, locale, LOCALES, pick, t } from './i18n';
+import type { CompanyResponse } from './apiTypes.ts';
+import type { EdgarFiling, Indicators, Score, ScrapeResult, Statement } from '../../server/lib/types.ts';
+import type { Valuation } from '../../server/lib/valuation.ts';
+import type { Basket } from './baskets';
+
+/** GET /api/status, as the header reads it. */
+interface StatusResponse {
+  /** the pure-frontend build has no crawler behind it */
+  static?: boolean;
+  meta?: { filings?: number; scores?: number; builtAt?: string };
+  store?: { filings: number };
+  crawler?: {
+    enabled: boolean;
+    phase: string;
+    position: number;
+    total: number;
+    current: string | null;
+    depth?: number;
+    lastWatch: string | null;
+    watched: number;
+    backfill?: { day: string | null; floor: string; left: number | null; done: boolean };
+  };
+  [key: string]: unknown;
+}
+
+/**
+ * The filing on screen: one of the company's own, or the derived Q4 view
+ * (`quartersYear`), which has no accession of its own on EDGAR.
+ */
+type ShownFiling = Partial<EdgarFiling> & { accession: string; form: string; quartersYear?: number };
 
 // background crawl progress (server-side), shown in the header
-const status = ref(null);
+const status = ref<StatusResponse | null>(null);
 async function pollStatus() {
   try {
-    status.value = await api.status();
+    status.value = (await api.status()) as StatusResponse;
   } catch {
     status.value = null;
   }
@@ -37,12 +67,12 @@ async function pollStatus() {
 const isStatic = api.isStatic;
 const crawlText = computed(() => {
   if (status.value?.static) {
-    const m = status.value.meta;
+    const m = status.value.meta!;
     return t('crawl.static', { n: Number(m.filings || 0).toLocaleString(), date: m.builtAt ? new Date(m.builtAt).toLocaleDateString(dateLocale.value) : '—' });
   }
   const c = status.value?.crawler;
   if (!c?.enabled) return '';
-  const saved = status.value.store.filings.toLocaleString();
+  const saved = status.value!.store!.filings.toLocaleString();
   const watchNote = c.lastWatch ? t('crawl.watchNote', { time: new Date(c.lastWatch).toLocaleTimeString(dateLocale.value), watched: c.watched ? t('crawl.watched', { n: c.watched }) : '' }) : '';
   if (c.phase === 'sweep') return t('crawl.sweep', { depth: c.depth || 5, position: c.position.toLocaleString(), total: c.total.toLocaleString(), current: c.current ? ` · ${c.current}` : '', saved, watch: watchNote });
   const b = c.backfill;
@@ -53,24 +83,24 @@ const crawlText = computed(() => {
 
 // page: 'report' (statements of one company) | 'browse' (industry / filer status / ETF lists) | 'watch' (watchlist)
 //       | 'screen' (screener) | 'basket' (custom ETF charts)
-const page = ref('report');
-const browseParams = ref({});
-const screenParams = ref({}); // the screener's filters, mirrored in the URL
+const page = ref<'report' | 'browse' | 'watch' | 'screen' | 'basket'>('report');
+const browseParams = ref<Record<string, string>>({});
+const screenParams = ref<Record<string, string>>({}); // the screener's filters, mirrored in the URL
 
 // the per-company requests, memoized so an idle prefetch (see planPrefetch)
 // and the click that follows share one request
 const cached = {
-  filing: memoize((cik, accession, view) => api.filing(cik, accession, view), 24),
-  quarters: memoize((id, year) => api.quarters(id, year), 8),
-  indicators: memoize((id, p) => api.indicators(id, p), 24),
-  valuation: memoize((id, p) => api.valuation(id, p), 24),
-  score: memoize((cik, accession) => api.score(cik, accession), 60),
-  tvSymbol: memoize((ticker) => api.tvSymbol(ticker), 60),
+  filing: memoize((cik: number | string, accession: string, view: string) => api.filing(cik, accession, view), 24),
+  quarters: memoize((id: string, year: number | string) => api.quarters(id, year), 8),
+  indicators: memoize((id: string, p: Record<string, string | number | undefined>) => api.indicators(id, p), 24),
+  valuation: memoize((id: string, p: Record<string, string | number | undefined>) => api.valuation(id, p), 24),
+  score: memoize((cik: number | string, accession: string) => api.score(cik, accession), 60),
+  tvSymbol: memoize((ticker: string) => api.tvSymbol(ticker), 60),
 };
 
-const company = ref(null);
-const filing = ref(null); // the filing row picked from the list
-const data = ref(null); // scraped statements JSON
+const company = ref<CompanyResponse | null>(null);
+const filing = ref<ShownFiling | null>(null); // the filing row picked from the list
+const data = ref<ScrapeResult | null>(null); // scraped statements JSON
 const loadingCompany = ref(false);
 const refreshing = ref(false);
 const refreshMessage = ref('');
@@ -88,16 +118,16 @@ async function refreshFilings() {
     company.value = fresh;
     refreshMessage.value = added.length
       ? t('refresh.added', { n: added.length, list: added.map((f) => `${f.form} ${f.fiscalYear} ${f.fiscalPeriod}`).join(t('sep')) })
-      : t('refresh.none', { time: new Date(fresh.filingsUpdatedAt).toLocaleTimeString(dateLocale.value) });
+      : t('refresh.none', { time: new Date(fresh.filingsUpdatedAt!).toLocaleTimeString(dateLocale.value) });
     if (added.length && !filing.value?.quartersYear) await loadFiling(added[0]);
   } catch (e) {
-    refreshMessage.value = t('refresh.failed', { msg: e.message });
+    refreshMessage.value = t('refresh.failed', { msg: (e as Error).message });
   } finally {
     refreshing.value = false;
   }
 }
 const loadingFiling = ref(false);
-const error = ref(null);
+const error = ref<string | null>(null);
 // phones: the filing picker folds away once a filing is chosen, so the statements start near the top
 const pickerOpen = ref(true);
 watch(filing, (f) => {
@@ -116,19 +146,19 @@ watch(simple, (v) => localStorage.setItem('stockscan.simple', v ? '1' : '0'));
 const view = ref('current'); // current = only the filing's own period | all = every column in the filing
 
 // financial indicators page
-const indicators = ref(null);
+const indicators = ref<Indicators | null>(null);
 const loadingIndicators = ref(false);
-const indicatorsError = ref(null);
+const indicatorsError = ref<string | null>(null);
 const indBasis = ref('x4'); // x4 | ttm
 const indMode = ref('quarter'); // quarter | year
 const indCountQ = ref(20);
 const indCountY = ref(5);
 const indCount = computed(() => (indMode.value === 'quarter' ? indCountQ.value : indCountY.value));
 const indAnnualizeAmounts = ref(true);
-const indicatorsParams = computed(() => {
+const indicatorsParams = computed((): Record<string, string | number | undefined> | null => {
   if (!company.value || !filing.value) return null;
   const period = filing.value.quartersYear ? 'Q4' : filing.value.fiscalPeriod;
-  return { year: filing.value.fiscalYear, period, n: indCount.value, basis: indBasis.value, mode: indMode.value };
+  return { year: filing.value.fiscalYear ?? undefined, period: period ?? undefined, n: indCount.value, basis: indBasis.value, mode: indMode.value };
 });
 const indicatorsEnd = computed(() => {
   const p = indicatorsParams.value;
@@ -142,9 +172,9 @@ async function loadIndicators() {
   loadingIndicators.value = true;
   indicatorsError.value = null;
   try {
-    indicators.value = await cached.indicators(String(company.value.cik), p);
+    indicators.value = await cached.indicators(String(company.value!.cik), p);
   } catch (e) {
-    indicatorsError.value = e.message;
+    indicatorsError.value = (e as Error).message;
     indicators.value = null;
   } finally {
     loadingIndicators.value = false;
@@ -152,15 +182,15 @@ async function loadIndicators() {
 }
 
 // valuation page (relative multiples over N quarters + absolute models)
-const valuation = ref(null);
+const valuation = ref<Valuation | null>(null);
 const loadingValuation = ref(false);
-const valuationError = ref(null);
+const valuationError = ref<string | null>(null);
 const valCount = ref(20);
 const valAdr = ref(1); // ADR ratio for foreign filers (ordinary shares per listed share)
-const valuationParams = computed(() => {
+const valuationParams = computed((): Record<string, string | number | undefined> | null => {
   if (!company.value || !filing.value) return null;
   const period = filing.value.quartersYear ? 'Q4' : filing.value.fiscalPeriod;
-  return { year: filing.value.fiscalYear, period, n: valCount.value, ...(valAdr.value !== 1 ? { adr: valAdr.value } : {}) };
+  return { year: filing.value.fiscalYear ?? undefined, period: period ?? undefined, n: valCount.value, ...(valAdr.value !== 1 ? { adr: valAdr.value } : {}) };
 });
 watch(company, () => (valAdr.value = 1));
 async function loadValuation() {
@@ -169,9 +199,9 @@ async function loadValuation() {
   loadingValuation.value = true;
   valuationError.value = null;
   try {
-    valuation.value = await cached.valuation(String(company.value.cik), p);
+    valuation.value = (await cached.valuation(String(company.value!.cik), p)) as Valuation;
   } catch (e) {
-    valuationError.value = e.message;
+    valuationError.value = (e as Error).message;
     valuation.value = null;
   } finally {
     loadingValuation.value = false;
@@ -188,7 +218,7 @@ const isValuation = computed(() => tab.value === 'valuation');
 // indicators); the exchange-qualified symbol comes from the market snapshot
 // so a bare ticker cannot resolve to another country's listing
 const isChart = computed(() => tab.value === 'chart');
-const tvSymbol = ref(null);
+const tvSymbol = ref<{ ticker: string | null; symbol: string | null; exchange?: string | null; known?: boolean } | null>(null);
 const chartRange = ref(localStorage.getItem('stockscan.krange') || '12M');
 const chartColors = ref(localStorage.getItem('stockscan.kcolors') || 'tw');
 watch(chartRange, (v) => localStorage.setItem('stockscan.krange', v));
@@ -224,7 +254,7 @@ const TABS = ['balance_sheet', 'income_statement', 'cash_flow', 'equity'];
 const isIndicators = computed(() => tab.value === 'indicators');
 
 // score of the selected filing, shown on the indicators tab
-const filingScore = ref(null);
+const filingScore = ref<Score | null>(null);
 watch(
   [tab, filing],
   async ([t, f]) => {
@@ -235,7 +265,7 @@ watch(
     if (filingScore.value?.accession === f.accession) return;
     filingScore.value = null;
     try {
-      filingScore.value = await cached.score(f.cik, f.accession);
+      filingScore.value = await cached.score(f.cik!, f.accession);
     } catch {
       filingScore.value = null;
     }
@@ -245,31 +275,31 @@ watch(
 
 const otherStatements = computed(() => {
   if (!data.value) return [];
-  const primary = new Set(Object.values(data.value.statements).filter(Boolean).map((s) => s.role));
+  const primary = new Set(Object.values(data.value.statements).filter((s): s is Statement => !!s).map((s) => s.role));
   return data.value.allStatements.filter((s) => !primary.has(s.role));
 });
 
 const current = computed(() => {
   if (!data.value) return null;
   if (tab.value.startsWith('role:')) return otherStatements.value.find((s) => s.role === tab.value.slice(5)) || null;
-  const stmt = data.value.statements[tab.value];
+  const stmt = data.value.statements[tab.value as keyof typeof data.value.statements];
   return simple.value ? simplifyStatement(stmt) : stmt;
 });
 
-function openBrowse(params) {
+function openBrowse(params: Record<string, string>) {
   browseParams.value = { cat: 'sic', code: '', afs: '', etf: '', ...params };
   page.value = 'browse';
 }
-const fmtFloat = (v) => `${bigMoney(v)} ${t('usd')}`;
+const fmtFloat = (v: number | null | undefined) => `${bigMoney(v)} ${t('usd')}`;
 
 // From the search box or a browse list: show the statements page for that company.
-function openCompany(idOrRow) {
+function openCompany(idOrRow: string | { ticker?: string | null; cik: number }) {
   const id = typeof idOrRow === 'string' ? idOrRow : idOrRow.ticker || String(idOrRow.cik);
   page.value = 'report';
   loadCompany(id);
 }
 
-async function loadCompany(id, accession = null, quartersYear = null) {
+async function loadCompany(id: string, accession: string | null = null, quartersYear: number | null = null) {
   error.value = null;
   loadingCompany.value = true;
   data.value = null;
@@ -280,25 +310,25 @@ async function loadCompany(id, accession = null, quartersYear = null) {
     const pick = (accession && company.value.filings.find((f) => f.accession === accession)) || company.value.filings[0];
     if (pick) await loadFiling(pick);
   } catch (e) {
-    error.value = e.message;
+    error.value = (e as Error).message;
     company.value = null;
   } finally {
     loadingCompany.value = false;
   }
 }
 
-async function loadFiling(f) {
+async function loadFiling(f: ShownFiling) {
   error.value = null;
   loadingFiling.value = true;
   filing.value = f;
   try {
-    data.value = await cached.filing(f.cik, f.accession, view.value);
+    data.value = await cached.filing(f.cik!, f.accession, view.value);
     const valid = tab.value.startsWith('role:')
       ? data.value.allStatements.some((s) => `role:${s.role}` === tab.value)
-      : tab.value === 'indicators' || tab.value === 'valuation' || tab.value === 'chart' || !!data.value.statements[tab.value];
+      : tab.value === 'indicators' || tab.value === 'valuation' || tab.value === 'chart' || !!data.value.statements[tab.value as keyof typeof data.value.statements];
     if (!valid) tab.value = 'balance_sheet';
   } catch (e) {
-    error.value = e.message;
+    error.value = (e as Error).message;
     data.value = null;
   } finally {
     loadingFiling.value = false;
@@ -306,16 +336,16 @@ async function loadFiling(f) {
 }
 
 // Q4 derived view: Q1-Q3 from the 10-Qs, FY from the 10-K, Q4 = FY - Q1 - Q2 - Q3.
-async function loadQuarters(year) {
+async function loadQuarters(year: number) {
   error.value = null;
   loadingFiling.value = true;
   filing.value = { accession: `q4-${year}`, form: 'Q4*', fiscalYear: year, fiscalPeriod: 'Q4', quartersYear: year };
   try {
-    data.value = await cached.quarters(String(company.value.cik), year);
-    if (!data.value.statements[tab.value] && !tab.value.startsWith('role:') && tab.value !== 'indicators' && tab.value !== 'valuation' && tab.value !== 'chart') tab.value = 'income_statement';
+    data.value = (await cached.quarters(String(company.value!.cik), year)) as unknown as ScrapeResult;
+    if (!data.value.statements[tab.value as keyof typeof data.value.statements] && !tab.value.startsWith('role:') && tab.value !== 'indicators' && tab.value !== 'valuation' && tab.value !== 'chart') tab.value = 'income_statement';
     if (tab.value.startsWith('role:') && !data.value.allStatements.some((s) => `role:${s.role}` === tab.value)) tab.value = 'income_statement';
   } catch (e) {
-    error.value = e.message;
+    error.value = (e as Error).message;
     data.value = null;
   } finally {
     loadingFiling.value = false;
@@ -339,12 +369,12 @@ function planPrefetch() {
   if (!c || !f || !data.value) return;
   const cik = String(c.cik);
   const tag = 'company';
-  if (!f.quartersYear) prefetch(`score:${f.accession}`, () => cached.score(f.cik, f.accession), { tag, priority: 2 });
+  if (!f.quartersYear) prefetch(`score:${f.accession}`, () => cached.score(f.cik!, f.accession), { tag, priority: 2 });
   const ip = indicatorsParams.value;
   if (ip) prefetch(`ind:${cik}:${JSON.stringify(ip)}`, () => cached.indicators(cik, ip), { tag, priority: 2 });
-  if (c.tickers?.[0]) prefetch(`tv:${c.tickers[0]}`, () => cached.tvSymbol(c.tickers[0]), { tag, priority: 2 });
+  if (c.tickers?.[0]) prefetch(`tv:${c.tickers[0]}`, () => cached.tvSymbol(c.tickers![0]!), { tag, priority: 2 });
   const i = c.filings.findIndex((x) => x.accession === f.accession);
-  for (const nf of c.filings.slice(Math.max(i, 0) + 1, Math.max(i, 0) + 4)) prefetch(`filing:${nf.accession}:${view.value}`, () => cached.filing(nf.cik, nf.accession, view.value), { tag, priority: 1 });
+  for (const nf of c.filings.slice(Math.max(i, 0) + 1, Math.max(i, 0) + 4)) prefetch(`filing:${nf.accession}:${view.value}`, () => cached.filing(nf.cik!, nf.accession, view.value), { tag, priority: 1 });
   const vp = valuationParams.value;
   if (vp) prefetch(`val:${cik}:${JSON.stringify(vp)}`, () => cached.valuation(cik, vp), { tag, priority: 1, delay: 8000 });
 }
@@ -357,7 +387,7 @@ watch(company, (c, prev) => {
 
 const jsonUrl = computed(() => {
   if (!data.value) return '#';
-  if (data.value.derived) return api.quartersUrl(String(data.value.filing.cik), data.value.filing.fiscalYear);
+  if (data.value.derived) return api.quartersUrl(String(data.value.filing.cik), data.value.filing.fiscalYear!);
   return api.filingUrl(data.value.filing.cik, data.value.filing.accession, view.value);
 });
 
@@ -383,8 +413,8 @@ watch([company, filing, tab, indMode, view, page, browseParams, screenParams], (
   } else if (page.value === 'watch' || page.value === 'basket') {
     p.set('page', page.value);
   } else {
-    if (company.value) p.set('company', company.value.tickers[0] || String(company.value.cik));
-    if (filing.value?.quartersYear) p.set('quarters', filing.value.quartersYear);
+    if (company.value) p.set('company', company.value.tickers?.[0] || String(company.value.cik));
+    if (filing.value?.quartersYear) p.set('quarters', String(filing.value.quartersYear));
     else if (filing.value) p.set('accession', filing.value.accession);
     if (data.value && tab.value !== 'balance_sheet') p.set('tab', tab.value);
     if (tab.value === 'indicators' && indMode.value !== 'quarter') p.set('mode', indMode.value);
@@ -403,7 +433,7 @@ watch([company, filing, tab, indMode, view, page, browseParams, screenParams], (
 // a basket copied from the screener (or a rule ETF, whose filters *are* the
 // fund): reopen the screener with its filters, tagged with the basket so
 // "update this ETF" / "update the rule" is offered there
-function editScreen(basket) {
+function editScreen(basket: Basket | null | undefined) {
   const src = basket?.source;
   if (!src || (src.type !== 'screen' && src.type !== 'rule')) return;
   // baskets saved before the URL form was kept only have API params: the screener rebuilds those itself
@@ -422,8 +452,8 @@ function openScreen() {
 
 function applyUrl() {
   const p = new URLSearchParams(location.search);
-  if (p.get('tab')) tab.value = p.get('tab');
-  if (['year', 'same'].includes(p.get('mode'))) indMode.value = p.get('mode');
+  if (p.get('tab')) tab.value = p.get('tab')!;
+  if (['year', 'same'].includes(p.get('mode')!)) indMode.value = p.get('mode')!;
   if (p.get('view') === 'all') view.value = 'all';
   if (p.get('page') === 'browse') {
     page.value = 'browse';
@@ -431,19 +461,19 @@ function applyUrl() {
     return;
   }
   if (p.get('page') === 'screen') {
-    const sp = {};
+    const sp: Record<string, string> = {};
     for (const [k, v] of p.entries()) if (k !== 'page') sp[k] = v;
     screenParams.value = sp;
     page.value = 'screen';
     return;
   }
-  if (['watch', 'basket'].includes(p.get('page'))) {
-    page.value = p.get('page');
+  if (['watch', 'basket'].includes(p.get('page')!)) {
+    page.value = p.get('page') as 'watch' | 'basket';
     return;
   }
   page.value = 'report';
   const id = p.get('company');
-  if (id && (!company.value || (!company.value.tickers.includes(id.toUpperCase()) && String(company.value.cik) !== id))) {
+  if (id && (!company.value || (!company.value.tickers?.includes(id.toUpperCase()) && String(company.value.cik) !== id))) {
     loadCompany(id, p.get('accession'), p.get('quarters') ? Number(p.get('quarters')) : null);
   }
 }
@@ -501,7 +531,7 @@ onMounted(() => {
           {{ company.name }}
         </h2>
         <div class="muted small co-info">
-          {{ company.tickers.join(', ') }} · CIK {{ company.cik }}
+          {{ company.tickers!.join(', ') }} · CIK {{ company.cik }}
           <span v-if="company.fiscalYearEnd"> · {{ t('company.fye') }} {{ company.fiscalYearEnd.slice(0, 2) }}/{{ company.fiscalYearEnd.slice(2) }}</span>
           <div v-if="company.sic">
             <a :href="`?page=browse&cat=sic&code=${company.sic}`" :title="t('company.sameIndustry')" @click.prevent="openBrowse({ cat: 'sic', code: String(company.sic) })">
@@ -509,7 +539,7 @@ onMounted(() => {
             </a>
           </div>
           <div v-if="company.filer?.filerStatus">
-            <a :href="`?page=browse&cat=filer&afs=${company.filer.afs}`" :title="t('company.sameFiler')" @click.prevent="openBrowse({ cat: 'filer', afs: company.filer.afs })">{{ pick(company.filer.filerStatus, 'zh', 'label') }}</a><span v-if="company.filer.wksi"> · WKSI</span>
+            <a :href="`?page=browse&cat=filer&afs=${company.filer.afs}`" :title="t('company.sameFiler')" @click.prevent="openBrowse({ cat: 'filer', afs: company.filer.afs! })">{{ pick(company.filer.filerStatus, 'zh', 'label') }}</a><span v-if="company.filer.wksi"> · WKSI</span>
             <span v-if="company.filer.publicFloat != null"> · {{ t('company.publicFloat') }} {{ fmtFloat(company.filer.publicFloat) }}<span v-if="company.filer.publicFloatAdjusted" :title="t('company.floatAdjusted')">*</span>（{{ company.filer.publicFloatDate }}）</span>
           </div>
         </div>
@@ -523,7 +553,7 @@ onMounted(() => {
           <p v-if="refreshMessage" class="small refresh-msg">{{ refreshMessage }}</p>
           <FilingPicker :filings="company.filings" :selected="filing?.accession" @select="loadFiling" @select-quarters="loadQuarters" />
           <p class="muted small hide-p">{{ t('filings.legend') }}</p>
-          <p class="muted small">{{ t(isStatic ? 'filings.builtAt' : 'filings.listTime', { time: new Date(company.filingsUpdatedAt).toLocaleString(dateLocale) }) }}<span v-if="company.filingsStale">{{ t('filings.stale') }}</span></p>
+          <p class="muted small">{{ t(isStatic ? 'filings.builtAt' : 'filings.listTime', { time: new Date(company.filingsUpdatedAt!).toLocaleString(dateLocale) }) }}<span v-if="company.filingsStale">{{ t('filings.stale') }}</span></p>
         </div>
       </aside>
 
@@ -545,15 +575,15 @@ onMounted(() => {
               {{ data.filing.fiscalPeriod === 'FY' ? `FY${data.filing.fiscalYear}` : `FY${data.filing.fiscalYear} ${data.filing.fiscalPeriod}` }} · {{ t('meta.periodEnd') }} {{ data.filing.periodEnd }} · {{ t('meta.filingDate') }} {{ data.filing.filingDate }}
             </div>
             <div class="links">
-              <a v-if="!data.derived" :href="data.filing.viewerUrl" target="_blank" rel="noopener">{{ t('meta.secLink') }}</a>
-              <a v-if="!isStatic" :href="jsonUrl" target="_blank" rel="noopener">JSON</a>
+              <a v-if="!data.derived" :href="data.filing.viewerUrl ?? undefined" target="_blank" rel="noopener">{{ t('meta.secLink') }}</a>
+              <a v-if="!isStatic" :href="jsonUrl ?? undefined" target="_blank" rel="noopener">JSON</a>
               <span class="muted small">{{ data.stats.facts }} facts<template v-if="data.stats.contexts"> · {{ data.stats.contexts }} contexts</template></span>
             </div>
           </div>
           <Note v-if="data.view === 'current' && !isIndicators && !isValuation && !isChart">
             {{ t('note.current', { is: data.filing.form?.startsWith('10-Q') ? t('note.currentQ') : t('note.currentFY') }) }}
             <template v-if="data.previous">{{ t('note.previous', { year: data.previous.fiscalYear, period: data.previous.fiscalPeriod }) }}</template>
-            <template v-for="n in data.notes.filter((x) => x.code === 'ytdOnly')" :key="n.title"> {{ t('note.ytdOnly', n) }}</template>
+            <template v-for="n in data.notes!.filter((x) => x.code === 'ytdOnly')" :key="n.title"> {{ t('note.ytdOnly', n) }}</template>
             {{ t('note.compare') }}
           </Note>
           <Note v-if="data.derived && !isIndicators && !isValuation && !isChart">{{ t('note.derived') }}</Note>
@@ -561,13 +591,13 @@ onMounted(() => {
 
           <div class="toolbar">
             <div class="tabs">
-              <button v-for="key in TABS" :key="key" :class="{ active: tab === key }" :disabled="!data.statements[key]" @click="tab = key">
+              <button v-for="key in TABS" :key="key" :class="{ active: tab === key }" :disabled="!data.statements[key as 'balance_sheet']" @click="tab = key">
                 {{ t(`stmt.${key}`) }}
               </button>
               <button :class="{ active: tab === 'indicators' }" @click="tab = 'indicators'">{{ t('tab.indicators') }}</button>
               <button :class="{ active: tab === 'valuation' }" @click="tab = 'valuation'">{{ t('tab.valuation') }}</button>
               <button :class="{ active: tab === 'chart' }" :title="t('tab.chartTitle')" @click="tab = 'chart'">{{ t('tab.chart') }}</button>
-              <select v-if="otherStatements.length" :value="tab.startsWith('role:') ? tab : ''" @change="tab = $event.target.value">
+              <select v-if="otherStatements.length" :value="tab.startsWith('role:') ? tab : ''" @change="tab = ($event.target as HTMLSelectElement).value">
                 <option value="" disabled>{{ t('tab.other') }}</option>
                 <option v-for="s in otherStatements" :key="s.role" :value="`role:${s.role}`">{{ s.title }}</option>
               </select>
@@ -620,7 +650,7 @@ onMounted(() => {
                   <option :value="40">40</option>
                 </select>
               </label>
-              <a v-if="valuationParams && !isStatic" :href="api.valuationUrl(String(company.cik), valuationParams)" target="_blank" rel="noopener" class="small">JSON</a>
+              <a v-if="valuationParams && !isStatic" :href="api.valuationUrl(String(company.cik), valuationParams) ?? undefined" target="_blank" rel="noopener" class="small">JSON</a>
             </div>
             <div v-else-if="isChart" class="options">
               <label>
@@ -675,10 +705,10 @@ onMounted(() => {
             <template v-else-if="indicators">
               <Note>
                 <template v-if="indicators.quarterly && indicators.mode === 'year'">{{ t('ind.noteYear', { end: indicatorsEnd, example: indicators.columns.at(-1)?.sublabel || indicators.columns.at(-1)?.label, n: indicators.columns.length }) }}</template>
-                <template v-else-if="indicators.quarterly && indicators.mode === 'same'">{{ t('ind.noteSame', { period: indicatorsParams.period, from: indicators.columns[0]?.label, to: indicators.columns.at(-1)?.label, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}</template>
+                <template v-else-if="indicators.quarterly && indicators.mode === 'same'">{{ t('ind.noteSame', { period: indicatorsParams!.period, from: indicators.columns[0]?.label, to: indicators.columns.at(-1)?.label, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}</template>
                 <template v-else-if="indicators.quarterly">{{ t('ind.noteQuarter', { end: indicatorsEnd, n: indicators.columns.length, basis: indBasis === 'ttm' ? t('ind.ttm') : t('ind.x4') }) }}</template>
                 <template v-else>{{ t('ind.noteAnnual', { n: indicators.columns.length }) }}</template>
-                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams)" target="_blank" rel="noopener">JSON</a>
+                <a v-if="!isStatic" :href="api.indicatorsUrl(String(company.cik), indicatorsParams!) ?? undefined" target="_blank" rel="noopener">JSON</a>
               </Note>
               <IndicatorsTable :data="indicators" :annualize-amounts="indAnnualizeAmounts" />
             </template>
@@ -691,7 +721,7 @@ onMounted(() => {
                 {{ tvSymbol.symbol }}<template v-if="tvSymbol.exchange"> · {{ tvSymbol.exchange }}</template> · {{ t('chart.embedNote') }}
                 <span v-if="tvSymbol.known === false">{{ t('chart.unknown') }}</span>
               </Note>
-              <TvEmbedChart :expression="tvSymbol.symbol" :range="chartRange" :colors="chartColors" :height="isPhone ? 400 : 620" volume symbol-change />
+              <TvEmbedChart :expression="tvSymbol.symbol!" :range="chartRange" :colors="chartColors" :height="isPhone ? 400 : 620" volume symbol-change />
             </template>
           </template>
           <template v-else-if="isValuation">

@@ -7,18 +7,18 @@
 //   npm run ingest:dera -- --cik 320193      # one company, for checking
 //   npm run ingest:dera -- --dry-run         # count what would be saved
 //   npm run ingest:dera -- --rebuild         # redo the ones already rebuilt
-//                                            # (after a change to dera.js);
+//                                            # (after a change to dera.ts);
 //                                            # a real parse is never touched
 //   npm run ingest:dera -- --compare         # rebuild filings the store
 //                                            # already parsed and diff the
 //                                            # scores, to see what is lost
 //
 // Before 2019 a filer tagged its numbers in a separate instance document
-// rather than in the HTML, and ixbrl.js only reads Inline XBRL - so EDGAR's
+// rather than in the HTML, and ixbrl.ts only reads Inline XBRL - so EDGAR's
 // isInlineXBRL flag is the line this draws: a filing EDGAR marks inline is
 // left to the crawler, which parses the document itself and gets the
 // headings, the indent hierarchy and the cover page with it; everything
-// else is rebuilt from the datasets (dera.js says exactly what that costs).
+// else is rebuilt from the datasets (dera.ts says exactly what that costs).
 // --include-inline fills those too, which is much faster than crawling them
 // but saves the thinner record, and never replaces a filing already saved.
 //
@@ -45,6 +45,48 @@ import { SCRAPE_VERSION, isStandIn } from '../lib/scrape.ts';
 import { DERA_FORMS, dateSnapper, deraResult } from '../lib/dera.ts';
 import { scoreFiling } from '../lib/scoreModel.ts';
 import { reclassify } from '../lib/statementTypes.ts';
+import type { DateSnapper, DeraNum, DeraPre, DeraSub, DeraTag, TagLookup } from '../lib/dera.ts';
+import type { EdgarFiling, IsoDate } from '../lib/types.ts';
+
+/** One row of sub.txt, with the accession this keys everything by. */
+interface SubmissionRow extends DeraSub {
+  adsh: string;
+  cik: number;
+  form: string;
+  period: string;
+  filed: string;
+}
+
+/** Column name -> its index in a tab-separated row. */
+type Columns = Record<string, number>;
+
+/** What EDGAR knows about the filings of the companies a quarter touches. */
+interface EdgarIndex {
+  byAccession: Map<string, EdgarFiling>;
+  snapByCik: Map<number, DateSnapper>;
+}
+
+/** How a quarter's pass went. */
+interface QuarterStats {
+  candidates: number;
+  haveIt: number;
+  inline: number;
+  notOnEdgar: number;
+  noStatements: number;
+  saved: number;
+  noCompany: number;
+}
+
+/** One filing scored both ways, to see what the rebuild loses. */
+interface ScoreDiff {
+  accession: string;
+  cik: number;
+  built: boolean;
+  parsed?: number | null;
+  dera?: number | null;
+  parsedCoverage?: number | null;
+  deraCoverage?: number | null;
+}
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DATASETS = 'https://www.sec.gov/files/dera/data/financial-statement-data-sets/';
@@ -56,22 +98,22 @@ const ZIP_RETRIES = 4;
 const ZIP_BACKOFF_MS = 120_000;
 
 const args = process.argv.slice(2);
-const opt = (name, dflt = null) => {
+const opt = (name: string, dflt: string | null = null) => {
   const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : dflt;
+  return i >= 0 ? args[i + 1]! : dflt;
 };
 const DRY = args.includes('--dry-run');
 const COMPARE = args.includes('--compare');
 const INCLUDE_INLINE = args.includes('--include-inline');
-const REBUILD = args.includes('--rebuild'); // redo the ones already rebuilt, after a change to dera.js
+const REBUILD = args.includes('--rebuild'); // redo the ones already rebuilt, after a change to dera.ts
 const KEEP = !args.includes('--discard-zips');
 const ONLY_CIK = opt('--cik') ? Number(opt('--cik')) : null;
 const LIMIT = Number(opt('--limit')) || 0;
 // Filings held in memory per pass over the quarter's files; more passes, less memory.
 const BATCH = Math.max(1, Number(opt('--batch')) || 2500);
 
-const log = (m) => console.log(`ingest-dera: ${m}`);
-const n = (x) => Number(x).toLocaleString('en-US');
+const log = (m: string) => console.log(`ingest-dera: ${m}`);
+const n = (x: number) => Number(x).toLocaleString('en-US');
 const t0 = Date.now();
 const secs = () => ((Date.now() - t0) / 1000).toFixed(0);
 
@@ -79,7 +121,7 @@ const secs = () => ((Date.now() - t0) / 1000).toFixed(0);
 
 // SEC publishes a quarter a few days after it ends, so the newest one that
 // can exist is the one before the current one.
-function lastQuarter(now = new Date()) {
+function lastQuarter(now = new Date()): string {
   let year = now.getUTCFullYear();
   let q = Math.floor(now.getUTCMonth() / 3);
   if (q === 0) {
@@ -88,16 +130,16 @@ function lastQuarter(now = new Date()) {
   }
   return `${year}q${q}`;
 }
-const parseQuarter = (s) => {
+const parseQuarter = (s: string | null | undefined) => {
   const m = /^(\d{4})q([1-4])$/.exec(String(s || '').toLowerCase());
   if (!m) throw new Error(`not a quarter: ${s} (want e.g. 2012q1)`);
   return { year: Number(m[1]), q: Number(m[2]) };
 };
 // newest first: what the app is most likely to want is filled in first
-function quarters(from, to) {
+function quarters(from: string, to: string): string[] {
   const a = parseQuarter(from);
   const b = parseQuarter(to);
-  const out = [];
+  const out: string[] = [];
   for (let { year, q } = b; year > a.year || (year === a.year && q >= a.q);) {
     out.push(`${year}q${q}`);
     if (--q === 0) {
@@ -111,7 +153,7 @@ function quarters(from, to) {
 // ------------------------------------------------------------------ the tsv
 
 // Every file in the set is tab separated with a header row.
-const header = (line) =>
+const header = (line: string): Columns =>
   Object.fromEntries(
     line
       .replace(/\r$/, '')
@@ -128,9 +170,9 @@ const header = (line) =>
 // a filing's rows are scattered the length of the file. A pass therefore
 // holds the lines of a batch of accessions and drops the rest; a quarter
 // with more to rebuild than one batch takes another pass.
-async function collectInto(zip, name, into) {
+async function collectInto(zip: string, name: string, into: Map<string, string[]>): Promise<Columns> {
   const rl = readline.createInterface({ input: await zipEntryStream(zip, name), crlfDelay: Infinity });
-  let col = null;
+  let col: Columns | null = null;
   for await (const line of rl) {
     if (!col) {
       col = header(line);
@@ -140,48 +182,55 @@ async function collectInto(zip, name, into) {
     if (t < 0) continue;
     into.get(line.slice(0, t))?.push(line);
   }
-  return col;
+  return col!;
 }
 
-const split = (line) => line.replace(/\r$/, '').split('\t');
-const preRow = (line, c) => {
+const split = (line: string) => line.replace(/\r$/, '').split('\t');
+const preRow = (line: string, c: Columns): DeraPre => {
   const f = split(line);
   return {
-    report: Number(f[c.report]),
-    line: Number(f[c.line]),
-    stmt: f[c.stmt],
-    inpth: Number(f[c.inpth]),
-    tag: f[c.tag],
-    version: f[c.version],
-    plabel: f[c.plabel],
-    negating: Number(f[c.negating]),
+    report: Number(f[c.report!]),
+    line: Number(f[c.line!]),
+    stmt: f[c.stmt!]!,
+    inpth: Number(f[c.inpth!]),
+    tag: f[c.tag!]!,
+    version: f[c.version!]!,
+    plabel: f[c.plabel!]!,
+    negating: Number(f[c.negating!]),
   };
 };
-const numRow = (line, c) => {
+const numRow = (line: string, c: Columns): DeraNum => {
   const f = split(line);
   return {
-    tag: f[c.tag],
-    version: f[c.version],
-    ddate: f[c.ddate],
-    qtrs: Number(f[c.qtrs]),
-    uom: f[c.uom],
-    segments: f[c.segments] || '',
-    coreg: f[c.coreg] || '',
-    value: f[c.value] ?? '',
+    tag: f[c.tag!]!,
+    version: f[c.version!]!,
+    ddate: f[c.ddate!]!,
+    qtrs: Number(f[c.qtrs!]),
+    uom: f[c.uom!]!,
+    segments: f[c.segments!] || '',
+    coreg: f[c.coreg!] || '',
+    value: f[c.value!] ?? '',
   };
 };
 
+/** One filing's rows, as the batch pass hands them over. */
+interface FilingRows {
+  adsh: string;
+  pre: DeraPre[];
+  num: DeraNum[];
+}
+
 // One batch's filings, each with its pre.txt and num.txt rows.
-async function* filingRows(zip, accessions) {
-  const pre = new Map(accessions.map((a) => [a, []]));
-  const num = new Map(accessions.map((a) => [a, []]));
+async function* filingRows(zip: string, accessions: readonly string[]): AsyncGenerator<FilingRows> {
+  const pre = new Map<string, string[]>(accessions.map((a) => [a, []]));
+  const num = new Map<string, string[]>(accessions.map((a) => [a, []]));
   const preCol = await collectInto(zip, 'pre.txt', pre);
   const numCol = await collectInto(zip, 'num.txt', num);
   for (const adsh of accessions) {
     yield {
       adsh,
-      pre: pre.get(adsh).map((l) => preRow(l, preCol)),
-      num: num.get(adsh).map((l) => numRow(l, numCol)),
+      pre: pre.get(adsh)!.map((l) => preRow(l, preCol)),
+      num: num.get(adsh)!.map((l) => numRow(l, numCol)),
     };
     // the lines of a filing already built are of no further use
     pre.set(adsh, []);
@@ -191,10 +240,10 @@ async function* filingRows(zip, accessions) {
 
 // -------------------------------------------------------------- the dataset
 
-const zipPath = (quarter) => path.join(ZIPS, `${quarter}.zip`);
+const zipPath = (quarter: string) => path.join(ZIPS, `${quarter}.zip`);
 
 // The whole zip, downloaded only once a quarter is known to hold work.
-async function ensureZip(client, quarter) {
+async function ensureZip(client: SecClient, quarter: string): Promise<string | null> {
   const file = zipPath(quarter);
   if (fs.existsSync(file) && fs.statSync(file).size > 1024) return file;
   fs.mkdirSync(ZIPS, { recursive: true });
@@ -207,17 +256,17 @@ async function ensureZip(client, quarter) {
   for (let attempt = 0; ; attempt++) {
     try {
       const res = await client.fetch(url, { retries: 3 });
-      await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
+      await pipeline(Readable.fromWeb(res.body as never), fs.createWriteStream(tmp));
       fs.renameSync(tmp, file);
       log(`${quarter}: downloaded ${(fs.statSync(file).size / 1048576).toFixed(1)} MB`);
       return file;
     } catch (err) {
       fs.rmSync(tmp, { force: true });
-      if (err.status === 404) return null; // not published (a quarter still open)
+      if ((err as { status?: number }).status === 404) return null; // not published (a quarter still open)
       if (attempt >= ZIP_RETRIES) throw err;
       const wait = ZIP_BACKOFF_MS * (attempt + 1);
-      log(`${quarter}: ${err.message} - waiting ${(wait / 60000).toFixed(0)} min, then trying again`);
-      await new Promise((r) => setTimeout(r, wait));
+      log(`${quarter}: ${(err as Error).message} - waiting ${(wait / 60000).toFixed(0)} min, then trying again`);
+      await new Promise<void>((r) => setTimeout(r, wait));
     }
   }
 }
@@ -227,50 +276,50 @@ async function ensureZip(client, quarter) {
 // zip, and it alone says whether a quarter holds anything worth rebuilding.
 // A run that downloaded every zip to find that out pulled gigabytes for
 // nothing and sec.gov started answering 429 (readZipEntries is what
-// universe.js pulls the filer table with).
-function parseSubmissions(text) {
+// universe.ts pulls the filer table with).
+function parseSubmissions(text: string): SubmissionRow[] {
   const lines = text.split('\n');
-  const col = header(lines[0]);
-  const out = [];
+  const col = header(lines[0]!);
+  const out: SubmissionRow[] = [];
   for (let i = 1; i < lines.length; i++) {
-    const f = lines[i].replace(/\r$/, '').split('\t');
+    const f = lines[i]!.replace(/\r$/, '').split('\t');
     if (f.length < 10) continue;
     out.push({
-      adsh: f[col.adsh],
-      cik: Number(f[col.cik]),
-      name: f[col.name],
-      form: f[col.form],
-      period: f[col.period],
-      fy: f[col.fy] || null,
-      fp: f[col.fp] || null,
-      filed: f[col.filed],
-      instance: f[col.instance],
+      adsh: f[col.adsh!]!,
+      cik: Number(f[col.cik!]),
+      name: f[col.name!]!,
+      form: f[col.form!]!,
+      period: f[col.period!]!,
+      fy: f[col.fy!] || null,
+      fp: f[col.fp!] || null,
+      filed: f[col.filed!]!,
+      instance: f[col.instance!]!,
     });
   }
   return out;
 }
 
-async function readSubmissions(client, quarter) {
+async function readSubmissions(client: SecClient, quarter: string): Promise<SubmissionRow[] | null> {
   const file = zipPath(quarter);
   if (fs.existsSync(file)) {
-    const chunks = [];
-    for await (const chunk of await zipEntryStream(file, 'sub.txt')) chunks.push(chunk);
+    const chunks: Buffer[] = [];
+    for await (const chunk of await zipEntryStream(file, 'sub.txt')) chunks.push(chunk as Buffer);
     return parseSubmissions(Buffer.concat(chunks).toString('utf8'));
   }
   try {
     return parseSubmissions((await readZipEntry(client, `${DATASETS}${quarter}.zip`, 'sub.txt')).toString('utf8'));
   } catch (err) {
-    if (err.status === 404) return null; // not published (a quarter still open)
+    if ((err as { status?: number }).status === 404) return null; // not published (a quarter still open)
     throw err;
   }
 }
 
 // tag.txt: the datatype (which says what a number's unit means), the standard
 // label and SEC's definition of every tag the quarter uses.
-async function readTags(zip) {
+async function readTags(zip: string): Promise<Map<string, DeraTag>> {
   const rl = readline.createInterface({ input: await zipEntryStream(zip, 'tag.txt'), crlfDelay: Infinity });
-  let col = null;
-  const map = new Map();
+  let col: Columns | null = null;
+  const map = new Map<string, DeraTag>();
   for await (const line of rl) {
     if (!col) {
       col = header(line);
@@ -278,10 +327,10 @@ async function readTags(zip) {
     }
     const f = line.replace(/\r$/, '').split('\t');
     if (f.length < 5) continue;
-    map.set(`${f[col.tag]}/${f[col.version]}`, {
-      datatype: f[col.datatype] || null,
-      tlabel: f[col.tlabel] || null,
-      doc: f[col.doc] || null,
+    map.set(`${f[col.tag!]}/${f[col.version!]}`, {
+      datatype: f[col.datatype!] || undefined,
+      tlabel: f[col.tlabel!] || undefined,
+      doc: f[col.doc!] || undefined,
     });
   }
   return map;
@@ -293,27 +342,27 @@ async function readTags(zip) {
 // as accession -> the filing, plus a date snapper per company. A record
 // already on disk is reused (they are in git and the crawler keeps them
 // fresh); a company EDGAR will not answer for is counted and skipped.
-async function edgarIndex(client, ciks, stats) {
-  const byAccession = new Map();
-  const snapByCik = new Map();
+async function edgarIndex(client: SecClient, ciks: readonly number[], stats: QuarterStats): Promise<EdgarIndex> {
+  const byAccession = new Map<string, EdgarFiling>();
+  const snapByCik = new Map<number, DateSnapper>();
   let next = 0;
   let done = 0;
   // A company with a long history takes several requests one after another,
   // and a lane spends nearly all of that waiting on the network - so a few
   // lanes fill the client's ten requests a second instead of one lane leaving
-  // most of it unused (crawler.js runs its companies the same way, for the
+  // most of it unused (crawler.ts runs its companies the same way, for the
   // same reason). The spacing between requests is the client's and does not
   // change.
   const lane = async () => {
     for (let i = next++; i < ciks.length; i = next++) {
-      const cik = ciks[i];
+      const cik = ciks[i]!;
       try {
         const company = await getCompany(client, cik, { inlineOnly: false, maxAge: COMPANY_TTL });
         for (const f of company.filings) byAccession.set(f.accession, f);
         snapByCik.set(cik, dateSnapper(company.filings.map((f) => f.reportDate)));
       } catch (err) {
         stats.noCompany++;
-        if (err.status !== 404) console.warn(`ingest-dera: CIK ${cik}: ${err.message}`);
+        if ((err as { status?: number }).status !== 404) console.warn(`ingest-dera: CIK ${cik}: ${(err as Error).message}`);
       }
       if (++done % 500 === 0) log(`  EDGAR filing lists ${n(done)} / ${n(ciks.length)} companies (${secs()} s)`);
     }
@@ -327,7 +376,7 @@ async function edgarIndex(client, ciks, stats) {
 // What the rebuild loses, measured rather than guessed: rebuild a filing the
 // crawler already parsed and put the two scores side by side.
 
-async function compareOne(sub, rows, edgar, tagOf, dataset) {
+async function compareOne(sub: SubmissionRow, rows: FilingRows, edgar: EdgarIndex, tagOf: TagLookup, dataset: string): Promise<ScoreDiff | null> {
   const filing = edgar.byAccession.get(sub.adsh);
   const saved = store.getFiling(sub.adsh);
   if (!filing || !saved) return null;
@@ -358,7 +407,7 @@ async function compareOne(sub, rows, edgar, tagOf, dataset) {
 
 // ---------------------------------------------------------------- one quarter
 
-async function ingestQuarter(client, quarter, tickerCiks, totals) {
+async function ingestQuarter(client: SecClient, quarter: string, tickerCiks: Set<number>, totals: Record<string, number>): Promise<void> {
   const all = await readSubmissions(client, quarter);
   if (!all) {
     log(`${quarter}: not published yet`);
@@ -373,7 +422,7 @@ async function ingestQuarter(client, quarter, tickerCiks, totals) {
   // What EDGAR says is only needed for the submissions still in play, and
   // the store answers "already have it" without a single request - so that
   // question comes first.
-  const stats = {
+  const stats: QuarterStats = {
     candidates: subs.length,
     haveIt: 0,
     inline: 0,
@@ -396,7 +445,7 @@ async function ingestQuarter(client, quarter, tickerCiks, totals) {
   log(`${quarter}: ${n(pending.length)} of ${n(subs.length)} submissions still open, from ${n(ciks.length)} companies; reading EDGAR's filing lists …`);
   const edgar = await edgarIndex(client, ciks, stats);
 
-  const todo = new Map();
+  const todo = new Map<string, SubmissionRow>();
   for (const s of pending) {
     const f = edgar.byAccession.get(s.adsh);
     if (!f) {
@@ -423,9 +472,9 @@ async function ingestQuarter(client, quarter, tickerCiks, totals) {
     return;
   }
   const tags = await readTags(zip);
-  const tagOf = (tag, version) => tags.get(`${tag}/${version}`) || null;
+  const tagOf: TagLookup = (tag, version) => tags.get(`${tag}/${version}`) || null;
 
-  const diffs = [];
+  const diffs: ScoreDiff[] = [];
   const accessions = [...todo.keys()];
   for (let i = 0; i < accessions.length; i += BATCH) {
     const batch = accessions.slice(i, i + BATCH);
@@ -438,7 +487,7 @@ async function ingestQuarter(client, quarter, tickerCiks, totals) {
         if (d) diffs.push(d);
         continue;
       }
-      const filing = edgar.byAccession.get(rows.adsh);
+      const filing = edgar.byAccession.get(rows.adsh)!;
       const built = deraResult({
         filing,
         sub,
@@ -474,12 +523,12 @@ async function ingestQuarter(client, quarter, tickerCiks, totals) {
   if (!KEEP) fs.rmSync(zip, { force: true });
 }
 
-function reportComparison(quarter, diffs) {
+function reportComparison(quarter: string, diffs: readonly ScoreDiff[]): void {
   const built = diffs.filter((d) => d.built);
   const both = built.filter((d) => d.parsed != null && d.dera != null);
-  const gaps = both.map((d) => d.dera - d.parsed).sort((a, b) => a - b);
-  const pct = (p) => (gaps.length ? gaps[Math.min(gaps.length - 1, Math.floor((gaps.length - 1) * p))] : null);
-  const within = (k) => (gaps.length ? ((gaps.filter((g) => Math.abs(g) <= k).length / gaps.length) * 100).toFixed(1) : '—');
+  const gaps = both.map((d) => d.dera! - d.parsed!).sort((a, b) => a - b);
+  const pct = (p: number) => (gaps.length ? gaps[Math.min(gaps.length - 1, Math.floor((gaps.length - 1) * p))] : null);
+  const within = (k: number) => (gaps.length ? ((gaps.filter((g) => Math.abs(g) <= k).length / gaps.length) * 100).toFixed(1) : '—');
   log(`${quarter}: compared ${n(diffs.length)} filings the crawler had already parsed`);
   log(`  rebuilt from the dataset: ${n(built.length)} · no statements in it: ${n(diffs.length - built.length)}`);
   log(
@@ -489,7 +538,7 @@ function reportComparison(quarter, diffs) {
     log(`  score difference (rebuild − parse): median ${pct(0.5)}, p10 ${pct(0.1)}, p90 ${pct(0.9)}, worst ${gaps[0]} / ${gaps.at(-1)}`);
     log(`  identical ${within(0)}% · within 2 points ${within(2)}% · within 5 ${within(5)}% · within 10 ${within(10)}%`);
   }
-  const worst = [...both].sort((a, b) => Math.abs(b.dera - b.parsed) - Math.abs(a.dera - a.parsed)).slice(0, 8);
+  const worst = [...both].sort((a, b) => Math.abs(b.dera! - b.parsed!) - Math.abs(a.dera! - a.parsed!)).slice(0, 8);
   for (const d of worst) log(`    ${d.accession} CIK ${d.cik}: parse ${d.parsed} (coverage ${d.parsedCoverage}) → rebuild ${d.dera} (coverage ${d.deraCoverage})`);
 }
 
@@ -509,12 +558,12 @@ const from = opt('--quarter') || opt('--from') || FIRST;
 const list = quarters(from, to);
 log(`${list.length} quarters to walk, ${list[0]} back to ${list.at(-1)}${INCLUDE_INLINE ? ' (--include-inline: Inline XBRL filings too)' : ''}`);
 
-const totals = {};
+const totals: Record<string, number> = {};
 for (const quarter of list) {
   try {
     await ingestQuarter(client, quarter, tickerCiks, totals);
   } catch (err) {
-    console.warn(`ingest-dera: ${quarter} failed: ${err.message}`);
+    console.warn(`ingest-dera: ${quarter} failed: ${(err as Error).message}`);
   }
   if (LIMIT && (totals.saved || 0) >= LIMIT) break;
 }

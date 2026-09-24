@@ -1,7 +1,9 @@
 // Statement classification with no I/O (shared with the browser build):
 // which of a filing's statements are the four primary ones, by title.
 
-const STATEMENT_TYPES = [
+import type { PrimaryStatements, PrimaryType, ScrapeResult, Statement, StatementType } from './types.ts';
+
+const STATEMENT_TYPES: [StatementType, RegExp][] = [
   ['cash_flow', /CASH\s*FLOW/i],
   // banks say "Statements of Condition", funds "Statements of Assets and Liabilities"
   ['balance_sheet', /BALANCE\s*SHEET|FINANCIAL\s*(POSITION|CONDITION)|STATEMENTS?\s+OF\s+CONDITION|ASSETS\s+AND\s+LIABILITIES/i],
@@ -9,18 +11,19 @@ const STATEMENT_TYPES = [
   ['income_statement', /INCOME|OPERATIONS|EARNINGS|PROFIT|LOSS/i],
   ['equity', /EQUITY|DEFICIT|SHAREHOLDERS|STOCKHOLDERS|CAPITAL/i],
 ];
-export const PRIMARY = ['balance_sheet', 'income_statement', 'cash_flow', 'equity'];
+export const PRIMARY: PrimaryType[] = ['balance_sheet', 'income_statement', 'cash_flow', 'equity'];
 
-export function classify(title) {
+export function classify(title: string): StatementType {
   for (const [kind, re] of STATEMENT_TYPES) if (re.test(title)) return kind;
   return 'other';
 }
 
+const isPrimaryType = (t: StatementType): t is PrimaryType => (PRIMARY as StatementType[]).includes(t);
 
 // The four primary statements out of every statement in the filing.
-export function pickPrimary(all) {
-  const primary = Object.fromEntries(PRIMARY.map((k) => [k, null]));
-  for (const st of all) if (st.type in primary && !primary[st.type] && !st.parenthetical) primary[st.type] = st;
+export function pickPrimary(all: Statement[]): PrimaryStatements {
+  const primary = Object.fromEntries(PRIMARY.map((k) => [k, null])) as PrimaryStatements;
+  for (const st of all) if (isPrimaryType(st.type) && !primary[st.type] && !st.parenthetical) primary[st.type] = st;
   // IFRS filers often present a single combined statement of profit or loss
   // and other comprehensive income.
   if (!primary.income_statement) {
@@ -32,7 +35,7 @@ export function pickPrimary(all) {
 // Saved results were classified by the rules of their day: re-run the title
 // classifier so a newly recognised title (e.g. a bank's "Statements of
 // Condition") gets its slot without re-downloading the filing.
-export function reclassify(result) {
+export function reclassify(result: ScrapeResult): ScrapeResult {
   let changed = false;
   for (const st of result.allStatements || []) {
     const t = classify(st.title);

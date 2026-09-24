@@ -34,13 +34,13 @@ import { fileURLToPath } from 'node:url';
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
-const opt = (name, dflt) => {
+const opt = (name: string, dflt: string | number | null) => {
   const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : dflt;
+  return i >= 0 ? args[i + 1]! : dflt;
 };
 const DRY = args.includes('--dry-run');
-const REMOTE = opt('--remote', 'origin');
-const REF = opt('--ref', 'refs/data/main');
+const REMOTE = String(opt('--remote', 'origin'));
+const REF = String(opt('--ref', 'refs/data/main'));
 
 const { openStore, store } = await import('../lib/store.ts');
 const { PUBLISH_YEARS, inWindow, publishFrom } = await import('../lib/publish.ts');
@@ -48,7 +48,7 @@ const SQUASH = args.includes('--squash');
 const YEARS = Number(opt('--years', PUBLISH_YEARS)) || null; // null = every filing travels
 const FROM = publishFrom(YEARS);
 
-const git = (cmdArgs, { input, index } = {}) =>
+const git = (cmdArgs: string[], { input, index }: { input?: string; index?: string } = {}) =>
   execFileSync('git', cmdArgs, {
     cwd: REPO,
     input,
@@ -57,7 +57,7 @@ const git = (cmdArgs, { input, index } = {}) =>
   })
     .toString()
     .trim();
-const n = (x) => x.toLocaleString('en-US');
+const n = (x: number) => x.toLocaleString('en-US');
 
 openStore();
 
@@ -66,7 +66,7 @@ console.log(`push-data: fetching ${REF} from ${REMOTE} (tip only) …`);
 try {
   git(['fetch', '--depth=1', '--no-tags', REMOTE, REF]);
 } catch (err) {
-  console.error(`push-data: cannot fetch ${REF} from ${REMOTE}: ${String(err.stderr || err.message).trim()}`);
+  console.error(`push-data: cannot fetch ${REF} from ${REMOTE}: ${String((err as { stderr?: string }).stderr || (err as Error).message).trim()}`);
   process.exit(1);
 }
 const parent = git(['rev-parse', 'FETCH_HEAD']);
@@ -75,7 +75,7 @@ console.log(`push-data: ${REF} is at ${parent.slice(0, 9)} (${git(['log', '-1', 
 // ---- 2. a temporary index that starts as that commit ----
 const index = path.join(REPO, '.git', `data-index-${process.pid}`);
 process.on('exit', () => fs.rmSync(index, { force: true }));
-const withIndex = (cmdArgs, input) => git(cmdArgs, { input, index });
+const withIndex = (cmdArgs: string[], input?: string) => git(cmdArgs, { input, index });
 withIndex(['read-tree', parent]);
 
 // ---- 3. stage the store and the bars ----
@@ -86,7 +86,7 @@ withIndex(['add', '-f', '-A', '--', ...whole]);
 
 // filings: only the window, and only those listed - a filing outside it is
 // never hashed, let alone sent
-const keep = [];
+const keep: string[] = [];
 let older = 0;
 for (const f of store.allFilings()) {
   if (inWindow(f, FROM)) keep.push(`data/store/${f.file}`);
@@ -127,8 +127,8 @@ if (tree === git(['rev-parse', `${parent}^{tree}`])) {
   process.exit(0);
 }
 const status = git(['diff-tree', '-r', '--name-status', parent, tree]).split('\n').filter(Boolean);
-const count = { A: 0, M: 0, D: 0 };
-for (const line of status) count[line[0]] = (count[line[0]] || 0) + 1;
+const count: Record<string, number> = { A: 0, M: 0, D: 0 };
+for (const line of status) count[line[0]!] = (count[line[0]!] || 0) + 1;
 const message = SQUASH
   ? `data: 全部重整成一個 commit（財報 ${n(keep.length)} 份${FROM ? `，${FROM} 起` : ''}）`
   : `data: 本機爬蟲補的財報（新增 ${n(count.A)}、更新 ${n(count.M)}、移除 ${n(count.D)}${FROM ? `；財報保留 ${FROM} 起` : ''}）`;
@@ -158,7 +158,7 @@ if (SQUASH) {
 try {
   git(['push', ...(SQUASH ? ['--force'] : []), REMOTE, `${commit}:${REF}`]);
 } catch (err) {
-  const text = String(err.stderr || err.message).trim();
+  const text = String((err as { stderr?: string }).stderr || (err as Error).message).trim();
   console.error(`push-data: push failed: ${text}`);
   if (/non-fast-forward|fetch first|rejected/i.test(text)) console.error(`push-data: ${REF} moved while this ran (the Pages workflow pushes to it too) - just run this again.`);
   process.exit(1);

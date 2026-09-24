@@ -10,14 +10,37 @@ import { sicInfo } from '../../../server/lib/sic.ts';
 import { isNarrow, isPhone } from '../viewport';
 import Note from './Note.vue';
 import Loading from './Loading.vue';
+import type { PropType } from 'vue';
+import type { BrowseSicResponse, ScreenFieldsResponse, ScreenResponse } from '../apiTypes.ts';
+import type { ScreenField, ScreenQueryParams, ScreenRow } from '../../../server/lib/types.ts';
+import type { BasketSource } from '../baskets';
+
+/** One filter row: a field, what it is compared against, and the bounds. */
+interface Condition {
+  key: string;
+  /** the latest filing, the change since the one before, or since a year ago */
+  mode: 'now' | 'chg' | 'yoy';
+  min: number | string;
+  max: number | string;
+}
+
+/** One result column: a field, read now or as a change. */
+interface Column {
+  field: ScreenField;
+  mode: 'now' | 'chg' | 'yoy';
+  id: string;
+}
+
+/** The screen as the URL carries it. */
+type UrlParams = Record<string, string | undefined>;
 
 // params: the screen as it appears in the URL (see App.vue); `navigate`
 // reports every change so the URL and the browser history follow along
-const props = defineProps({ params: { type: Object, default: () => ({}) } });
+const props = defineProps({ params: { type: Object as PropType<UrlParams>, default: () => ({}) } });
 const emit = defineEmits(['open', 'basket', 'navigate']);
 
-const meta = ref(null); // { fields, divisions, filer, market }
-const sic = ref(null); // /api/browse/sic
+const meta = ref<ScreenFieldsResponse | null>(null); // { fields, divisions, filer, market }
+const sic = ref<BrowseSicResponse | null>(null); // /api/browse/sic
 const text = ref('');
 const division = ref('');
 const sicCode = ref('');
@@ -27,29 +50,29 @@ const listedOnly = ref(true);
 // filing), a YYYY-MM-DD date = the newest one that was already filed then
 const asOf = ref('');
 const today = new Date().toISOString().slice(0, 10);
-const exDivisions = ref([]); // division ids to leave out
-const exSics = ref([]); // SIC codes to leave out, one dropdown row each
+const exDivisions = ref<string[]>([]); // division ids to leave out
+const exSics = ref<string[]>([]); // SIC codes to leave out, one dropdown row each
 // condition rows: { key, mode: 'now' | 'chg' | 'yoy', min, max }
 //   now = the latest filing's figure; chg = change since the previous filing;
 //   yoy = change since the same period a year earlier
-const DEFAULT_CONDITIONS = [
+const DEFAULT_CONDITIONS: Condition[] = [
   { key: 'score', mode: 'now', min: 60, max: '' },
   { key: 'grossMargin', mode: 'now', min: '', max: '' },
   { key: 'roe', mode: 'now', min: '', max: '' },
   { key: 'debtRatio', mode: 'now', min: '', max: '' },
 ];
-const conditions = ref(DEFAULT_CONDITIONS.map((c) => ({ ...c })));
+const conditions = ref<Condition[]>(DEFAULT_CONDITIONS.map((c) => ({ ...c })));
 const sortKey = ref('score');
-const sortDir = ref('desc');
-const sortMode = ref('now');
-const result = ref(null);
+const sortDir = ref<'asc' | 'desc'>('desc');
+const sortMode = ref<'now' | 'chg' | 'yoy'>('now');
+const result = ref<ScreenResponse | null>(null);
 const loading = ref(false);
-const error = ref(null);
+const error = ref<string | null>(null);
 
 // ---- URL <-> state ----
-const MODES = { now: '', chg: 'chg', yoy: 'yoy' };
-function toUrlParams() {
-  const p = {};
+const MODES: Record<Condition['mode'], string> = { now: '', chg: 'chg', yoy: 'yoy' };
+function toUrlParams(): UrlParams {
+  const p: UrlParams = {};
   if (editing.value) p.basket = editing.value.id;
   if (text.value.trim()) p.q = text.value.trim();
   if (division.value) p.division = division.value;
@@ -69,7 +92,7 @@ function toUrlParams() {
   return p;
 }
 let applying = false;
-function applyUrlParams(p) {
+function applyUrlParams(p: UrlParams & { basket?: string }) {
   applying = true;
   text.value = p.q || '';
   division.value = p.division || '';
@@ -83,9 +106,9 @@ function applyUrlParams(p) {
     conditions.value = String(p.cond)
       .split(';')
       .filter(Boolean)
-      .map((s) => {
+      .map((s): Condition => {
         const [key, mode, min, max] = s.split(':');
-        return { key, mode: mode === 'chg' || mode === 'yoy' ? mode : 'now', min: min ?? '', max: max ?? '' };
+        return { key: key!, mode: mode === 'chg' || mode === 'yoy' ? mode : 'now', min: min ?? '', max: max ?? '' };
       });
   } else if (Object.keys(p).length === 0) conditions.value = DEFAULT_CONDITIONS.map((c) => ({ ...c }));
   else conditions.value = [];
@@ -118,22 +141,22 @@ watch(
 );
 // baskets saved before the URL form was kept only have the API params
 // (amounts already scaled to dollars): turn them back into filters
-function legacyParams(p) {
-  const out = {};
-  for (const k of ['q', 'division', 'sic', 'afs', 'exdiv', 'exsic']) if (p[k]) out[k] = p[k];
+function legacyParams(p: ScreenQueryParams): UrlParams {
+  const out: UrlParams = {};
+  for (const k of ['q', 'division', 'sic', 'afs', 'exdiv', 'exsic']) if (p[k]) out[k] = String(p[k]);
   if (p.listed === '0') out.listed = '0';
-  const cond = {};
+  const cond: Record<string, Condition> = {};
   for (const [k, v] of Object.entries(p)) {
     const m = /^(.+?)(?:_(chg|yoy))?_(min|max)$/.exec(k);
     if (!m) continue;
-    const c = (cond[`${m[1]}:${m[2] || ''}`] ??= { key: m[1], mode: m[2] || 'now', min: '', max: '' });
-    c[m[3]] = String(Number(v) / scale(c));
+    const c = (cond[`${m[1]}:${m[2] || ''}`] ??= { key: m[1]!, mode: (m[2] as Condition['mode']) || 'now', min: '', max: '' });
+    (c as unknown as Record<string, string>)[m[3]!] = String(Number(v) / scale(c));
   }
   if (Object.keys(cond).length) out.cond = Object.values(cond).map((c) => [c.key, MODES[c.mode] || '', c.min, c.max].join(':')).join(';');
   if (p.sort && (p.sort !== 'score' || p.dir !== 'desc' || p.sortmode)) {
-    out.sort = p.sort;
-    out.dir = p.dir || 'desc';
-    if (p.sortmode) out.sortmode = p.sortmode;
+    out.sort = String(p.sort);
+    out.dir = String(p.dir || 'desc');
+    if (p.sortmode) out.sortmode = String(p.sortmode);
   }
   return out;
 }
@@ -144,12 +167,12 @@ function stopEditing() {
 function basketLabel() {
   const parts = [];
   if (sicCode.value) parts.push(sicCode.value);
-  else if (division.value) parts.push(pick(meta.value?.divisions?.find((d) => d.id === division.value), 'zh', 'en') || division.value);
+  else if (division.value) parts.push(pick(meta.value?.divisions?.find((d) => d.id === division.value) as unknown as Record<string, unknown>, 'zh', 'en') || division.value);
   if (asOf.value) parts.push(`@${asOf.value}`);
   const cond = conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).map((c) => `${shortName(fieldOf(c.key)?.name || c.key)}${c.mode === 'chg' ? t('sr.chgShort') : c.mode === 'yoy' ? t('sr.yoyShort') : ''}${c.min !== '' ? `≥${c.min}` : ''}${c.max !== '' ? `≤${c.max}` : ''}`);
   return [...parts, ...cond].join(' ') || t('nav.screen');
 }
-function basketSource(n) {
+function basketSource(n: number): BasketSource {
   const { basket, ...url } = toUrlParams(); // the filters as the URL carries them: what "edit" reopens
   return { type: 'screen', params: { ...params.value }, url, n: n < basketable.value.length ? n : null, label: basketLabel() };
 }
@@ -157,14 +180,14 @@ function basketSource(n) {
 // companies, because the list is whoever passes them on the day. The date,
 // the sort and the limit are left out - the replay walks every date itself
 // and holds everyone who passes, in no particular order.
-const ruleSource = () => {
+const ruleSource = (): BasketSource => {
   const { basket, asof, ...url } = toUrlParams();
   const { asof: _asof, sort, dir, sortmode, limit, history, ...rest } = params.value;
   return { type: 'rule', params: rest, url, label: basketLabel() };
 };
 function makeRuleBasket() {
   const src = ruleSource();
-  createRuleBasket(src.label, src);
+  createRuleBasket(src.label!, src);
   emit('basket');
 }
 const now = () => ({ at: new Date().toISOString(), asOf: new Date().toISOString().slice(0, 10), sourceName: '尋找股票（最新財報指標）' }); // tr() words it
@@ -173,7 +196,7 @@ function makeBasket() {
   const rows = basketable.value.slice(0, n);
   if (!rows.length) return;
   const src = basketSource(n);
-  createBasket(src.label, rows, { prune: true, source: src, sync: { ...now(), added: [], removed: [], changed: 0 } });
+  createBasket(src.label!, rows, { prune: true, source: src, sync: { ...now(), added: [], removed: [], changed: 0 } });
   emit('basket');
 }
 // the edited filters become the basket's source; the list is resynced the
@@ -194,7 +217,7 @@ function updateBasket() {
   const src = basketSource(n);
   const renamed = b.name === b.source?.label; // a name the user never changed follows the filters
   setSource(b.id, src, renamed ? src.label : null);
-  applySource(b, rows.map((x) => ({ ticker: x.ticker, cik: x.cik, name: x.name, weight: 1 })), now());
+  applySource(b, rows.map((x) => ({ ticker: x.ticker ?? undefined, cik: x.cik, name: x.name, weight: 1 })), now());
   b.prune = true;
   emit('basket');
 }
@@ -203,9 +226,9 @@ function updateBasket() {
 const asOfMin = computed(() => meta.value?.asof?.min || '');
 // the heading of the condition list says which filing the figures come from
 const conditionsHead = computed(() => (asOf.value ? t('sr.conditionsAsOf', { date: asOf.value }) : t('sr.conditions')));
-const fieldOf = (key) => meta.value?.fields.find((f) => f.key === key) || null;
+const fieldOf = (key: string) => meta.value?.fields.find((f) => f.key === key) || null;
 const fieldGroups = computed(() => {
-  const out = [];
+  const out: { name: string; fields: ScreenField[] }[] = [];
   for (const f of meta.value?.fields || []) {
     const g = out.find((x) => x.name === f.group);
     if (g) g.fields.push(f);
@@ -219,14 +242,14 @@ const sicOptions = computed(() => {
   return sic.value.codes.filter((c) => (listedOnly.value ? c.listed : c.total) && (!d || c.division === d.id)).sort((a, b) => a.code.localeCompare(b.code));
 });
 // change filters compare with earlier filings: market figures have none
-const modesFor = (key) => (fieldOf(key)?.market ? ['now'] : ['now', 'chg', 'yoy']);
-const isPct = (key) => fieldOf(key)?.unit === '百萬' || fieldOf(key)?.unit === '百萬股' || key === 'score'; // changes shown as % growth
-const unitLabel = (f) => (f.unit ? ` (${tr(f.unit)})` : '');
+const modesFor = (key: string): Condition['mode'][] => (fieldOf(key)?.market ? ['now'] : ['now', 'chg', 'yoy']);
+const isPct = (key: string) => fieldOf(key)?.unit === '百萬' || fieldOf(key)?.unit === '百萬股' || key === 'score'; // changes shown as % growth
+const unitLabel = (f: ScreenField) => (f.unit ? ` (${tr(f.unit)})` : '');
 
 // amounts are entered in millions; percentages / ratios as shown; changes in % or points
-const scale = (c) => (c.mode !== 'now' ? 1 : fieldOf(c.key)?.unit === '百萬' || fieldOf(c.key)?.unit === '百萬股' ? 1e6 : 1);
+const scale = (c: Condition) => (c.mode !== 'now' ? 1 : fieldOf(c.key)?.unit === '百萬' || fieldOf(c.key)?.unit === '百萬股' ? 1e6 : 1);
 const params = computed(() => {
-  const p = { sort: sortKey.value, dir: sortDir.value, limit: 500, listed: listedOnly.value ? '1' : '0' };
+  const p: Record<string, string | number> = { sort: sortKey.value, dir: sortDir.value, limit: 500, listed: listedOnly.value ? '1' : '0' };
   if (sortMode.value !== 'now') p.sortmode = sortMode.value;
   // a change column is shown (a condition in chg / yoy mode, even before it has a number): the rows need prev / yoy
   if (conditions.value.some((c) => c.key && c.mode !== 'now')) p.history = '1';
@@ -246,14 +269,14 @@ const params = computed(() => {
   return p;
 });
 
-let timer = null;
+let timer: ReturnType<typeof setTimeout> | undefined;
 async function run() {
   loading.value = true;
   error.value = null;
   try {
     result.value = await api.screen(params.value);
   } catch (e) {
-    error.value = e.message;
+    error.value = (e as Error).message;
   } finally {
     loading.value = false;
   }
@@ -267,7 +290,7 @@ watch(params, () => {
 function addCondition() {
   conditions.value.push({ key: 'netMargin', mode: 'now', min: '', max: '' });
 }
-function removeCondition(i) {
+function removeCondition(i: number) {
   conditions.value.splice(i, 1);
 }
 function reset() {
@@ -278,15 +301,15 @@ const allSicOptions = computed(() => (sic.value ? sic.value.codes.filter((c) => 
 function addExSic() {
   exSics.value.push('');
 }
-function removeExSic(i) {
+function removeExSic(i: number) {
   exSics.value.splice(i, 1);
 }
-function toggleExDivision(id) {
+function toggleExDivision(id: string) {
   const i = exDivisions.value.indexOf(id);
   if (i >= 0) exDivisions.value.splice(i, 1);
   else exDivisions.value.push(id);
 }
-function sortBy(k, mode = 'now') {
+function sortBy(k: string, mode: 'now' | 'chg' | 'yoy' = 'now') {
   if (sortKey.value === k && sortMode.value === mode) sortDir.value = sortDir.value === 'desc' ? 'asc' : 'desc';
   else {
     sortKey.value = k;
@@ -294,7 +317,7 @@ function sortBy(k, mode = 'now') {
     sortDir.value = k === 'name' || k === 'ticker' ? 'asc' : 'desc';
   }
 }
-const arrow = (k, mode = 'now') => (sortKey.value === k && sortMode.value === mode ? (sortDir.value === 'asc' ? ' ▲' : ' ▼') : '');
+const arrow = (k: string, mode: 'now' | 'chg' | 'yoy' = 'now') => (sortKey.value === k && sortMode.value === mode ? (sortDir.value === 'asc' ? ' ▲' : ' ▼') : '');
 
 // result columns: the fields used in conditions (with their change columns) plus a few staples
 const STAPLES = ['price', 'marketCap', 'pe', 'grossMargin', 'opMargin', 'netMargin', 'roe', 'debtRatio', 'currentRatio', 'revenueAnn'];
@@ -303,9 +326,9 @@ const STAPLES_PHONE = ['price', 'marketCap', 'pe'];
 const filtersOpen = ref(false);
 const activeConditions = computed(() => conditions.value.filter((c) => c.key && (c.min !== '' || c.max !== '')).length + (asOf.value ? 1 : 0) + (division.value ? 1 : 0) + (sicCode.value ? 1 : 0) + (afs.value ? 1 : 0) + exDivisions.value.length + exSics.value.filter(Boolean).length + (text.value.trim() ? 1 : 0));
 const columns = computed(() => {
-  const out = [];
-  const seen = new Set();
-  const push = (key, mode) => {
+  const out: Column[] = [];
+  const seen = new Set<string>();
+  const push = (key: string, mode: Column['mode']) => {
     const id = `${key}:${mode}`;
     const f = fieldOf(key);
     if (!f || seen.has(id)) return;
@@ -324,7 +347,7 @@ const columns = computed(() => {
 const f1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
 const f2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const f0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
-function fmt(field, v) {
+function fmt(field: ScreenField, v: number | null | undefined) {
   if (v == null) return '—';
   switch (field.unit) {
     case '%':
@@ -346,9 +369,10 @@ function fmt(field, v) {
   }
 }
 // a cell: the value, or the change vs the previous / year-earlier filing
-function cell(r, col) {
+function cell(r: ScreenRow, col: Column): { text: string; neg: boolean; pos?: boolean; title?: string } {
   const { field: f, mode } = col;
-  if (f.market) return { text: fmt(f, r.market?.[f.key]), neg: (r.market?.[f.key] ?? 0) < 0 };
+  const mk = r.market as unknown as Record<string, number | null> | null;
+  if (f.market) return { text: fmt(f, mk?.[f.key]), neg: (mk?.[f.key] ?? 0) < 0 };
   const cur = f.key === 'score' ? r.score.score : r.values?.[f.key];
   if (mode === 'now') return { text: fmt(f, cur), neg: (cur ?? 0) < 0 };
   const base = mode === 'chg' ? r.prev : r.yoy;
@@ -356,24 +380,24 @@ function cell(r, col) {
   if (cur == null || b == null) return { text: '—', neg: false, title: base ? '' : mode === 'chg' ? t('sr.noPrev') : t('sr.noYoy') };
   const d = isPct(f.key) ? (b === 0 ? null : ((cur - b) / Math.abs(b)) * 100) : cur - b;
   if (d == null) return { text: '—', neg: false };
-  const title = `${base.fiscalYear} ${base.fiscalPeriod}: ${fmt(f, b)} → ${fmt(f, cur)}`;
+  const title = `${base!.fiscalYear} ${base!.fiscalPeriod}: ${fmt(f, b)} → ${fmt(f, cur)}`;
   return { text: `${d > 0 ? '+' : ''}${f1.format(d)}${isPct(f.key) ? '%' : ' pt'}`, neg: d < 0, pos: d > 0, title };
 }
 // a field name without its parenthetical / circled-number qualifiers, for column heads and basket names
-const shortName = (name) =>
+const shortName = (name: string) =>
   tr(name)
     .replace(/（.*?）|\s*\(.*?\)/g, '')
     .replace(/ [①②]|\s*[①②]\/[①②]|\s*[①②]−[①②]/g, '');
-const colTitle = (col) => `${shortName(col.field.name)}${col.mode === 'chg' ? ` ${t('sr.chgShort')}` : col.mode === 'yoy' ? ` ${t('sr.yoyLong')}` : ''}`;
-const sicName = (r) => (isZh.value ? r.sicZh || '' : sicInfo(r.sic)?.title || r.sicZh || '');
-const afsShort = (k) => (['LAF', 'ACC', 'NON'].includes(k) ? t(`afs.${k}`) : '');
+const colTitle = (col: Column) => `${shortName(col.field.name)}${col.mode === 'chg' ? ` ${t('sr.chgShort')}` : col.mode === 'yoy' ? ` ${t('sr.yoyLong')}` : ''}`;
+const sicName = (r: ScreenRow) => (isZh.value ? r.sicZh || '' : sicInfo(r.sic)?.title || r.sicZh || '');
+const afsShort = (k: string | null) => (k && ['LAF', 'ACC', 'NON'].includes(k) ? t(`afs.${k}`) : '');
 
 onMounted(async () => {
   applyUrlParams(props.params || {});
   try {
     [meta.value, sic.value] = await Promise.all([api.screenFields(), api.browseSic()]);
   } catch (e) {
-    error.value = e.message;
+    error.value = (e as Error).message;
   }
   const b = editing.value;
   if (b && !b.source?.url) applyUrlParams({ ...legacyParams(b.source?.params || {}), basket: b.id });
@@ -414,7 +438,7 @@ onMounted(async () => {
           <span>{{ t('col.afs') }}</span>
           <select v-model="afs">
             <option value="">{{ t('wl.all') }}</option>
-            <option v-for="(v, k) in meta?.filer || {}" :key="k" :value="k">{{ pick(v, 'zh', 'label') }}</option>
+            <option v-for="(v, k) in meta?.filer || {}" :key="k" :value="k">{{ pick(v as unknown as Record<string, unknown>, 'zh', 'label') }}</option>
           </select>
         </label>
         <label class="frow check"><input v-model="listedOnly" type="checkbox" /> {{ t('listedOnly') }}</label>
@@ -481,7 +505,7 @@ onMounted(async () => {
             </span>
             <!-- a rule ETF can be worth charting even when nothing passes today: it may have held plenty in 2021 -->
             <button v-if="editing?.mode !== 'rule'" class="small" :disabled="!result" :title="t('sr.makeRuleTitle')" @click="makeRuleBasket">{{ t('sr.makeRule') }}</button>
-            <a v-if="!api.isStatic" :href="api.screenUrl(params)" target="_blank" rel="noopener" class="small">JSON</a>
+            <a v-if="!api.isStatic" :href="api.screenUrl(params) ?? undefined" target="_blank" rel="noopener" class="small">JSON</a>
           </div>
         </div>
         <p v-if="error" class="error">{{ error }}</p>

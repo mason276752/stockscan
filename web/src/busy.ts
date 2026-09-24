@@ -2,11 +2,17 @@
 // itself in and out). While it is above zero App.vue shows the thin bar
 // across the top, so something is always visibly moving even when the
 // message itself is scrolled out of view. In the static build the data
-// worker also reports its downloads here (api.static.js), and while any is
+// worker also reports its downloads here (api.static.ts), and while any is
 // in flight the bar shows how far they are instead of just moving.
 import { computed, reactive } from 'vue';
 
-export const busy = reactive({ count: 0, downloads: {} }); // downloads: path -> { loaded, total } (bytes)
+/** One file on its way in. */
+export interface Download {
+  loaded: number;
+  total: number;
+}
+
+export const busy = reactive({ count: 0, downloads: {} as Record<string, Download> }); // downloads: path -> { loaded, total } (bytes)
 
 // the downloads in flight added up: total 0 when there is none
 export const download = computed(() => {
@@ -18,4 +24,4 @@ export const download = computed(() => {
   }
   return { loaded, total };
 });
-export const mb = (n) => (n / 1048576).toFixed(1);
+export const mb = (n: number): string => (n / 1048576).toFixed(1);

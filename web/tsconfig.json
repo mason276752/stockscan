@@ -13,9 +13,9 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    // as on the server: a mechanical port, so no annotations yet
-    "strict": false,
-    "noImplicitAny": false
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
   },
   // server/lib and shared are pulled in through the imports of src/, not listed:
   // only the pure modules the browser actually uses get checked here.

@@ -7,13 +7,26 @@
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 
+import type { Fetcher, Priority } from './secClient.ts';
+
+/** Reads an inclusive byte range out of the archive. */
+export type RangeReader = (from: number, to: number) => Promise<Buffer>;
+
+/** One central-directory entry: enough to find and inflate the member. */
+export interface ZipEntry {
+  name: string;
+  method: number;
+  compressedSize: number;
+  localOffset: number;
+}
+
 const EOCD_SIG = 0x06054b50;
 const CD_SIG = 0x02014b50;
 const TAIL = 65_536 + 22; // max zip comment + EOCD record
 
 // The central directory, as { name, method, compressedSize, localOffset }.
 // read(from, to) -> Buffer of those bytes (inclusive)
-async function centralDirectory(read, size, names, url) {
+async function centralDirectory(read: RangeReader, size: number, names: readonly string[] | null | undefined, url: string): Promise<ZipEntry[]> {
   const tail = await read(Math.max(0, size - TAIL), size - 1);
   let eocd = -1;
   for (let i = tail.length - 22; i >= 0; i--) {
@@ -29,7 +42,7 @@ async function centralDirectory(read, size, names, url) {
 
   const cd = await read(cdOffset, cdOffset + cdSize - 1);
   const wanted = names ? new Set(names) : null;
-  const out = [];
+  const out: ZipEntry[] = [];
   let p = 0;
   while (p + 46 <= cd.length && cd.readUInt32LE(p) === CD_SIG) {
     const method = cd.readUInt16LE(p + 10);
@@ -47,19 +60,19 @@ async function centralDirectory(read, size, names, url) {
 
 // where an entry's bytes start: the local header is 30 fixed bytes plus its
 // own name and extra lengths (which need not match the central directory's)
-async function dataStartOf(read, entry) {
+async function dataStartOf(read: RangeReader, entry: ZipEntry): Promise<number> {
   const local = await read(entry.localOffset, entry.localOffset + 29);
   return entry.localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
 }
 
-const inflate = (method, data, name, url) => {
+const inflate = (method: number, data: Buffer, name: string, url: string): Buffer => {
   if (method === 8) return zlib.inflateRawSync(data);
   if (method === 0) return data;
   throw new Error(`Unsupported zip compression method ${method} for ${name} in ${url}`);
 };
 
-async function extract(read, size, names, url) {
-  const out = {};
+async function extract(read: RangeReader, size: number, names: readonly string[] | null | undefined, url: string): Promise<Record<string, Buffer>> {
+  const out: Record<string, Buffer> = {};
   for (const entry of await centralDirectory(read, size, names, url)) {
     const start = await dataStartOf(read, entry);
     out[entry.name] = inflate(entry.method, await read(start, start + entry.compressedSize - 1), entry.name, url);
@@ -67,20 +80,20 @@ async function extract(read, size, names, url) {
   return out;
 }
 
-export async function readZipEntries(client, url, names, { priority } = {}) {
+export async function readZipEntries(client: Fetcher, url: string, names: readonly string[] | null, { priority }: { priority?: Priority } = {}): Promise<Record<string, Buffer>> {
   const { size } = await client.head(url, { priority });
   if (!size) throw new Error(`No Content-Length for ${url}`);
   return extract((from, to) => client.buffer(url, { priority, range: [from, to] }), size, names, url);
 }
 
-export async function readZipEntry(client, url, name, opts) {
+export async function readZipEntry(client: Fetcher, url: string, name: string, opts?: { priority?: Priority }): Promise<Buffer> {
   const entries = await readZipEntries(client, url, [name], opts);
   if (!entries[name]) throw new Error(`${name} not found in ${url}`);
   return entries[name];
 }
 
 // All (or the named) entries of a zip already in memory: { name: Buffer }.
-export function unzipBuffer(buf, names = null) {
+export function unzipBuffer(buf: Buffer, names: readonly string[] | null = null): Promise<Record<string, Buffer>> {
   return extract(async (from, to) => buf.subarray(from, to + 1), buf.length, names, '<buffer>');
 }
 
@@ -88,13 +101,13 @@ export function unzipBuffer(buf, names = null) {
 // hold a 600 MB num.txt inside a 60 MB zip, which must never be inflated
 // whole - so only the entry's own bytes are read, straight through
 // inflateRaw, and the caller consumes them a line at a time.
-export async function zipEntryStream(file, name) {
+export async function zipEntryStream(file: string, name: string): Promise<NodeJS.ReadableStream> {
   const fh = await fs.promises.open(file, 'r');
-  let entry;
-  let start;
+  let entry: ZipEntry | undefined;
+  let start: number;
   try {
     const size = (await fh.stat()).size;
-    const read = async (from, to) => {
+    const read: RangeReader = async (from, to) => {
       const buf = Buffer.allocUnsafe(to - from + 1);
       const { bytesRead } = await fh.read(buf, 0, buf.length, from);
       return buf.subarray(0, bytesRead);
@@ -106,6 +119,6 @@ export async function zipEntryStream(file, name) {
   } finally {
     await fh.close().catch(() => {});
   }
-  const raw = fs.createReadStream(file, { start, end: start + entry.compressedSize - 1 });
-  return entry.method === 8 ? raw.pipe(zlib.createInflateRaw()) : raw;
+  const raw = fs.createReadStream(file, { start: start!, end: start! + entry!.compressedSize - 1 });
+  return entry!.method === 8 ? raw.pipe(zlib.createInflateRaw()) : raw;
 }

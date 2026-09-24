@@ -5,7 +5,7 @@ import { ref } from 'vue';
 const PHONE = '(max-width: 760px)';
 const NARROW = '(max-width: 1100px)';
 
-function track(query) {
+function track(query: string) {
   const mq = window.matchMedia(query);
   const r = ref(mq.matches);
   mq.addEventListener('change', (e) => (r.value = e.matches));

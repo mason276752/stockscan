@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import type { PropType } from 'vue';
 import { t, tr } from '../i18n';
+import type { Benchmark, IndicatorColumn, IndicatorRow, Indicators } from '../../../server/lib/types.ts';
 
 const props = defineProps({
-  data: { type: Object, required: true }, // /api/company/:id/indicators response
+  data: { type: Object as PropType<Indicators>, required: true }, // /api/company/:id/indicators response
   annualizeAmounts: { type: Boolean, default: true },
 });
 
-const fmt = (digits) => new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const fmt = (digits: number) => new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const F = { pct: fmt(2), times: fmt(2), days: fmt(1), eps: fmt(2), amount: fmt(0) };
 
-function rawValue(row, col) {
+function rawValue(row: IndicatorRow, col: IndicatorColumn): number | null {
   let v = col.values[row.key];
   if (row.kind === 'flow' && props.annualizeAmounts && quarterMode.value) v = col.flowsAnnualized[row.key];
   if (v == null || Number.isNaN(v) || !Number.isFinite(v)) return null;
@@ -18,25 +20,25 @@ function rawValue(row, col) {
 }
 
 // hovered row: colour each cell by the row's benchmark (green passes, red fails)
-const hoverKey = ref(null);
-const OPS = { '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b, '<=': (a, b) => a <= b };
-const OP_TEXT = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
-function benchmarkText(row) {
+const hoverKey = ref<string | null>(null);
+const OPS: Record<Benchmark['op'], (a: number, b: number) => boolean> = { '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b, '<=': (a, b) => a <= b };
+const OP_TEXT: Record<Benchmark['op'], string> = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
+function benchmarkText(row: IndicatorRow) {
   if (!row.benchmark) return '';
   const unit = row.unit === '百萬' ? '' : row.unit === '%' ? '%' : ` ${tr(row.unit)}`;
   return `${OP_TEXT[row.benchmark.op]} ${row.benchmark.value}${unit}`;
 }
-function verdict(row, col) {
+function verdict(row: IndicatorRow, col: IndicatorColumn) {
   if (hoverKey.value !== row.key || !row.benchmark) return '';
   const v = rawValue(row, col);
   if (v == null) return '';
   return OPS[row.benchmark.op](v, row.benchmark.value) ? 'good' : 'bad';
 }
 
-function cell(row, col) {
+function cell(row: IndicatorRow, col: IndicatorColumn) {
   const v = rawValue(row, col);
   if (v == null) return { text: '—', neg: false };
-  let text;
+  let text: string;
   switch (row.unit) {
     case '%':
       text = F.pct.format(v);
@@ -56,7 +58,7 @@ function cell(row, col) {
   return { text, neg: v < 0 };
 }
 
-function cellTitle(row, col) {
+function cellTitle(row: IndicatorRow, col: IndicatorColumn) {
   if (row.key === 'cfAdequacy' && col.values.cfAdequacyPeriods) return t(props.data.quarterly ? 'it.adequacyQ' : 'it.adequacyY', { n: col.values.cfAdequacyPeriods });
   if (col.missing) return props.data.mode === 'year' && props.data.quarterly ? t('it.missingYear') : t('it.missingPeriod');
   return '';
@@ -64,7 +66,7 @@ function cellTitle(row, col) {
 
 // rows grouped for the rowspan group column
 const groups = computed(() => {
-  const out = [];
+  const out: { name: string; rows: IndicatorRow[] }[] = [];
   for (const r of props.data.rows) {
     const g = out[out.length - 1];
     if (g && g.name === r.group) g.rows.push(r);
@@ -77,7 +79,7 @@ const basisLabel = computed(() => (props.data.basis === 'ttm' ? t('ind.ttm') : p
 const quarterMode = computed(() => props.data.quarterly && (props.data.mode === 'quarter' || props.data.mode === 'same'));
 
 // newest quarter (the one the user picked) is on the far right: start there
-const wrap = ref(null);
+const wrap = ref<HTMLElement | null>(null);
 function scrollToEnd() {
   nextTick(() => {
     if (wrap.value) wrap.value.scrollLeft = wrap.value.scrollWidth;
@@ -86,14 +88,14 @@ function scrollToEnd() {
 onMounted(scrollToEnd);
 watch(() => props.data, scrollToEnd);
 
-const tip = ref(null);
-function showTip(row, e) {
+const tip = ref<{ row: IndicatorRow; x: number; y: number } | null>(null);
+function showTip(row: IndicatorRow, e: MouseEvent) {
   tip.value = { row, x: e.clientX, y: e.clientY };
 }
 function hideTip() {
   tip.value = null;
 }
-const tipStyle = computed(() => {
+const tipStyle = computed((): Record<string, string> => {
   if (!tip.value) return {};
   const w = 380;
   const x = Math.min(tip.value.x + 16, window.innerWidth - w - 12);

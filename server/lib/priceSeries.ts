@@ -2,31 +2,52 @@
 // chain as the custom-ETF charts (TradingView, then IBKR TWS, then Yahoo) -
 // fetched when the page is viewed, cached half an hour, no live quote: "now"
 // is the last daily close. All three sources give split-adjusted closes; the
-// split events (Yahoo, cached a day) go along so valuation.js can turn them
+// split events (Yahoo, cached a day) go along so valuation.ts can turn them
 // back into the prices of the day, which is what EPS and share counts of old
 // filings line up with.
 
 import { store } from './store.ts';
 import { dailyBars } from './bars.ts';
 import { yahooSymbol } from './prices.ts';
+import type { DividendEvent, SplitEvent } from './prices.ts';
+import type { IsoDate } from './types.ts';
+
+/** The corporate actions the valuation page needs to undo. */
+export interface PriceEvents {
+  splits: SplitEvent[];
+  dividends: DividendEvent[];
+  error?: string;
+}
+
+/** Closes plus the events, for the valuation page. */
+export interface PriceSeries {
+  symbol: string;
+  source: string | null;
+  currency: string;
+  days: { date: IsoDate; close: number }[];
+  splits: SplitEvent[];
+  dividends: DividendEvent[];
+  eventsError: string | null;
+  fetchedAt: string | null | undefined;
+}
 
 const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/';
 const EVENTS_TTL = 24 * 3600 * 1000;
 
 // split and dividend events of the last ten years (a coarse interval keeps the payload small)
-async function events(ticker) {
+async function events(ticker: string): Promise<PriceEvents> {
   const symbol = yahooSymbol(ticker);
   const key = `events:${symbol}`;
-  const saved = store.getKV(key);
+  const saved = store.getKV<PriceEvents>(key);
   if (saved && saved.ageMs < EVENTS_TTL) return saved.value;
   try {
     const url = `${YAHOO}${encodeURIComponent(symbol)}?${new URLSearchParams({ range: '10y', interval: '3mo', events: 'div|splits' })}`;
     const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`Yahoo Finance returned ${res.status}`);
-    const r = (await res.json()).chart?.result?.[0];
+    const r = ((await res.json()) as { chart?: { result?: { events?: { splits?: Record<string, { date: number; numerator: number; denominator: number }>; dividends?: Record<string, { date: number; amount: number }> } }[] } }).chart?.result?.[0];
     if (!r) throw new Error('no data');
-    const day = (t) => new Date(t * 1000).toISOString().slice(0, 10);
-    const value = {
+    const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
+    const value: PriceEvents = {
       splits: Object.values(r.events?.splits || {})
         .map((s) => ({ date: day(s.date), ratio: s.numerator / s.denominator }))
         .sort((a, b) => (a.date < b.date ? -1 : 1)),
@@ -38,12 +59,12 @@ async function events(ticker) {
     return value;
   } catch (err) {
     if (saved) return saved.value;
-    return { splits: [], dividends: [], error: err.message };
+    return { splits: [], dividends: [], error: (err as Error).message };
   }
 }
 
 // { symbol, source, currency, days: [{ date, close (split-adjusted) }], splits, dividends, fetchedAt }
-export async function priceSeries(ticker) {
+export async function priceSeries(ticker: string): Promise<PriceSeries> {
   const [bars, ev] = await Promise.all([dailyBars(ticker), events(ticker)]);
   return {
     symbol: bars.symbol,

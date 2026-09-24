@@ -22,6 +22,8 @@
 // machine is their only copy - a parse or score version bump can only be
 // redone in full there.
 
+import type { IsoDate } from './types.ts';
+
 // The data ref takes everything: every filing the crawler ever saved goes
 // up, so GitHub holds the whole history. (A filing file is written once and
 // never touched again, so the same blob is shared by every commit - history
@@ -29,7 +31,7 @@
 // the company records, the ticker table, the universe.) STOCKSCAN_PUBLISH_YEARS
 // is there for whoever wants to keep the ref small anyway - unset, nothing
 // is held back.
-export const PUBLISH_YEARS = Number(process.env.STOCKSCAN_PUBLISH_YEARS) || null;
+export const PUBLISH_YEARS: number | null = Number(process.env.STOCKSCAN_PUBLISH_YEARS) || null;
 
 // The site cannot take everything: a GitHub Pages site may be 1 GB, full
 // stop. So the newest filings that fit go up and the older ones do not -
@@ -37,28 +39,44 @@ export const PUBLISH_YEARS = Number(process.env.STOCKSCAN_PUBLISH_YEARS) || null
 // STOCKSCAN_PUBLISH_MB overrides the budget; by default the build works out
 // what is left once the bars, the indexes and the app have taken theirs.
 export const PAGES_LIMIT_MB = 1024;
-export const publishMb = (reservedMb = 0) => Math.round(Number(process.env.STOCKSCAN_PUBLISH_MB) || Math.max(50, PAGES_LIMIT_MB - reservedMb - 40));
+export const publishMb = (reservedMb = 0): number => Math.round(Number(process.env.STOCKSCAN_PUBLISH_MB) || Math.max(50, PAGES_LIMIT_MB - reservedMb - 40));
+
+/** A saved filing as the store's index lists it: what the budget weighs. */
+export interface PublishableFiling {
+  accession?: string;
+  reportDate?: IsoDate | null;
+  bytes?: number;
+  file?: string;
+}
+
+/** Which filings fit, how many bytes they take, and where they stop. */
+export interface PublishBudget {
+  accessions: Set<string>;
+  bytes: number;
+  from: IsoDate | null;
+  left: number;
+}
 
 // the newest filings that fit in `mb`, as a Set of accessions plus where
 // they stop (`from`: the period end of the oldest one that made it)
-export function publishBudget(filings, mb) {
-  const sorted = filings.filter((f) => f.reportDate).sort((a, b) => (a.reportDate < b.reportDate ? 1 : a.reportDate > b.reportDate ? -1 : 0));
+export function publishBudget(filings: readonly PublishableFiling[], mb: number): PublishBudget {
+  const sorted = filings.filter((f) => f.reportDate).sort((a, b) => (a.reportDate! < b.reportDate! ? 1 : a.reportDate! > b.reportDate! ? -1 : 0));
   const limit = mb * 1048576;
-  const accessions = new Set();
+  const accessions = new Set<string>();
   let bytes = 0;
-  let from = null;
+  let from: IsoDate | null = null;
   for (const f of sorted) {
     const size = f.bytes || 10 * 1024;
     if (bytes + size > limit) break;
     bytes += size;
-    accessions.add(f.accession);
-    from = f.reportDate;
+    accessions.add(f.accession!);
+    from = f.reportDate!;
   }
   return { accessions, bytes, from, left: filings.length - accessions.size };
 }
 
 // the oldest period end that travels, as YYYY-MM-DD (null = no limit)
-export function publishFrom(years = PUBLISH_YEARS, now = Date.now()) {
+export function publishFrom(years: number | null = PUBLISH_YEARS, now: number = Date.now()): IsoDate | null {
   if (!years) return null;
   const d = new Date(now);
   d.setUTCFullYear(d.getUTCFullYear() - years);
@@ -67,12 +85,14 @@ export function publishFrom(years = PUBLISH_YEARS, now = Date.now()) {
 
 // A saved filing / score is named <accession>__<period end>__…__v<n>.json.zst,
 // so the period it covers is in the file name - no need to open it.
-export const periodEndOf = (file) => /__(\d{4}-\d{2}-\d{2})__/.exec(file)?.[1] || null;
+export const periodEndOf = (file: string): IsoDate | null => /__(\d{4}-\d{2}-\d{2})__/.exec(file)?.[1] || null;
 
 // does this filing / score travel? (`reportDate` from the store index, else
 // the file name; one without a date never does - nothing can place it)
-export const inWindow = (rec, from) => {
+export const inWindow = (rec: PublishableFiling | string, from: IsoDate | null): boolean => {
   if (!from) return true; // no window: everything travels
-  const end = rec.reportDate || periodEndOf(String(rec.file || rec));
+  // a bare file name reads as a record with neither field
+  const r = rec as PublishableFiling;
+  const end = r.reportDate || periodEndOf(String(r.file || rec));
   return !!end && end >= from;
 };

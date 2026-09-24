@@ -1,17 +1,19 @@
 <script setup lang="ts">
 // Score breakdown of one filing, shown above the indicators table.
 import { computed, ref } from 'vue';
+import type { PropType } from 'vue';
 import { t, tr } from '../i18n';
+import type { Benchmark, Score, ScoreItem } from '../../../server/lib/types.ts';
 
-const props = defineProps({ score: { type: Object, required: true } });
+const props = defineProps({ score: { type: Object as PropType<Score>, required: true } });
 const open = ref(false);
-const cls = (s) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
+const cls = (s: number | null | undefined) => (s == null ? 'none' : s >= 70 ? 'good' : s >= 40 ? 'mid' : 'bad');
 const f1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
-const OP = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
-const unitOf = (it) => (it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${tr(it.unit)}`);
-const fmtVal = (it) => (it.value == null ? '—' : `${f1.format(it.value)}${unitOf(it)}`);
-const fmtBench = (it) => `${OP[it.benchmark.op]} ${it.benchmark.value}${unitOf(it)}`;
-const gradeText = (g) => t(g == null ? 'sc.gradeNone' : g === 1 ? 'sc.gradeFull' : g === 0.5 ? 'sc.gradeHalf' : 'sc.gradeZero');
+const OP: Record<Benchmark['op'], string> = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
+const unitOf = (it: ScoreItem) => (it.unit === '%' ? '%' : it.unit === '元' ? '' : ` ${tr(it.unit)}`);
+const fmtVal = (it: ScoreItem) => (it.value == null ? '—' : `${f1.format(it.value)}${unitOf(it)}`);
+const fmtBench = (it: ScoreItem) => `${OP[it.benchmark.op]} ${it.benchmark.value}${unitOf(it)}`;
+const gradeText = (g: number | null) => t(g == null ? 'sc.gradeNone' : g === 1 ? 'sc.gradeFull' : g === 0.5 ? 'sc.gradeHalf' : 'sc.gradeZero');
 // the basis line from what the flows cover (the stored note is Chinese only):
 // one quarter ×4 like the table, a full year, or - a quarterly filing scored
 // alone because a neighbouring filing is not saved - its year-to-date column

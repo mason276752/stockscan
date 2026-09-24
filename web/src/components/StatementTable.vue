@@ -1,32 +1,86 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import type { PropType } from 'vue';
 import { t, tr } from '../i18n';
+import type { Concept, Reconciliation } from '../../../server/lib/types.ts';
+
+/**
+ * A statement as this table reads it: the filing's own, the quarterly view's
+ * or the current-period one, simplified or not. Only what it renders is
+ * named - the three shapes differ in what else they carry.
+ */
+interface TableCell {
+  value: number | string | null;
+  raw?: string | null;
+  unit?: string | null;
+  nil?: boolean;
+  /** derived by subtracting one period from another, only approximately right */
+  approx?: boolean;
+  /** the members this total was rolled up from (the simplified view) */
+  rolled?: string[];
+}
+
+interface TableColumn {
+  id: string;
+  label?: string | null;
+  period: { instant?: string | null; start?: string | null; end?: string | null };
+  dimensions: Record<Concept, Concept>;
+  derived?: boolean;
+  synthetic?: boolean;
+  merged?: boolean;
+  opening?: string | null;
+  closing?: string | null;
+}
+
+interface TableRow {
+  concept: Concept;
+  label: string | null;
+  labelZh?: string | null;
+  descriptionZh?: string | null;
+  labelStandard?: string | null;
+  documentation?: string | null;
+  preferredLabel: string | null;
+  negated: boolean;
+  depth: number;
+  abstract: boolean;
+  values: Record<string, TableCell>;
+}
+
+interface TableStatement {
+  title: string;
+  axes: Record<Concept, Concept[]>;
+  columns: TableColumn[];
+  lineItems: TableRow[];
+  hiddenGroups?: Record<string, string>[];
+  reconciliation?: Record<string, Reconciliation>;
+  [key: string]: unknown;
+}
 
 const props = defineProps({
-  statement: { type: Object, required: true },
+  statement: { type: Object as PropType<TableStatement>, required: true },
   divisor: { type: Number, default: 1 }, // 1, 1e3, 1e6
   applyNegation: { type: Boolean, default: false },
   showConcept: { type: Boolean, default: false },
   lang: { type: String, default: 'zh' }, // 'zh' | 'en'
 });
 
-function displayLabel(item) {
+function displayLabel(item: TableRow) {
   if (props.lang === 'zh' && item.labelZh) return item.labelZh;
   return item.label || item.concept;
 }
 
 // Hover tooltip: English label, concept name and the taxonomy definition.
-const tip = ref(null); // { item, x, y }
-function showTip(item, e) {
+const tip = ref<{ item: TableRow; x: number; y: number } | null>(null);
+function showTip(item: TableRow, e: MouseEvent) {
   tip.value = { item, x: e.clientX, y: e.clientY };
 }
-function moveTip(e) {
+function moveTip(e: MouseEvent) {
   if (tip.value) tip.value = { ...tip.value, x: e.clientX, y: e.clientY };
 }
 function hideTip() {
   tip.value = null;
 }
-const tipStyle = computed(() => {
+const tipStyle = computed((): Record<string, string> => {
   if (!tip.value) return {};
   const w = 420;
   const x = Math.min(tip.value.x + 16, window.innerWidth - w - 12);
@@ -38,10 +92,10 @@ const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const fmtSmall = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 });
 const fmtPerShare = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
-function humanize(member) {
+function humanize(member: string) {
   return member
     .split(':')
-    .pop()
+    .pop()!
     .replace(/Member$/, '')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
@@ -64,21 +118,21 @@ const columns = computed(() =>
 );
 
 // Only monetary and share counts get scaled; per-share amounts and ratios are shown as-is.
-function scalable(unit) {
+function scalable(unit: string | null | undefined) {
   return unit && !unit.includes('/') && unit !== 'pure';
 }
 
-function display(cell) {
+function display(cell: TableCell | undefined): { text: string; neg: boolean } {
   if (!cell) return { text: '', neg: false };
   if (cell.nil) return { text: '—', neg: false };
-  if (typeof cell.value !== 'number') return { text: cell.value ?? cell.raw ?? '', neg: false };
+  if (typeof cell.value !== 'number') return { text: String(cell.value ?? cell.raw ?? ''), neg: false };
   let v = cell.value;
   if (scalable(cell.unit)) v = v / props.divisor;
   const f = cell.unit?.includes('/') ? fmtPerShare : Math.abs(v) < 1000 && !Number.isInteger(v) ? fmtSmall : fmt;
   return { text: f.format(v), neg: v < 0 };
 }
 
-function shown(item, cell) {
+function shown(item: TableRow, cell: TableCell | undefined) {
   let d = display(cell);
   if (props.applyNegation && item.negated && typeof cell?.value === 'number' && !cell.nil) {
     const v = -(scalable(cell.unit) ? cell.value / props.divisor : cell.value);
@@ -89,8 +143,8 @@ function shown(item, cell) {
 }
 
 // simplified view: which member columns a rolled-up total came from
-function rolledTitle(cell) {
-  return cell?.rolled ? t('st.rolledTitle', { list: cell.rolled.join(' + ') }) : null;
+function rolledTitle(cell: TableCell | undefined): string | undefined {
+  return cell?.rolled ? t('st.rolledTitle', { list: cell.rolled.join(' + ') }) : undefined;
 }
 const hiddenLabel = computed(() => (props.statement.hiddenGroups || []).map((d) => Object.values(d).map(humanize).join(' / ')).join(t('sep')));
 
@@ -98,17 +152,17 @@ const recUnit = computed(() => {
   const first = Object.values(props.statement.reconciliation || {})[0];
   return first?.unit || '';
 });
-function money(v) {
+function money(v: number | null | undefined) {
   if (v == null) return '—';
   return fmt.format(v / props.divisor);
 }
 
-function rowUnit(item) {
+function rowUnit(item: TableRow) {
   const first = Object.values(item.values)[0];
   return first?.unit || '';
 }
 
-function rowClass(item) {
+function rowClass(item: TableRow): Record<string, boolean> {
   return {
     abstract: item.abstract,
     total: /total/i.test(item.preferredLabel || ''),

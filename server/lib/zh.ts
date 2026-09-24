@@ -5,10 +5,11 @@
 
 import { CUSTOM, DESCRIPTIONS, MORE } from './zh-more.ts';
 import { BATCH3, BATCH3B, BATCH3C, BATCH3D, BATCH3E, EXT_LOCAL as EXT_A, EXT_LOCAL2, EXT_LOCAL3 } from './zh-batch3.ts';
+import type { Concept, ScrapeResult, Statement, ZhLabel, ZhTable } from './types.ts';
 
-const EXT_LOCAL = { ...EXT_A, ...EXT_LOCAL2, ...EXT_LOCAL3 };
+const EXT_LOCAL: ZhTable = { ...EXT_A, ...EXT_LOCAL2, ...EXT_LOCAL3 };
 
-const T = {
+const T: ZhTable = {
   // ---------- 報表標題 / 段落 ----------
   'us-gaap:StatementOfFinancialPositionAbstract': ['資產負債表'],
   'us-gaap:IncomeStatementAbstract': ['損益表'],
@@ -606,9 +607,9 @@ const T = {
   'ifrs-full:IncreaseDecreaseInCashAndCashEquivalents': ['本期現金及約當現金增加（減少）'],
 };
 
-const ALL = { ...T, ...MORE, ...CUSTOM, ...BATCH3, ...BATCH3B, ...BATCH3C, ...BATCH3D, ...BATCH3E };
+const ALL: ZhTable = { ...T, ...MORE, ...CUSTOM, ...BATCH3, ...BATCH3B, ...BATCH3C, ...BATCH3D, ...BATCH3E };
 
-function lookup(concept) {
+function lookup(concept: Concept): ZhLabel {
   const hit = ALL[concept];
   if (hit) return { labelZh: hit[0], descriptionZh: hit[1] || DESCRIPTIONS[concept] || null };
   // a company's own extension element that reuses a standard name (abc:OperatingLeaseLiabilityCurrent)
@@ -631,7 +632,7 @@ function lookup(concept) {
 }
 
 // case-, plural-, hyphen- and suffix-digit-insensitive form of a local name
-function looseKey(local) {
+function looseKey(local: string): string {
   const words = local
     .replace(/^Ifrs(?=[A-Z])/, '')
     .replace(/\d+$/, '')
@@ -643,7 +644,10 @@ function looseKey(local) {
   // "noncash" vs "non cash", "rightofuse" vs "right of use", "prefunded" vs "pre funded"
   return words.join('').replace(/^(.*)abstract$/, '$1');
 }
-const LOOSE = {};
+/** A loose-key entry: like a dictionary one, but the note may be filled in
+ *  from DESCRIPTIONS and so explicitly null. */
+type LooseEntry = readonly [string, (string | null)?];
+const LOOSE: Record<string, LooseEntry> = {};
 for (const [concept, v] of Object.entries(ALL)) {
   if (!/^(us-gaap|ifrs-full):/.test(concept)) continue;
   const k = looseKey(concept.slice(concept.indexOf(':') + 1));
@@ -651,16 +655,16 @@ for (const [concept, v] of Object.entries(ALL)) {
 }
 for (const [local, v] of Object.entries(EXT_LOCAL)) LOOSE[looseKey(local)] ??= v;
 
-export function zhFor(concept) {
+export function zhFor(concept: Concept): ZhLabel {
   return lookup(concept);
 }
 
 // Fill in Chinese names for a saved result whose line items predate the
 // current dictionary (labels are stored with the parsed filing, so new
 // translations would otherwise only reach freshly scraped filings).
-export function applyZh(result) {
-  const seen = new Set();
-  const lists = [...(result.allStatements || []), ...Object.values(result.statements || {})].filter(Boolean);
+export function applyZh(result: ScrapeResult): ScrapeResult {
+  const seen = new Set<Statement>();
+  const lists = [...(result.allStatements || []), ...Object.values(result.statements || {})].filter((x): x is Statement => !!x);
   for (const stmt of lists) {
     if (seen.has(stmt)) continue;
     seen.add(stmt);

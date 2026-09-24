@@ -26,10 +26,42 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+import type { Universe } from '../lib/universe.ts';
+import type { MarketSnapshot } from '../lib/market.ts';
+import type { TickerRow } from '../lib/edgar.ts';
+import type { Company, FilingHeader, IsoDate, Score } from '../lib/types.ts';
+import type { Etf } from '../lib/etf.ts';
+
+/** index/etfs.json: the ETF list plus which holdings files were written. */
+interface EtfIndex {
+  updatedAt: string | null;
+  popular: readonly string[];
+  etfs: Etf[];
+  holdings: string[];
+}
+
+/** A filing as the static site's companies.json lists it. */
+interface StaticFiling {
+  accession: string;
+  form: string;
+  filingDate: IsoDate | null;
+  reportDate: IsoDate | null;
+  primaryDocument: string | null;
+  fiscalYear: number | null;
+  fiscalPeriod: string | null;
+  /** an amendment with no statements in it: the original still stands */
+  thin?: 1;
+  /** not carried by this site (over the budget): read it from the data ref */
+  off?: 1;
+  /** spelled out only when the store's naming does not derive it */
+  file?: string;
+  scoreFile?: string | true;
+}
+
 const args = process.argv.slice(2);
-const opt = (name, dflt) => {
+const opt = (name: string, dflt: string) => {
   const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : dflt;
+  return i >= 0 ? args[i + 1]! : dflt;
 };
 const OUT = path.resolve(REPO, opt('--out', path.join('web', 'dist-static')));
 const LINK = args.includes('--link');
@@ -46,13 +78,13 @@ const NATIVE = (() => {
       console.log('build-static: building tools/stockscan-static (cargo build --release) …');
       execFileSync('cargo', ['build', '--release', '--quiet'], { cwd: tool, stdio: 'inherit' });
     } catch (err) {
-      console.warn(`build-static: no native helper (${err.message.split('\n')[0]}) - the slower Node path is used`);
+      console.warn(`build-static: no native helper (${(err as Error).message.split('\n')[0]}) - the slower Node path is used`);
       return null;
     }
   }
   return fs.existsSync(bin) ? bin : null;
 })();
-const native = (...cmd) => execFileSync(NATIVE, cmd, { stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 1 << 30 });
+const native = (...cmd: string[]) => execFileSync(NATIVE!, cmd, { stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 1 << 30 });
 console.log(`build-static: ${NATIVE ? `native helper ${path.relative(REPO, NATIVE)}` : 'pure Node'}`);
 
 // ---- 1. the app ----
@@ -70,7 +102,7 @@ const { PAGES_LIMIT_MB, publishBudget, publishMb } = await import('../lib/publis
 const { lookupFiler, sicInfo } = await import('../lib/universe.ts');
 const { POPULAR_ETFS } = await import('../lib/etf.ts');
 
-function copyTree(from, to) {
+function copyTree(from: string, to: string) {
   if (NATIVE) return native('copy', from, to, ...(LINK ? ['--link'] : []));
   fs.rmSync(to, { recursive: true, force: true });
   fs.cpSync(from, to, { recursive: true, filter: (src) => !src.endsWith('.tmp'), ...(LINK ? { mode: fs.constants.COPYFILE_FICLONE } : {}) });
@@ -141,15 +173,15 @@ console.log(`build-static: copying data/store (the newest ${(budget.bytes / 1048
 fs.rmSync(storeOut, { recursive: true, force: true });
 fs.mkdirSync(storeOut, { recursive: true });
 const madeDirs = new Set();
-const copyOne = (rel) => {
+const copyOne = (rel: string) => {
   const to = path.join(storeOut, rel);
   const dir = path.dirname(to);
   if (!madeDirs.has(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     madeDirs.add(dir);
   }
-  if (LINK) fs.linkSync(path.join(store.file, rel), to);
-  else fs.copyFileSync(path.join(store.file, rel), to, fs.constants.COPYFILE_FICLONE);
+  if (LINK) fs.linkSync(path.join(store.file!, rel), to);
+  else fs.copyFileSync(path.join(store.file!, rel), to, fs.constants.COPYFILE_FICLONE);
 };
 const published = budget.accessions; // accessions whose statements are on the site
 const publishCount = { filings: 0, scores: 0 };
@@ -176,9 +208,9 @@ fs.mkdirSync(idx, { recursive: true });
 // ETF lists rarely do). meta.json (plain, always revalidated) maps each
 // index to its current file. With the native helper the raw JSON is written
 // now and all of them are compressed together (in parallel) at the end.
-const toCompress = [];
-const files = {}; // index -> file name of this build
-const write = (name, obj, { compress = true } = {}) => {
+const toCompress: string[] = [];
+const files: Record<string, string> = {}; // index -> file name of this build
+const write = (name: string, obj: unknown, { compress = true }: { compress?: boolean } = {}) => {
   const json = Buffer.from(JSON.stringify(obj));
   if (!compress) {
     fs.writeFileSync(path.join(idx, name), json);
@@ -204,10 +236,10 @@ const write = (name, obj, { compress = true } = {}) => {
 // reading and inflating each file on demand
 if (NATIVE) {
   const t = Date.now();
-  const decoded = JSON.parse(native('decode', store.file, path.join(REPO, 'server', 'data', 'zdict')).toString('utf8'));
+  const decoded = JSON.parse(native('decode', store.file!, path.join(REPO, 'server', 'data', 'zdict')).toString('utf8')) as { filings: Record<string, FilingHeader>; scores: Record<string, Score> };
   const headers = decoded.filings;
   const scoreJson = decoded.scores;
-  store.filingHeader = (accession) => (store.hasFiling(accession) ? headers[accession] ?? null : null);
+  store.filingHeader = (accession: string) => (store.hasFiling(accession) ? (headers[accession] ?? null) : null);
   const scoreVersion = new Map(store.allScores().map((s) => [s.accession, s.version]));
   store.scoreJson = (accession) => (scoreVersion.has(accession) ? scoreJson[accession] ?? null : null);
   console.log(`build-static: decoded ${Object.keys(headers).length} headers, ${Object.keys(scoreJson).length} scores in ${((Date.now() - t) / 1000).toFixed(1)} s`);
@@ -221,14 +253,14 @@ try {
   const { SecClient } = await import('../lib/secClient.ts');
   client = new SecClient();
 } catch (err) {
-  console.warn(`build-static: ${err.message} - using cached data only`);
+  console.warn(`build-static: ${(err as Error).message} - using cached data only`);
 }
 const { tickerTable, savedTickers } = await import('../lib/edgar.ts');
 const { getUniverse } = await import('../lib/universe.ts');
 const { marketSnapshot } = await import('../lib/market.ts');
-let tickers = savedTickers()?.value || []; // the cache, else data/store/tickers.json (in git)
-let universe = store.getDoc('universe.json')?.value || { updatedAt: null, datasets: [], companies: [] };
-let market = store.getKV('market:snapshot')?.value || null;
+let tickers: TickerRow[] = savedTickers()?.value || []; // the cache, else data/store/tickers.json (in git)
+let universe: Universe = store.getDoc<Universe>('universe.json')?.value || { updatedAt: null as unknown as string, datasets: [], companies: [] };
+let market: MarketSnapshot | null = store.getKV<MarketSnapshot>('market:snapshot')?.value || null;
 if (client) {
   try {
     tickers = await tickerTable(client);
@@ -236,14 +268,14 @@ if (client) {
     universe = await getUniverse(client);
     console.log(`build-static: universe ${universe.companies.length} filers`);
   } catch (err) {
-    console.warn(`build-static: SEC data: ${err.message}`);
+    console.warn(`build-static: SEC data: ${(err as Error).message}`);
   }
 }
 try {
   market = (await marketSnapshot({ wait: true })) || market;
   console.log(`build-static: market snapshot ${market?.count ?? 0} tickers`);
 } catch (err) {
-  console.warn(`build-static: market snapshot: ${err.message}`);
+  console.warn(`build-static: market snapshot: ${(err as Error).message}`);
 }
 // without these the site is broken (no search, no filing by ticker, empty
 // browse / screener): fail the build rather than publish it over a good one
@@ -252,25 +284,25 @@ if (!tickers.length || !universe.companies.length) {
   process.exit(1);
 }
 const byCik = new Map(universe.companies.map((c) => [c.cik, c]));
-const tickersByCik = new Map();
-for (const t of tickers) (tickersByCik.get(t.cik) || tickersByCik.set(t.cik, []).get(t.cik)).push(t.ticker);
+const tickersByCik = new Map<number, string[]>();
+for (const t of tickers) (tickersByCik.get(t.cik) || tickersByCik.set(t.cik, []).get(t.cik)!).push(t.ticker);
 
 // companies: every company with a saved filing, with its saved filings (the
 // list the filing picker shows) - header from the cached EDGAR submissions
 // when we have them, else from the ticker table / universe
 console.log('build-static: reading filing headers …');
-const filingsByCik = new Map();
-for (const f of store.allFilings()) (filingsByCik.get(f.cik) || filingsByCik.set(f.cik, []).get(f.cik)).push(f);
+const filingsByCik = new Map<number, ReturnType<typeof store.allFilings>>();
+for (const f of store.allFilings()) (filingsByCik.get(f.cik) || filingsByCik.set(f.cik, []).get(f.cik)!).push(f);
 const scoreFiles = new Map(store.allScores().filter((s) => s.version === SCORE_VERSION).map((s) => [s.accession, s.file]));
 const allowed = new Set(DEFAULT_FORMS.map((f) => f.toUpperCase()));
-const companies = {};
+const companies: Record<number, unknown> = {};
 let headers = 0;
 for (const [cik, list] of filingsByCik) {
-  const sub = store.getDoc(`companies/${String(cik).padStart(10, '0')}.json`)?.value || null;
+  const sub = store.getDoc<Company>(`companies/${String(cik).padStart(10, '0')}.json`)?.value || null;
   if (sub) headers++;
   const u = byCik.get(cik);
   const fye = sub?.fiscalYearEnd || null;
-  const filings = [];
+  const filings: StaticFiling[] = [];
   for (const rec of list) {
     const h = store.filingHeader(rec.accession);
     if (!h) continue;
@@ -281,10 +313,10 @@ for (const [cik, list] of filingsByCik) {
     // (document / viewer URLs are derived in the browser from primaryDocument;
     // so are the store paths when they follow the naming - file / scoreFile
     // are only spelled out when they do not, scoreFile: true when they do)
-    const f = { accession: rec.accession, form, filingDate: h.filingDate || null, reportDate, primaryDocument: h.primaryDocument || null, ...label };
+    const f: StaticFiling = { accession: rec.accession, form, filingDate: h.filingDate || null, reportDate, primaryDocument: h.primaryDocument || null, ...label };
     // an amendment the parser found nothing to score in is the Part III-only
     // kind: it corrects nothing, so the browser keeps the original for that
-    // period (filings.js collapseAmendments)
+    // period (filings.ts collapseAmendments)
     if (/\/A$/i.test(form) && !(Number(store.getScore(rec.accession, SCORE_VERSION)?.coverage) > 0)) f.thin = 1;
     // not on this site (over the size budget): read it from the data ref instead
     if (!published.has(rec.accession)) f.off = 1;
@@ -294,7 +326,7 @@ for (const [cik, list] of filingsByCik) {
     filings.push(f);
   }
   if (!filings.length) continue;
-  filings.sort((a, b) => (a.filingDate < b.filingDate ? 1 : a.filingDate > b.filingDate ? -1 : 0));
+  filings.sort((a, b) => (a.filingDate! < b.filingDate! ? 1 : a.filingDate! > b.filingDate! ? -1 : 0));
   companies[cik] = {
     cik,
     name: sub?.name || u?.name || tickers.find((t) => t.cik === cik)?.name || String(cik),
@@ -333,7 +365,7 @@ write('screen-history.json', screenCols.history);
 // once a date is set. STOCKSCAN_ASOF_YEARS caps how many years are
 // published at all - beyond that the screener's dates stop. The default
 // covers everything there is to cover: SEC's quarterly datasets start at
-// 2009q1 (ingest-dera.mjs), and a year of them is a couple of MB zstd'd
+// 2009q1 (ingest-dera.mts), and a year of them is a couple of MB zstd'd
 // against the 1 GB the site may take.
 const ASOF_YEARS = Math.max(1, Number(process.env.STOCKSCAN_ASOF_YEARS) || 20);
 const screened = new Set(screenerRows.map((r) => r.cik));
@@ -364,7 +396,7 @@ write('tvsymbols.json', Object.fromEntries(Object.entries(market?.byTicker || {}
 // from EDGAR, which is where a build spends minutes when it does). The
 // list is one index, each ETF's holdings its own (etf-VOO.json): the browse
 // page loads the one it shows
-let etfs = { updatedAt: null, popular: POPULAR_ETFS, etfs: [], holdings: [] };
+const etfs: EtfIndex = { updatedAt: null, popular: POPULAR_ETFS, etfs: [], holdings: [] };
 try {
   if (!client) throw new Error('no SEC client');
   const { etfList, etfHoldings } = await import('../lib/etf.ts');
@@ -380,15 +412,15 @@ try {
       const ms = Date.now() - t0;
       if (ms > 1000) console.log(`build-static: ETF ${t} holdings (N-PORT from EDGAR) ${(ms / 1000).toFixed(1)} s`);
     } catch (err) {
-      console.warn(`build-static: ETF ${t}: ${err.message}`);
+      console.warn(`build-static: ETF ${t}: ${(err as Error).message}`);
     }
   }
 } catch (err) {
-  console.warn(`build-static: ETF lists skipped (${err.message})`);
+  console.warn(`build-static: ETF lists skipped (${(err as Error).message})`);
 }
 write('etfs.json', etfs);
 
-write('documentation.json', JSON.parse(fs.readFileSync(path.join(store.file, 'documentation.json'), 'utf8')));
+write('documentation.json', JSON.parse(fs.readFileSync(path.join(store.file!, 'documentation.json'), 'utf8')));
 write(
   'meta.json',
   {
@@ -421,9 +453,9 @@ fs.writeFileSync(path.join(OUT, '.nojekyll'), '');
 // filings are the part that grows (the crawler digs backwards for ever), so
 // that is the one to cut - STOCKSCAN_PUBLISH_YEARS, fewer years.
 const PAGES_LIMIT = PAGES_LIMIT_MB;
-const mbOf = (dir) => {
+const mbOf = (dir: string) => {
   let n = 0;
-  const walk = (d) => {
+  const walk = (d: string) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       if (e.isDirectory()) walk(path.join(d, e.name));
       else n += fs.statSync(path.join(d, e.name)).size;
@@ -432,7 +464,7 @@ const mbOf = (dir) => {
   if (fs.existsSync(dir)) walk(dir);
   return n / 1048576;
 };
-const parts = [
+const parts: [string, number][] = [
   ['財報 filings', mbOf(path.join(storeOut, 'filings'))],
   ['評分 scores', mbOf(path.join(storeOut, 'scores'))],
   ['日線 bars', mbOf(path.join(dataOut, 'bars'))],

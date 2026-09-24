@@ -9,12 +9,22 @@
 // Dimensional columns (equity components, product lines) are kept per group.
 
 import { dimKey, findColumn, months, near } from './quarters.ts';
+import type {
+  Concept, CurrentCell, CurrentColumn, CurrentLineItem, CurrentNote, CurrentStatement, FilingRef, IsoDate,
+  LineItem, PrimaryType, Reconciliation, ScrapeResult, Statement,
+} from './types.ts';
 
-const normLabel = (l) => (l || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/** The previous quarter's filing, when it is available to subtract. */
+export interface PreviousFiling {
+  data: ScrapeResult;
+  filing: FilingRef;
+}
+
+const normLabel = (l: string | null | undefined) => (l || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 // Matching row in another statement; when a column id is given, prefer the
 // row (of possibly several with the same concept) that has a value there.
-function rowIn(stmt, row, colId = null) {
+function rowIn(stmt: Statement, row: { concept: Concept; label: string | null }, colId: string | null = null): LineItem | null {
   const rows = stmt.lineItems.filter((li) => !li.abstract);
   const same = rows.filter((li) => li.concept === row.concept);
   if (colId) {
@@ -24,19 +34,19 @@ function rowIn(stmt, row, colId = null) {
   return same[0] || rows.find((li) => normLabel(li.label) === normLabel(row.label)) || null;
 }
 
-const isStartRow = (li) => /periodStart/i.test(li.preferredLabel || '');
-const isEndRow = (li) => /periodEnd/i.test(li.preferredLabel || '');
+const isStartRow = (li: { preferredLabel: string | null }) => /periodStart/i.test(li.preferredLabel || '');
+const isEndRow = (li: { preferredLabel: string | null }) => /periodEnd/i.test(li.preferredLabel || '');
 
-function numeric(cell) {
+function numeric(cell: CurrentCell | undefined): number | null {
   return cell && typeof cell.value === 'number' && !cell.nil ? cell.value : null;
 }
 
-function prevDay(d) {
+function prevDay(d: IsoDate): IsoDate {
   const t = new Date(`${d}T00:00:00Z`);
   t.setUTCDate(t.getUTCDate() - 1);
   return t.toISOString().slice(0, 10);
 }
-function nextDay(d) {
+function nextDay(d: IsoDate): IsoDate {
   const t = new Date(`${d}T00:00:00Z`);
   t.setUTCDate(t.getUTCDate() + 1);
   return t.toISOString().slice(0, 10);
@@ -44,8 +54,8 @@ function nextDay(d) {
 
 // The longest duration column ending at `end` for a dimension group: the
 // year-to-date column, never the shared three-month net-income context.
-function longestEnding(stmt, dims, end) {
-  let best = null;
+function longestEnding(stmt: Statement | null | undefined, dims: string, end: IsoDate | null): CurrentColumn | null {
+  let best: CurrentColumn | null = null;
   for (const c of stmt?.columns || []) {
     if (c.period.instant || dimKey(c.dimensions) !== dims || !near(c.period.end, end)) continue;
     if (!best || months(c.period.start, c.period.end) > months(best.period.start, best.period.end)) best = c;
@@ -53,8 +63,8 @@ function longestEnding(stmt, dims, end) {
   return best;
 }
 
-function groupsOf(stmt) {
-  const seen = new Map();
+function groupsOf(stmt: Statement): [string, Record<Concept, Concept>][] {
+  const seen = new Map<string, Record<Concept, Concept>>();
   for (const c of stmt.columns) {
     const k = dimKey(c.dimensions);
     if (!seen.has(k)) seen.set(k, c.dimensions);
@@ -62,25 +72,25 @@ function groupsOf(stmt) {
   return [...seen.entries()];
 }
 
-function finish(stmt, columns, extra = {}) {
+function finish(stmt: Statement, columns: CurrentColumn[], extra: Record<string, unknown> = {}): CurrentStatement {
   const keep = new Set(columns.map((c) => c.id));
   const lineItems = stmt.lineItems
     .map((li) => ({ ...li, values: Object.fromEntries(Object.entries(li.values).filter(([id]) => keep.has(id))) }))
     .filter((li) => li.abstract || Object.keys(li.values).length);
-  return { ...stmt, columns, lineItems, currentOnly: true, ...extra };
+  return { ...stmt, columns, lineItems, currentOnly: true as const, ...extra };
 }
 
-function countOf(stmt, colId) {
+function countOf(stmt: Statement, colId: string): number {
   return stmt.lineItems.filter((li) => !li.abstract && li.values[colId] != null).length;
 }
 
 // Direct selection: columns that belong to the filing's own period.
-function directColumns(stmt, end, len, isInstantStatement) {
-  const out = [];
+function directColumns(stmt: Statement, end: IsoDate | null, len: number, isInstantStatement: boolean): CurrentColumn[] {
+  const out: CurrentColumn[] = [];
   for (const c of stmt.columns) {
     if (c.period.instant) {
       const closing = near(c.period.instant, end);
-      const opening = !isInstantStatement && c.period.instant < end && months(c.period.instant, end) === len;
+      const opening = !isInstantStatement && c.period.instant < end! && months(c.period.instant, end) === len;
       if (closing) out.push({ ...c, label: isInstantStatement ? '本期末' : '期末' });
       else if (opening) out.push({ ...c, label: '期初' });
     } else if (near(c.period.end, end) && months(c.period.start, c.period.end) === len) {
@@ -90,8 +100,8 @@ function directColumns(stmt, end, len, isInstantStatement) {
   return out;
 }
 
-function orderColumns(columns) {
-  const rank = (c) => (c.label === '期初' ? 0 : c.label === '本期' ? 1 : 2);
+function orderColumns(columns: readonly CurrentColumn[]): CurrentColumn[] {
+  const rank = (c: CurrentColumn) => (c.label === '期初' ? 0 : c.label === '本期' ? 1 : 2);
   return columns
     .map((c, i) => ({ c, i }))
     .sort((a, b) => {
@@ -106,9 +116,9 @@ function orderColumns(columns) {
 }
 
 // Quarter = this filing's YTD − the previous 10-Q's YTD, per dimension group.
-function deriveFromYtd(stmt, prevStmt, end, prevEnd, accession, prevAccession) {
-  const columns = [];
-  const values = {}; // lineItem index -> { colId: cell }
+function deriveFromYtd(stmt: Statement, prevStmt: Statement, end: IsoDate | null, prevEnd: IsoDate, accession: string, prevAccession: string): CurrentStatement {
+  const columns: CurrentColumn[] = [];
+  const values: Record<number, Record<string, CurrentCell>> = {}; // lineItem index -> { colId: cell }
   for (const [dims, dimensions] of groupsOf(stmt)) {
     const sfx = dims ? `|${dims}` : '';
     const cur = longestEnding(stmt, dims, end);
@@ -117,7 +127,7 @@ function deriveFromYtd(stmt, prevStmt, end, prevEnd, accession, prevAccession) {
     const opening = findColumn(prevStmt, { dims, instant: prevEnd });
     if (opening) columns.push({ id: `open${sfx}`, label: '期初', period: { instant: prevEnd }, dimensions, derived: false, source: prevAccession });
     if (cur && prev) {
-      columns.push({ id: `cur${sfx}`, label: '本期', period: { start: nextDay(prevEnd), end }, dimensions, derived: true, source: [accession, prevAccession] });
+      columns.push({ id: `cur${sfx}`, label: '本期', period: { start: nextDay(prevEnd), end: end! }, dimensions, derived: true, source: [accession, prevAccession] });
     }
     if (closing) columns.push({ ...closing, label: '期末' });
 
@@ -136,24 +146,24 @@ function deriveFromYtd(stmt, prevStmt, end, prevEnd, accession, prevAccession) {
         const unit = li.values[cur.id]?.unit;
         if (a != null && b != null) {
           const approx = unit && unit.includes('/');
-          v[`cur${sfx}`] = { value: a - b, unit, derived: true, ...(approx ? { approx: true } : {}) };
+          v[`cur${sfx}`] = { value: a - b, raw: null, unit: unit ?? null, derived: true, ...(approx ? { approx: true as const } : {}) };
         } else if (a != null && prevRow == null && prev) {
           // line item did not exist last quarter: treat previous YTD as 0
-          v[`cur${sfx}`] = { value: a, unit, derived: true };
+          v[`cur${sfx}`] = { value: a, raw: null, unit: unit ?? null, derived: true };
         }
       }
       if (closing && li.values[closing.id] && !isStartRow(li)) v[closing.id] = li.values[closing.id];
     });
   }
   const lineItems = stmt.lineItems.map((li, idx) => ({ ...li, values: values[idx] || {} })).filter((li) => li.abstract || Object.keys(li.values).length);
-  return { ...stmt, columns: orderColumns(columns), lineItems, currentOnly: true, derivedFromYtd: true, sources: [accession, prevAccession] };
+  return { ...stmt, columns: orderColumns(columns), lineItems, currentOnly: true as const, derivedFromYtd: true as const, sources: [accession, prevAccession] };
 }
 
 // Collapse 期初 / 本期 / 期末 of each dimension group into one column, the way
 // the printed statement reads: opening-balance rows take the opening instant,
 // flow rows the period amount, closing-balance rows the closing instant.
-function mergePeriodColumns(stmt) {
-  const groups = new Map(); // dims -> { open, cur, close }
+function mergePeriodColumns(stmt: CurrentStatement): CurrentStatement {
+  const groups = new Map<string, { dimensions: Record<Concept, Concept>; open?: CurrentColumn; cur?: CurrentColumn; close?: CurrentColumn }>(); // dims -> { open, cur, close }
   for (const c of stmt.columns) {
     const k = dimKey(c.dimensions);
     const g = groups.get(k) || { dimensions: c.dimensions };
@@ -162,17 +172,17 @@ function mergePeriodColumns(stmt) {
     else g.cur = c;
     groups.set(k, g);
   }
-  const columns = [];
-  const pick = {}; // merged id -> [ordered source ids]
+  const columns: CurrentColumn[] = [];
+  const pick: Record<string, string[]> = {}; // merged id -> [ordered source ids]
   for (const [k, g] of groups) {
-    const base = g.cur || g.close || g.open;
+    const base = g.cur || g.close || g.open!;
     const id = `p${k ? `|${k}` : ''}`;
-    const start = g.cur?.period.start || (g.open ? nextDay(g.open.period.instant) : null);
+    const start = g.cur?.period.start || (g.open ? nextDay(g.open.period.instant!) : null);
     const end = g.cur?.period.end || g.close?.period.instant || g.open?.period.instant;
     columns.push({
       id,
       label: g.cur?.label || '本期',
-      period: start ? { start, end } : { instant: end },
+      period: start ? { start, end: end! } : { instant: end! },
       dimensions: g.dimensions,
       derived: !!g.cur?.derived,
       merged: true,
@@ -180,13 +190,13 @@ function mergePeriodColumns(stmt) {
       closing: g.close?.period.instant || null,
       source: base.source,
     });
-    pick[id] = [g.cur, g.close, g.open].filter(Boolean).map((c) => c.id);
+    pick[id] = [g.cur, g.close, g.open].filter((c): c is CurrentColumn => !!c).map((c) => c.id);
   }
   const lineItems = stmt.lineItems.map((li) => {
-    const values = {};
+    const values: Record<string, CurrentCell> = {};
     for (const [id, srcs] of Object.entries(pick)) {
       const src = srcs.find((sid) => li.values[sid] != null);
-      if (src) values[id] = li.values[src];
+      if (src) values[id] = li.values[src]!;
     }
     return { ...li, values };
   });
@@ -197,57 +207,57 @@ const NET_CHANGE = /(CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalen
 
 // Present the roll-forward top to bottom - opening balance first, movements,
 // closing balance last - and check that opening + movements = closing.
-function rollForward(stmt) {
+function rollForward(stmt: CurrentStatement): CurrentStatement {
   const items = stmt.lineItems;
   // opening rows go right under the statement heading (cash-flow statements
   // tag them at the bottom); closing rows stay where the filer put them
   const opening = items.filter((li) => isStartRow(li));
   const rest = items.filter((li) => !isStartRow(li));
   let cut = 0;
-  while (cut < rest.length && rest[cut].abstract && rest[cut].depth === 0) cut++;
+  while (cut < rest.length && rest[cut]!.abstract && rest[cut]!.depth === 0) cut++;
   const lineItems = [...rest.slice(0, cut), ...opening, ...rest.slice(cut)];
 
   // Filers often tag a movement only in a finer breakdown (e.g. "stock issued"
   // per share class, dividends only under Retained Earnings). When a row has
   // no value in a column, sum the columns that add exactly one more axis.
-  const subColumns = (col) => {
+  const subColumns = (col: CurrentColumn) => {
     const base = Object.entries(col.dimensions);
     return stmt.columns.filter((c) => {
       const d = Object.entries(c.dimensions);
       return d.length === base.length + 1 && base.every(([k, v]) => c.dimensions[k] === v);
     });
   };
-  const valueOrRollup = (li, col) => {
+  const valueOrRollup = (li: CurrentLineItem, col: CurrentColumn): { value: number; unit: string | null | undefined; rolled: boolean } | null => {
     const own = li.values[col.id];
     if (own && typeof own.value === 'number') return { value: own.value, unit: own.unit, rolled: false };
-    const byAxis = new Map();
+    const byAxis = new Map<string, { value: number; unit: string | null | undefined }>();
     for (const c of subColumns(col)) {
       const cell = li.values[c.id];
       if (!cell || typeof cell.value !== 'number') continue;
-      const axis = Object.keys(c.dimensions).find((k) => !(k in col.dimensions));
+      const axis = Object.keys(c.dimensions).find((k) => !(k in col.dimensions))!;
       const g = byAxis.get(axis) || { value: 0, unit: cell.unit };
-      g.value += cell.value;
+      g.value += cell.value as number;
       byAxis.set(axis, g);
     }
     const first = byAxis.values().next().value;
     return first ? { ...first, rolled: true } : null;
   };
 
-  const reconciliation = {};
+  const reconciliation: Record<string, Reconciliation> = {};
   for (const col of stmt.columns) {
-    const cell = (li) => li.values[col.id];
+    const cell = (li: CurrentLineItem) => li.values[col.id];
     const open = opening.map(cell).find((c) => c && typeof c.value === 'number' && !/shares|pure/.test(c.unit || ''));
     const close = items
       .filter(isEndRow)
       .map(cell)
       .find((c) => c && typeof c.value === 'number' && !/shares|pure/.test(c.unit || ''));
     if (!open || !close) continue;
-    let movements;
-    let method;
+    let movements: number;
+    let method: string;
     if (stmt.type === 'cash_flow') {
-      const net = items.find((li) => NET_CHANGE.test(li.concept) && cell(li) && typeof cell(li).value === 'number');
+      const net = items.find((li) => NET_CHANGE.test(li.concept) && cell(li) && typeof cell(li)!.value === 'number');
       if (!net) continue;
-      movements = cell(net).value;
+      movements = cell(net)!.value as number;
       method = 'net';
     } else {
       movements = 0;
@@ -266,30 +276,30 @@ function rollForward(stmt) {
         const subtotal = /total/i.test(li.preferredLabel || '') && prevHadValue;
         prevHadValue = prevHadValue || has;
         if (!has || subtotal) continue;
-        movements += li.negated ? -c.value : c.value;
-        if (c.rolled) rolled++;
+        movements += li.negated ? -c!.value : c!.value;
+        if (c!.rolled) rolled++;
       }
       method = rolled ? 'sum+rollup' : 'sum';
     }
-    const computed = open.value + movements;
-    const diff = close.value - computed;
+    const computed = (open.value as number) + movements;
+    const diff = (close.value as number) - computed;
     // rounding: filers report in thousands/millions (decimals = -3 / -6)
     const decimals = Number(close.decimals ?? open.decimals ?? 0);
     const tolerance = Math.max(1, 2 * 10 ** (decimals < 0 ? -decimals : 0));
-    reconciliation[col.id] = { opening: open.value, movements, computed, closing: close.value, diff, ok: Math.abs(diff) <= tolerance, method, unit: open.unit };
+    reconciliation[col.id] = { opening: open.value as number, movements, computed, closing: close.value as number, diff, ok: Math.abs(diff) <= tolerance, method, unit: open.unit };
   }
   return { ...stmt, lineItems, reconciliation };
 }
 
-export function currentView(data, filing, prev) {
+export function currentView(data: ScrapeResult, filing: FilingRef, prev: PreviousFiling | null) {
   const end = filing.reportDate || data.filing.periodEnd;
   const form = (filing.form || data.filing.form || '').toUpperCase();
   const isQuarterly = form.startsWith('10-Q');
   const len = isQuarterly ? 3 : 12;
   // notes: what was derived, as { code, ...params } for the UI to word
-  const notes = [];
+  const notes: CurrentNote[] = [];
 
-  const convert = (stmt) => {
+  const convert = (stmt: Statement | null): CurrentStatement | null => {
     if (!stmt) return null;
     const isInstantStatement = stmt.type === 'balance_sheet' || stmt.columns.every((c) => c.period.instant);
     let cols = directColumns(stmt, end, len, isInstantStatement);
@@ -299,19 +309,19 @@ export function currentView(data, filing, prev) {
     // a real quarterly presentation: fall through to the YTD derivation.
     const main = cols.find((c) => c.label === '本期' && !Object.keys(c.dimensions).length);
     const ytdIsLonger = ytd && months(ytd.period.start, ytd.period.end) > len;
-    const realQuarter = main && (!ytdIsLonger || countOf(stmt, main.id) >= countOf(stmt, ytd.id) * 0.5);
+    const realQuarter = main && (!ytdIsLonger || countOf(stmt, main.id) >= countOf(stmt, ytd!.id) * 0.5);
     if (isInstantStatement || (main && realQuarter)) {
       return finish(stmt, orderColumns(cols));
     }
     if (!ytdIsLonger) return finish(stmt, orderColumns(cols));
     const prevStmt = prev?.data?.allStatements.find((s) => s.role === stmt.role) || prev?.data?.allStatements.find((s) => s.type === stmt.type && !s.parenthetical);
-    if (prevStmt && prev.filing.reportDate) {
-      notes.push({ code: 'derived', title: stmt.title, form: prev.filing.form, fiscalYear: prev.filing.fiscalYear, fiscalPeriod: prev.filing.fiscalPeriod });
-      return deriveFromYtd(stmt, prevStmt, end, prev.filing.reportDate, filing.accession, prev.filing.accession);
+    if (prevStmt && prev!.filing.reportDate) {
+      notes.push({ code: 'derived', title: stmt.title, form: prev!.filing.form, fiscalYear: prev!.filing.fiscalYear, fiscalPeriod: prev!.filing.fiscalPeriod });
+      return deriveFromYtd(stmt, prevStmt, end, prev!.filing.reportDate!, filing.accession, prev!.filing.accession);
     }
     // no previous filing available: show YTD and say so
-    notes.push({ code: 'ytdOnly', title: stmt.title, start: ytd.period.start, end: ytd.period.end });
-    const ytdCols = stmt.columns.filter((c) => (c.period.instant && (near(c.period.instant, end) || near(c.period.instant, prevDay(ytd.period.start)))) || (c.period.end && near(c.period.end, end) && !c.period.instant));
+    notes.push({ code: 'ytdOnly', title: stmt.title, start: ytd!.period.start, end: ytd!.period.end });
+    const ytdCols = stmt.columns.filter((c) => (c.period.instant && (near(c.period.instant, end) || near(c.period.instant, prevDay(ytd!.period.start!)))) || (c.period.end && near(c.period.end, end) && !c.period.instant));
     return finish(
       stmt,
       orderColumns(ytdCols.map((c) => ({ ...c, label: c.period.instant ? (near(c.period.instant, end) ? '期末' : '期初') : '年初至今' }))),
@@ -322,8 +332,8 @@ export function currentView(data, filing, prev) {
   const allStatements = data.allStatements.map((st) => {
     const c = convert(st);
     return c && c.columns.some((col) => col.label === '期初' || col.label === '期末') ? rollForward(mergePeriodColumns(c)) : c;
-  });
+  }) as CurrentStatement[];
   const byRole = Object.fromEntries(allStatements.map((s) => [s.role, s]));
-  const statements = Object.fromEntries(Object.entries(data.statements).map(([k, s]) => [k, s ? byRole[s.role] : null]));
+  const statements = Object.fromEntries((Object.entries(data.statements) as [PrimaryType, Statement | null][]).map(([k, s]) => [k, s ? byRole[s.role] : null]));
   return { ...data, view: 'current', statements, allStatements, notes, previous: prev ? { accession: prev.filing.accession, form: prev.filing.form, fiscalYear: prev.filing.fiscalYear, fiscalPeriod: prev.filing.fiscalPeriod, reportDate: prev.filing.reportDate } : null };
 }

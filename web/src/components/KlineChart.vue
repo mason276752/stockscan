@@ -2,18 +2,54 @@
 // Daily candlestick chart with an optional rebased overlay line (the
 // benchmark). Two renderers: TradingView's Advanced Charts when the licensed
 // library is installed (web/assets/tradingview/, served at /tradingview/;
-// data through tvDatafeed.js), otherwise TradingView's open-source
+// data through tvDatafeed.ts), otherwise TradingView's open-source
 // Lightweight Charts.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { PropType } from 'vue';
 import { CandlestickSeries, ColorType, CrosshairMode, LineSeries, createChart } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, LineWidth } from 'lightweight-charts';
 import { makeDatafeed } from '../tvDatafeed';
 import { url } from '../base';
 import { locale, t } from '../i18n';
 import { cssVar, isDark } from '../theme';
+import type { IsoDate } from '../../../server/lib/types.ts';
+
+/** One candle of the index. */
+interface Candle {
+  time: IsoDate;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+/** One point of the rebased benchmark line. */
+interface LinePoint {
+  time: IsoDate;
+  value: number;
+}
+/** The candle under the crosshair, with the overlay's value there. */
+type HoverBar = Candle & { overlay: number | null; last?: boolean };
+
+declare global {
+  interface Window {
+    /** the licensed Advanced Charts library, when it is installed */
+    TradingView?: { widget?: new (cfg: Record<string, unknown>) => TvWidget };
+  }
+}
+
+/** The bit of the Advanced Charts widget API this uses. */
+interface TvWidget {
+  remove(): void;
+  chartReady(): Promise<void>;
+  activeChart(): {
+    createStudy(name: string, forceOverlay: boolean, lock: boolean, inputs: Record<string, unknown>, overrides: Record<string, unknown>, options: Record<string, unknown>): Promise<unknown>;
+    setVisibleRange(range: { from: number; to: number }): Promise<unknown>;
+  };
+}
 
 const props = defineProps({
-  bars: { type: Array, default: () => [] }, // [{ time: 'YYYY-MM-DD', open, high, low, close }]
-  overlay: { type: Array, default: () => [] }, // [{ time, value }]
+  bars: { type: Array as PropType<Candle[]>, default: () => [] },
+  overlay: { type: Array as PropType<LinePoint[]>, default: () => [] },
   overlayLabel: { type: String, default: '' },
   label: { type: String, default: '' },
   colors: { type: String, default: 'tw' }, // 'tw' red up / green down | 'us' green up / red down
@@ -21,40 +57,41 @@ const props = defineProps({
   height: { type: Number, default: 440 },
 });
 
-const el = ref(null);
-const hover = ref(null); // bar under the crosshair (+ overlay value)
-let chart = null;
-let candles = null;
-let line = null;
-let widget = null; // Advanced Charts
+const el = ref<HTMLElement | null>(null);
+const hover = ref<HoverBar | null>(null); // bar under the crosshair (+ overlay value)
+let chart: IChartApi | null = null;
+let candles: ISeriesApi<'Candlestick'> | null = null;
+let line: ISeriesApi<'Line'> | null = null;
+let widget: TvWidget | null = null; // Advanced Charts
 const usingAdvanced = ref(false);
-let ro = null;
+let ro: ResizeObserver | null = null;
 
 // the chart draws its own colours: the theme's tokens, re-read when it changes (isDark)
-const UP = computed(() => isDark.value != null && cssVar(props.colors === 'us' ? '--up' : '--down'));
-const DOWN = computed(() => isDark.value != null && cssVar(props.colors === 'us' ? '--down' : '--up'));
+// (the isDark read is the dependency that makes these recompute on a theme change)
+const UP = computed(() => (isDark.value != null && cssVar(props.colors === 'us' ? '--up' : '--down')) as string);
+const DOWN = computed(() => (isDark.value != null && cssVar(props.colors === 'us' ? '--down' : '--up')) as string);
 
 const byTime = computed(() => new Map(props.bars.map((b) => [b.time, b])));
-const shown = computed(() => hover.value || (props.bars.length ? { ...props.bars.at(-1), overlay: props.overlay.at(-1)?.value ?? null, last: true } : null));
-const prevClose = (bar) => {
+const shown = computed((): HoverBar | null => hover.value || (props.bars.length ? { ...props.bars.at(-1)!, overlay: props.overlay.at(-1)?.value ?? null, last: true } : null));
+const prevClose = (bar: Candle) => {
   const i = props.bars.findIndex((b) => b.time === bar.time);
-  return i > 0 ? props.bars[i - 1].close : null;
+  return i > 0 ? props.bars[i - 1]!.close : null;
 };
 const f2 = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
-const pct = (v) => (v == null ? '' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
+const pct = (v: number | null | undefined) => (v == null ? '' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
 const change = computed(() => {
   if (!shown.value) return null;
   const p = prevClose(shown.value);
   return p ? shown.value.close / p - 1 : null;
 });
-const sinceStart = computed(() => (shown.value && props.bars.length ? shown.value.close / props.bars[0].close - 1 : null));
+const sinceStart = computed(() => (shown.value && props.bars.length ? shown.value.close / props.bars[0]!.close - 1 : null));
 
 function seriesOptions() {
   return { upColor: UP.value, downColor: DOWN.value, borderUpColor: UP.value, borderDownColor: DOWN.value, wickUpColor: UP.value, wickDownColor: DOWN.value };
 }
 
 function mountLight() {
-  chart = createChart(el.value, {
+  chart = createChart(el.value!, {
     height: props.height,
     layout: { background: { type: ColorType.Solid, color: cssVar('--panel') }, textColor: cssVar('--text'), fontFamily: 'inherit' },
     grid: { vertLines: { color: cssVar('--grid') }, horzLines: { color: cssVar('--grid') } },
@@ -64,31 +101,31 @@ function mountLight() {
     localization: { locale: locale.value === 'zh' ? 'zh-TW' : 'en-US' },
   });
   candles = chart.addSeries(CandlestickSeries, seriesOptions());
-  line = chart.addSeries(LineSeries, { color: cssVar('--accent'), lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false });
+  line = chart.addSeries(LineSeries, { color: cssVar('--accent'), lineWidth: 1.5 as LineWidth, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false });
   chart.subscribeCrosshairMove((p) => {
     if (!p.time || !p.point) {
       hover.value = null;
       return;
     }
-    const bar = byTime.value.get(p.time);
+    const bar = byTime.value.get(p.time as unknown as IsoDate);
     if (!bar) {
       hover.value = null;
       return;
     }
-    const ov = p.seriesData.get(line);
+    const ov = p.seriesData.get(line!) as { value?: number } | undefined;
     hover.value = { ...bar, overlay: ov?.value ?? null };
   });
   setData(true);
-  ro = new ResizeObserver(() => chart && chart.applyOptions({ width: el.value.clientWidth }));
-  ro.observe(el.value);
+  ro = new ResizeObserver(() => chart && chart.applyOptions({ width: el.value!.clientWidth }));
+  ro.observe(el.value!);
 }
 
-function setData(fit) {
+function setData(fit: boolean) {
   if (!candles) return;
-  candles.setData(props.bars);
-  line.setData(props.overlay);
-  line.applyOptions({ visible: props.overlay.length > 0 });
-  if (fit) chart.timeScale().fitContent();
+  candles.setData(props.bars as never);
+  line!.setData(props.overlay as never);
+  line!.applyOptions({ visible: props.overlay.length > 0 });
+  if (fit) chart!.timeScale().fitContent();
 }
 
 // ---- TradingView Advanced Charts (only when the library is installed) ----
@@ -98,7 +135,7 @@ function mountAdvanced() {
   const name = props.label || t('nav.basket');
   const overlayName = props.overlay.length ? props.overlayLabel : '';
   widget = new TV.widget({
-    container: el.value,
+    container: el.value!,
     library_path: url('/tradingview/charting_library/'),
     datafeed: makeDatafeed({ name, bars: () => props.bars, overlayName, overlay: () => props.overlay }),
     symbol: name,
@@ -119,7 +156,7 @@ function mountAdvanced() {
       'mainSeriesProperties.candleStyle.wickDownColor': DOWN.value,
     },
   });
-  el.value.style.height = `${props.height}px`;
+  el.value!.style.height = `${props.height}px`;
   usingAdvanced.value = true;
   const w = widget;
   w.chartReady().then(() => {
@@ -132,7 +169,7 @@ function mountAdvanced() {
     }
     // ten years of daily bars are already on hand: show the whole range at once
     const bars = props.bars;
-    if (bars.length) w.activeChart().setVisibleRange({ from: Date.parse(`${bars[0].time}T00:00:00Z`) / 1000, to: Date.parse(`${bars.at(-1).time}T00:00:00Z`) / 1000 + 3 * 86400 }).catch(() => {});
+    if (bars.length) w.activeChart().setVisibleRange({ from: Date.parse(`${bars[0]!.time}T00:00:00Z`) / 1000, to: Date.parse(`${bars.at(-1)!.time}T00:00:00Z`) / 1000 + 3 * 86400 }).catch(() => {});
   });
   return true;
 }

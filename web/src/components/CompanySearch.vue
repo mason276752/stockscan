@@ -4,13 +4,14 @@ import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import { t } from '../i18n';
 import Loading from './Loading.vue';
+import type { SearchHit } from '../apiTypes.ts';
 
 const emit = defineEmits(['select']);
 const query = ref('');
-const results = ref([]);
+const results = ref<SearchHit[]>([]);
 const open = ref(false);
 const loading = ref(false);
-let timer = null;
+let timer: ReturnType<typeof setTimeout> | undefined;
 let requestId = 0;
 let chosen = ''; // last value we set programmatically: don't reopen the list for it
 
@@ -43,7 +44,7 @@ function close() {
   open.value = false;
 }
 
-function choose(row) {
+function choose(row: SearchHit) {
   chosen = row.ticker;
   query.value = row.ticker;
   close();
@@ -53,7 +54,7 @@ function choose(row) {
 function submit() {
   const q = query.value.trim();
   if (!q) return;
-  if (results.value.length && results.value[0].ticker.toUpperCase() === q.toUpperCase()) return choose(results.value[0]);
+  if (results.value.length && results.value[0]!.ticker.toUpperCase() === q.toUpperCase()) return choose(results.value[0]!);
   chosen = query.value;
   close();
   emit('select', q);

@@ -1,27 +1,32 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { PropType } from 'vue';
 import { t } from '../i18n';
 import { collapseAmendments } from '../../../server/lib/filings.ts';
+import type { FilingRef } from '../../../server/lib/types.ts';
+
+/** One fiscal year's filings, by the period each covers. */
+type YearSlots = Partial<Record<string, FilingRef>>;
 
 const props = defineProps({
-  filings: { type: Array, required: true },
+  filings: { type: Array as PropType<FilingRef[]>, required: true },
   selected: { type: String, default: null }, // accession
 });
 const emit = defineEmits(['select', 'select-quarters']);
 
 const PERIODS = ['Q1', 'Q2', 'Q3', 'FY'];
-const canDerive = (slots) => PERIODS.every((p) => slots[p]);
+const canDerive = (slots: YearSlots) => PERIODS.every((p) => slots[p]);
 
 // fiscal year -> { Q1: filing, Q2: ..., FY: ... }  (newest year first)
 // A period that was amended shows its amendment - the numbers the company
 // now stands behind - unless that one has no statements in it (`thin`, the
 // Part III-only kind), when the original is all there is to show.
 const years = computed(() => {
-  const map = new Map();
+  const map = new Map<number, YearSlots>();
   for (const f of collapseAmendments(props.filings)) {
     if (!f.fiscalYear) continue;
     if (!map.has(f.fiscalYear)) map.set(f.fiscalYear, {});
-    map.get(f.fiscalYear)[f.fiscalPeriod] ??= f;
+    map.get(f.fiscalYear)![f.fiscalPeriod!] ??= f;
   }
   return [...map.entries()].sort((a, b) => b[0] - a[0]);
 });

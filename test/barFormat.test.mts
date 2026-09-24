@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { adjusted, decimals, decimalsFor, decodeBars, diffSeries, encodeBars, mergeDays, round, unadjust } from '../server/lib/barFormat.ts';
+import type { Bar } from '../server/lib/types.ts';
 
-const bars = (...prices) => prices.map((p, i) => ({ date: `2020-01-${String(i + 1).padStart(2, '0')}`, open: p, high: p, low: p, close: p, volume: 100 }));
+const bars = (...prices: number[]): Bar[] => prices.map((p, i) => ({ date: `2020-01-${String(i + 1).padStart(2, '0')}`, open: p, high: p, low: p, close: p, volume: 100 }));
 
 test('how many decimals a price needs is read off its exponential form', () => {
   assert.equal(decimals(1.5), 1);
@@ -59,7 +60,7 @@ test('a split factor is applied without rounding a sub-cent price away', () => {
 
 test('a one-factor shift of every earlier bar is read as a split', () => {
   const saved = bars(10, 10, 10, 20, 20);
-  const incoming = saved.map((b) => (b.date < '2020-01-04' ? { ...b, close: b.close * 4, volume: b.volume / 4 } : b));
+  const incoming = saved.map((b) => (b.date < '2020-01-04' ? { ...b, close: b.close * 4, volume: b.volume! / 4 } : b));
   const { split } = diffSeries(saved, incoming);
   assert.deepEqual(split, { date: '2020-01-04', price: 4, volume: null });
   // and a series that simply moved on is not a split
@@ -68,14 +69,14 @@ test('a one-factor shift of every earlier bar is read as a split', () => {
 
 test('a tail that no longer lines up is not spliced on', () => {
   const saved = bars(10, 10, 10);
-  assert.equal(mergeDays(saved, [{ ...saved[2], close: 40 }]), null, 'a split since the last fetch: refetch the lot');
-  assert.equal(mergeDays(saved, [{ ...saved[2] }, { ...saved[2], date: '2020-01-04' }]).length, 4);
+  assert.equal(mergeDays(saved, [{ ...saved[2]!, close: 40 }]), null, 'a split since the last fetch: refetch the lot');
+  assert.equal(mergeDays(saved, [{ ...saved[2]! }, { ...saved[2]!, date: '2020-01-04' }])!.length, 4);
 });
 
 test('a split that lands while the last bar is still forming is dated after it', () => {
   const saved = bars(0.3, 0.29, 0.28);
-  const scale = (b, k) => ({ ...b, open: b.open * k, high: b.high * k, low: b.low * k, close: b.close * k, volume: b.volume / k });
-  const incoming = [...saved.map((b) => scale(b, 25)), { ...scale(bars(6.9)[0], 1), date: '2020-01-04' }];
+  const scale = (b: Bar, k: number): Bar => ({ ...b, open: b.open * k, high: b.high * k, low: b.low * k, close: b.close * k, volume: b.volume! / k });
+  const incoming = [...saved.map((b) => scale(b, 25)), { ...scale(bars(6.9)[0]!, 1), date: '2020-01-04' }];
   const { split, dates } = diffSeries(saved, incoming, '2020-01-03');
   assert.deepEqual(split, { date: '2020-01-04', price: 25, volume: null }, 'the bar still forming moved by the same factor: it is on the old basis too');
   assert.deepEqual(dates, [], 'so it is not a bar to rewrite either');

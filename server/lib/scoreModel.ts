@@ -24,34 +24,49 @@
 import { C, ROWS, adequacyOver, first, loadPoints, quarterInputs, quarterKeys, ratios } from './indicators.ts';
 import { filingPeriodKey } from './filings.ts';
 import { balancesAt, costOfRevenueFromHeading, factsAt, months, noCostOfRevenue, statementOf } from './quarters.ts';
+import type { FilingLoader } from './quarters.ts';
+import type {
+  Benchmark, Company, Concept, Facts, FilingRef, IsoDate, QuarterPoint, RatioInputs, RatioValues,
+  Score, ScoreBasis, ScoreBreakdown, ScoreCategory, ScoreItem, ScrapeResult, StatementType,
+} from './types.ts';
 
 export const SCORE_VERSION = 17;
 
-const CATEGORY_OF = { debtRatio: '財務結構', ltCapToPpe: '財務結構', currentRatio: '償債能力', quickRatio: '償債能力', dso: '經營能力', dio: '經營能力', cycle: '經營能力', assetTurnover: '經營能力', grossMargin: '獲利能力', opMargin: '獲利能力', netMargin: '獲利能力', eps: '獲利能力', roe: '獲利能力', cfRatio: '現金流量', cfAdequacy: '現金流量', cfReinvest: '現金流量', cashPct: '現金流量' };
+const CATEGORY_OF: Record<string, string> = { debtRatio: '財務結構', ltCapToPpe: '財務結構', currentRatio: '償債能力', quickRatio: '償債能力', dso: '經營能力', dio: '經營能力', cycle: '經營能力', assetTurnover: '經營能力', grossMargin: '獲利能力', opMargin: '獲利能力', netMargin: '獲利能力', eps: '獲利能力', roe: '獲利能力', cfRatio: '現金流量', cfAdequacy: '現金流量', cfReinvest: '現金流量', cashPct: '現金流量' };
 export const CATEGORIES = ['財務結構', '償債能力', '經營能力', '獲利能力', '現金流量'];
 
-export const ITEMS = (() => {
+/** One benchmark row of the model: which category it belongs to, and its weight. */
+export interface ScoreModelItem {
+  key: string;
+  name: string;
+  unit: string;
+  category: string;
+  benchmark: Benchmark;
+  weight: number;
+}
+
+export const ITEMS: ScoreModelItem[] = (() => {
   const rows = ROWS.filter((r) => r.benchmark && CATEGORY_OF[r.key]);
-  const perCat = {};
-  for (const r of rows) perCat[CATEGORY_OF[r.key]] = (perCat[CATEGORY_OF[r.key]] || 0) + 1;
-  return rows.map((r) => ({ key: r.key, name: r.name, unit: r.unit, category: CATEGORY_OF[r.key], benchmark: r.benchmark, weight: 20 / perCat[CATEGORY_OF[r.key]] }));
+  const perCat: Record<string, number> = {};
+  for (const r of rows) perCat[CATEGORY_OF[r.key]!] = (perCat[CATEGORY_OF[r.key]!] || 0) + 1;
+  return rows.map((r) => ({ key: r.key, name: r.name, unit: r.unit, category: CATEGORY_OF[r.key]!, benchmark: r.benchmark!, weight: 20 / perCat[CATEGORY_OF[r.key]!]! }));
 })();
 
-const OPS = { '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b, '<=': (a, b) => a <= b };
+const OPS: Record<Benchmark['op'], (a: number, b: number) => boolean> = { '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b, '<=': (a, b) => a <= b };
 
 // full / half / none for one value against its benchmark
-function grade(value, { op, value: t }) {
+function grade(value: number | null | undefined, { op, value: t }: Benchmark): number | null {
   if (value == null || !Number.isFinite(value)) return null;
   if (OPS[op](value, t)) return 1;
   const near = t === 0 ? Math.abs(value) < 0.01 : Math.abs(value - t) <= Math.abs(t) * 0.2;
   return near ? 0.5 : 0;
 }
 
-export function scoreValues(values) {
+export function scoreValues(values: RatioValues): ScoreBreakdown {
   let earned = 0;
   let applicable = 0;
-  const categories = {};
-  const items = [];
+  const categories: Record<string, { earned: number; applicable: number }> = {};
+  const items: ScoreItem[] = [];
   for (const it of ITEMS) {
     const v = values[it.key];
     const g = grade(v, it.benchmark);
@@ -71,35 +86,45 @@ export function scoreValues(values) {
     earned: Math.round(earned * 10) / 10,
     applicable: Math.round(applicable),
     coverage: Math.round(applicable),
-    categories: CATEGORIES.map((c) => ({ name: c, earned: Math.round((categories[c]?.earned || 0) * 10) / 10, applicable: categories[c]?.applicable || 0, score: categories[c]?.applicable ? Math.round(((categories[c].earned || 0) / categories[c].applicable) * 100) : null })),
+    categories: CATEGORIES.map((c): ScoreCategory => ({ name: c, earned: Math.round((categories[c]?.earned || 0) * 10) / 10, applicable: categories[c]?.applicable || 0, score: categories[c]?.applicable ? Math.round(((categories[c]!.earned || 0) / categories[c]!.applicable) * 100) : null })),
     items,
   };
 }
 
 // Inputs for ratios() from a single parsed filing.
-export function singleFilingInputs(data) {
+/** What a single filing yields for ratios(): balances, flows, and the span. */
+export interface SingleFilingInputs {
+  balances: Facts;
+  balancesPrev: Facts;
+  flows: Facts;
+  flowsA: Facts;
+  monthsLen: number;
+  factor: number;
+}
+
+export function singleFilingInputs(data: ScrapeResult): SingleFilingInputs | null {
   const end = data.filing?.periodEnd;
   if (!end) return null;
   const bs = statementOf(data, 'balance_sheet');
   const balances = balancesAt(data, end);
   // comparative column: the other undimensioned instant (usually the prior fiscal year end)
-  const prevCol = bs?.columns.filter((c) => Object.keys(c.dimensions).length === 0 && c.period.instant && c.period.instant < end).sort((a, b) => (a.period.instant < b.period.instant ? 1 : -1))[0];
+  const prevCol = bs?.columns.filter((c) => Object.keys(c.dimensions).length === 0 && c.period.instant && c.period.instant < end).sort((a, b) => (a.period.instant! < b.period.instant! ? 1 : -1))[0];
   const balancesPrev = prevCol ? factsAt(bs, prevCol.id, {}) : balances;
 
   // flows: per statement, the undimensioned duration ending at the period end
   // that carries the most facts (ties -> longer, i.e. year to date). Amazon's
   // 10-Q has an extra trailing-twelve-month column with only a few lines, so
   // "longest" alone would pick an almost empty column.
-  const flows = {};
-  const flowsA = {};
-  let monthsLen = null;
-  for (const type of ['income_statement', 'comprehensive_income', 'cash_flow']) {
+  const flows: Facts = {};
+  const flowsA: Facts = {};
+  let monthsLen: number | null = null;
+  for (const type of ['income_statement', 'comprehensive_income', 'cash_flow'] as StatementType[]) {
     const stmt = statementOf(data, type);
     if (!stmt) continue;
-    const cols = stmt.columns.filter((c) => Object.keys(c.dimensions).length === 0 && c.period.start && c.period.end && Math.abs(new Date(c.period.end) - new Date(end)) <= 4 * 86400000);
+    const cols = stmt.columns.filter((c) => Object.keys(c.dimensions).length === 0 && c.period.start && c.period.end && Math.abs(new Date(c.period.end).getTime() - new Date(end).getTime()) <= 4 * 86400000);
     if (!cols.length) continue;
-    const count = (c) => stmt.lineItems.reduce((n, li) => n + (typeof li.values[c.id]?.value === 'number' ? 1 : 0), 0);
-    const best = cols.map((c) => ({ c, n: count(c), m: months(c.period.start, c.period.end) })).sort((a, b) => b.n - a.n || b.m - a.m)[0];
+    const count = (c: { id: string }) => stmt.lineItems.reduce((n, li) => n + (typeof li.values[c.id]?.value === 'number' ? 1 : 0), 0);
+    const best = cols.map((c) => ({ c, n: count(c), m: months(c.period.start, c.period.end) })).sort((a, b) => b.n - a.n || b.m - a.m)[0]!;
     if (!best.n) continue;
     const m = best.m || 12;
     if (type === 'income_statement' || !monthsLen) monthsLen = m;
@@ -120,9 +145,17 @@ export function singleFilingInputs(data) {
 }
 
 // screener amount fields: values key -> C key
-export const BALANCE_AMOUNTS = { totalAssets: 'totalAssets', totalLiabilities: 'totalLiabilities', equity: 'equityTotal', cash: 'cash', ar: 'ar', inventory: 'inventory', ap: 'ap', ppe: 'ppe', currentAssets: 'currentAssets', currentLiabilities: 'currentLiabilities', longTermDebt: 'longTermDebt' };
-export const FLOW_AMOUNTS = { revenueAnn: 'revenue', grossProfitAnn: 'grossProfit', operatingIncomeAnn: 'operatingIncome', pretaxIncomeAnn: 'pretaxIncome', netIncomeAnn: 'netIncome', rdAnn: 'rd', sgaAnn: 'sga', interestExpenseAnn: 'interestExpenseNonop', incomeTaxAnn: 'incomeTax', ocfAnn: 'ocf', capexAnn: 'capex', dividendsAnn: 'dividends', buybacksAnn: 'buybacks', stockIssuedAnn: 'stockIssued' };
-export const AMOUNT_FIELDS = [
+export const BALANCE_AMOUNTS: Record<string, string> = { totalAssets: 'totalAssets', totalLiabilities: 'totalLiabilities', equity: 'equityTotal', cash: 'cash', ar: 'ar', inventory: 'inventory', ap: 'ap', ppe: 'ppe', currentAssets: 'currentAssets', currentLiabilities: 'currentLiabilities', longTermDebt: 'longTermDebt' };
+export const FLOW_AMOUNTS: Record<string, string> = { revenueAnn: 'revenue', grossProfitAnn: 'grossProfit', operatingIncomeAnn: 'operatingIncome', pretaxIncomeAnn: 'pretaxIncome', netIncomeAnn: 'netIncome', rdAnn: 'rd', sgaAnn: 'sga', interestExpenseAnn: 'interestExpenseNonop', incomeTaxAnn: 'incomeTax', ocfAnn: 'ocf', capexAnn: 'capex', dividendsAnn: 'dividends', buybacksAnn: 'buybacks', stockIssuedAnn: 'stockIssued' };
+/** A statement amount the screener offers as a filter. */
+export interface AmountField {
+  key: string;
+  name: string;
+  group: string;
+  unit: string;
+}
+
+export const AMOUNT_FIELDS: AmountField[] = [
   { key: 'totalAssets', name: '總資產', group: '資產負債表' },
   { key: 'currentAssets', name: '流動資產', group: '資產負債表' },
   { key: 'cash', name: '現金及約當現金', group: '資產負債表' },
@@ -151,25 +184,36 @@ export const AMOUNT_FIELDS = [
   { key: 'stockIssuedAnn', name: '發行新股所得（年化）', group: '現金流量與權益' },
 ].map((f) => ({ unit: '百萬', ...f }));
 
-// The score from ratios() inputs `g` (see indicators.js), for the filing
+// The score from ratios() inputs `g` (see indicators.ts), for the filing
 // `header` (accession, form, fiscal labels …). `basis` says what the flows
 // cover: kind 'quarter' (one quarter ×4), 'annual' (a full year) or 'ytd'
 // (a 10-Q's year-to-date column ×12/months - the fallback), with monthsLen;
 // `partial` marks a fallback that should be redone once the neighbouring
 // filing is saved.
-function scoreInputs(g, header, basis, { sharesDiluted } = {}) {
+/** The filing a score belongs to. */
+export interface ScoreHeader {
+  accession: string;
+  cik: number;
+  form: string | null;
+  fiscalYear: string | null;
+  fiscalPeriod?: string | null;
+  periodEnd: IsoDate | null;
+  filingDate?: IsoDate | null;
+}
+
+function scoreInputs(g: RatioInputs, header: ScoreHeader, basis: ScoreBasis, { sharesDiluted }: { sharesDiluted?: number | null } = {}): Score {
   const { values } = ratios(g);
   // statement lines as amounts, for the screener: balances at the period end,
   // flows annualised like the ratios
   for (const [key, ckey] of Object.entries(BALANCE_AMOUNTS)) values[key] = g.bal(ckey);
-  values.equity = values.equity ?? (g.bal('liabilitiesAndEquity') != null && g.bal('totalLiabilities') != null ? g.bal('liabilitiesAndEquity') - g.bal('totalLiabilities') : null);
+  values.equity = values.equity ?? (g.bal('liabilitiesAndEquity') != null && g.bal('totalLiabilities') != null ? g.bal('liabilitiesAndEquity')! - g.bal('totalLiabilities')! : null);
   for (const [key, ckey] of Object.entries(FLOW_AMOUNTS)) values[key] = g.flowA(ckey);
   values.grossProfitAnn = values.grossProfitAnn ?? (values.grossMargin != null && values.revenueAnn != null ? (values.grossMargin / 100) * values.revenueAnn : null);
   values.operatingIncomeAnn = values.operatingIncomeAnn ?? (values.opMargin != null && values.revenueAnn != null ? (values.opMargin / 100) * values.revenueAnn : null);
   values.sharesDiluted = sharesDiluted ?? g.flow('sharesDiluted');
   const s = scoreValues(values);
   // every ratio (rounded) is kept so the screener can filter on it
-  const rounded = {};
+  const rounded: RatioValues = {};
   for (const [k, v] of Object.entries(values)) rounded[k] = typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : null;
   const { monthsLen } = basis;
   const note = basis.kind === 'quarter' ? '單季流量 ×4 年化，平均餘額用本季末與上季末（同財務指標表）；現金流量允當比率以這一季計算而非五年' : monthsLen === 12 ? '全年數字' : `年初至今 ${monthsLen} 個月，流量 ×${(12 / monthsLen).toFixed(2)} 年化；現金流量允當比率以同一期間計算而非五年`;
@@ -190,16 +234,16 @@ function scoreInputs(g, header, basis, { sharesDiluted } = {}) {
 
 // Score from one filing alone: an annual filer's year, or the fallback for a
 // quarterly filing whose neighbours are not saved (`partial`).
-export function scoreFiling(data, { partial = false } = {}) {
+export function scoreFiling(data: ScrapeResult, { partial = false }: { partial?: boolean } = {}): Score | null {
   const inp = singleFilingInputs(data);
   if (!inp) return null;
   const { balances, balancesPrev, flows, flowsA, monthsLen } = inp;
-  const flow = (key) => first(flows, C[key]);
-  const g = {
+  const flow = (key: string) => first(flows, C[key as keyof typeof C]);
+  const g: RatioInputs = {
     flow,
-    flowA: (key) => first(flowsA, C[key]),
-    bal: (key) => first(balances, C[key]),
-    balPrev: (key) => first(balancesPrev, C[key]),
+    flowA: (key) => first(flowsA, C[key as keyof typeof C]),
+    bal: (key) => first(balances, C[key as keyof typeof C]),
+    balPrev: (key) => first(balancesPrev, C[key as keyof typeof C]),
     adequacy: () => {
       const ocf = flow('ocf');
       // no capital spending line in a cash-flow statement that does show operating cash: none was spent
@@ -211,7 +255,7 @@ export function scoreFiling(data, { partial = false } = {}) {
       return { ocf, out: capex + invInc + (flow('dividends') ?? 0), periods: 1 };
     },
   };
-  return scoreInputs(g, data.filing, { kind: monthsLen === 12 ? 'annual' : monthsLen === 3 ? 'quarter' : 'ytd', monthsLen, ...(partial ? { partial: true } : {}) });
+  return scoreInputs(g, data.filing as ScoreHeader, { kind: monthsLen === 12 ? 'annual' : monthsLen === 3 ? 'quarter' : 'ytd', monthsLen, ...(partial ? { partial: true } : {}) });
 }
 
 // Score of `filing` (an entry of company.filings) the way the indicator
@@ -224,8 +268,8 @@ export function scoreFiling(data, { partial = false } = {}) {
 // other versions of that period (its original, or a later amendment) are
 // taken out of the list first, so `loadPoints` cannot answer with one of
 // them - scoring a filing means scoring the numbers in *that* filing. Every
-// other period still resolves to its amended version (filings.js).
-export async function scoreFilingOf(load, company, filing) {
+// other period still resolves to its amended version (filings.ts).
+export async function scoreFilingOf(load: FilingLoader, company: Company, filing: FilingRef): Promise<Score | null> {
   const own = filingPeriodKey(filing);
   company = { ...company, filings: company.filings.filter((f) => f.accession === filing.accession || filingPeriodKey(f) !== own) };
   const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
@@ -234,15 +278,15 @@ export async function scoreFilingOf(load, company, filing) {
   if (!quarterly || !year || !(q >= 1 && q <= 4)) return scoreFiling(await load(filing));
   const keys = quarterKeys(year, q, 2);
   const byKey = await loadPoints(load, company, keys, true);
-  const points = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { missing: true, flows: {}, balances: {} });
-  const [prev, cur] = points;
+  const points: QuarterPoint[] = keys.map((k) => byKey[`${k.year}-Q${k.q}`] || { period: `Q${k.q}`, periodEnd: null, sources: [], missing: true, flows: {}, balances: {} });
+  const [prev, cur] = points as [QuarterPoint, QuarterPoint];
   const hasFlows = Object.values(cur.flows).some((x) => x != null);
   if (cur.missing || !hasFlows || !cur.sources?.includes(filing.accession)) return scoreFiling(await load(filing), { partial: true });
   // a first quarter without the 10-K before it: the 10-Q's own comparative
   // column is that quarter end, and its three-month column the quarter
   if (prev.missing) return scoreFiling(await load(filing), { partial: q !== 1 });
   const g = quarterInputs(points, 1, () => adequacyOver(points, 1, 1, 1));
-  const header = { accession: filing.accession, cik: company.cik, form: filing.form, fiscalYear: String(year), fiscalPeriod: filing.fiscalPeriod, periodEnd: cur.periodEnd || filing.reportDate, filingDate: filing.filingDate };
+  const header: ScoreHeader = { accession: filing.accession, cik: company.cik, form: filing.form, fiscalYear: String(year), fiscalPeriod: filing.fiscalPeriod, periodEnd: cur.periodEnd || filing.reportDate, filingDate: filing.filingDate };
   // Q4's weighted shares cannot be full year − nine months: the 10-K's own
   return scoreInputs(g, header, { kind: 'quarter', monthsLen: 3, quarter: `${year} Q${q}` }, { sharesDiluted: q === 4 ? first(cur.fy, C.sharesDiluted) : undefined });
 }

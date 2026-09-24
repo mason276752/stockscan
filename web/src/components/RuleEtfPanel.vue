@@ -1,12 +1,15 @@
 <script setup lang="ts">
 // What a rule ETF has instead of a constituent table: the filters it ran,
 // every day the holdings changed, and the companies it has ever held.
-// Nothing here is editable - the filters are the fund (see baskets.js).
+// Nothing here is editable - the filters are the fund (see baskets.ts).
 import { computed, ref } from 'vue';
+import type { PropType } from 'vue';
 import { t } from '../i18n';
+import type { RuleMember } from '../../../server/lib/types.ts';
+import type { IndexResult } from '../basketTypes.ts';
 
 const props = defineProps({
-  result: { type: Object, default: null }, // the ruleEtf response
+  result: { type: Object as PropType<IndexResult | null>, default: null }, // the ruleEtf response
   label: { type: String, default: '' }, // the filters, as the screener words them
 });
 const emit = defineEmits(['open']);
@@ -24,12 +27,12 @@ const picked = computed(() => props.result?.events?.at(-1)?.n ?? 0); // what the
 const avgHeld = computed(() => {
   const c = props.result?.counts || [];
   if (!c.length || !props.result?.end) return null;
-  const day = (d) => Date.parse(d);
+  const day = (d: string) => Date.parse(d);
   let sum = 0;
   let span = 0;
   for (let i = 0; i < c.length; i++) {
-    const width = (day(c[i + 1]?.date || props.result.end) - day(c[i].date)) / 86400000 || 1;
-    sum += c[i].n * width;
+    const width = (day(c[i + 1]?.date || props.result!.end!) - day(c[i]!.date)) / 86400000 || 1;
+    sum += c[i]!.n * width;
     span += width;
   }
   return span ? sum / span : null;
@@ -38,17 +41,17 @@ const maxHeld = computed(() => (props.result?.counts || []).reduce((m, c) => Mat
 
 const sortKey = ref('days');
 const sortDir = ref(-1);
-function sortBy(k) {
+function sortBy(k: string) {
   if (sortKey.value === k) sortDir.value = -sortDir.value;
   else {
     sortKey.value = k;
     sortDir.value = k === 'ticker' || k === 'name' || k === 'first' ? 1 : -1;
   }
 }
-const arrow = (k) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
+const arrow = (k: string) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' : ' ▼') : '');
 const members = computed(() => {
   const k = sortKey.value;
-  const val = (m) => {
+  const val = (m: RuleMember): string | number | null => {
     const p = perf.value[m.ticker];
     if (k === 'ticker') return m.ticker;
     if (k === 'name') return m.name || '';
@@ -66,11 +69,11 @@ const members = computed(() => {
   });
 });
 
-const pct = (v) => (v == null || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
-const cls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '');
+const pct = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
+const cls = (v: number | null | undefined) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '');
 // an open-ended stretch runs to today, or to the end of the window when one was asked for
 const openEnd = computed(() => (props.result?.window?.to ? props.result.end || props.result.window.to : t('rule.now')));
-const spanText = (m) => m.spans.map((s) => `${s.from} ～ ${s.to || openEnd.value}`).join(t('sep'));
+const spanText = (m: RuleMember) => m.spans.map((s) => `${s.from} ～ ${s.to || openEnd.value}`).join(t('sep'));
 </script>
 
 <template>
@@ -83,10 +86,10 @@ const spanText = (m) => m.spans.map((s) => `${s.from} ～ ${s.to || openEnd.valu
       <div class="figs">
         <div :title="result.window?.from || result.window?.to ? t('rule.windowTitle') : ''"><span class="muted small">{{ t('rule.span') }}</span><b class="mono">{{ result.start || '—' }} ～ {{ result.end || '—' }}<span v-if="result.window?.from || result.window?.to" class="muted small"> {{ t('rule.windowed') }}</span></b></div>
         <div :title="picked !== held ? t('rule.pickedTitle', { n: picked }) : ''"><span class="muted small">{{ t('rule.holdingNow') }}</span><b class="mono">{{ held }}<span v-if="picked !== held" class="muted small"> / {{ picked }}</span></b></div>
-        <div><span class="muted small">{{ t('rule.everHeld') }}</span><b class="mono">{{ result.members.length }}</b></div>
+        <div><span class="muted small">{{ t('rule.everHeld') }}</span><b class="mono">{{ result.members!.length }}</b></div>
         <div :title="t('rule.avgHeldTitle')"><span class="muted small">{{ t('rule.avgHeld') }}</span><b class="mono">{{ avgHeld == null ? '—' : avgHeld.toFixed(1) }}</b></div>
         <div><span class="muted small">{{ t('rule.maxHeld') }}</span><b class="mono">{{ maxHeld }}</b></div>
-        <div :title="t('rule.changesTitle')"><span class="muted small">{{ t('rule.changes') }}</span><b class="mono">{{ result.events.length }}</b></div>
+        <div :title="t('rule.changesTitle')"><span class="muted small">{{ t('rule.changes') }}</span><b class="mono">{{ result.events!.length }}</b></div>
         <div :title="t('rule.testedTitle')"><span class="muted small">{{ t('rule.tested') }}</span><b class="mono">{{ (result.tested || 0).toLocaleString() }}</b></div>
       </div>
       <p v-if="result.skipped?.length" class="note warnbox small">{{ t('rule.skipped', { list: result.skipped.join(t('sep')) }) }}</p>
@@ -152,8 +155,8 @@ const spanText = (m) => m.spans.map((s) => `${s.from} ～ ${s.to || openEnd.valu
             <td class="num mono">{{ perf[m.ticker]?.days ?? '—' }}</td>
             <td class="num mono" :class="cls(perf[m.ticker]?.return)">{{ pct(perf[m.ticker]?.return) }}</td>
             <td class="small">
-              <span v-if="perf[m.ticker]?.wild" class="warn wild" :title="t('rule.wildTitle', { date: perf[m.ticker].wild.date, factor: perf[m.ticker].wild.factor.toFixed(1) })">{{ t('rule.wild') }}</span>
-              <span v-if="perf[m.ticker]?.cheap" class="warn" :title="t('rule.cheapTitle', { n: perf[m.ticker].cheap, price: result.minPrice })">{{ t('rule.cheap') }}</span>
+              <span v-if="perf[m.ticker]?.wild" class="warn wild" :title="t('rule.wildTitle', { date: perf[m.ticker]!.wild!.date, factor: perf[m.ticker]!.wild!.factor.toFixed(1) })">{{ t('rule.wild') }}</span>
+              <span v-if="perf[m.ticker]?.cheap" class="warn" :title="t('rule.cheapTitle', { n: perf[m.ticker]!.cheap, price: result.minPrice })">{{ t('rule.cheap') }}</span>
               <span v-else-if="perf[m.ticker]?.in" class="tag in">{{ t('rule.inNow') }}</span>
               <span v-else-if="perf[m.ticker]?.delisted" class="warn">{{ t('rule.delisted') }}</span>
               <span v-else-if="!perf[m.ticker]" class="warn">{{ t('rule.noBars') }}</span>

@@ -20,9 +20,9 @@ const props = defineProps({
 
 const EMBED = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
 
-const el = ref(null);
+const el = ref<HTMLElement | null>(null);
 const failed = ref(false);
-let timer = null;
+let timer: ReturnType<typeof setTimeout> | undefined;
 
 function mount() {
   if (!el.value) return;
@@ -30,7 +30,7 @@ function mount() {
   failed.value = false;
   const up = cssVar(props.colors === 'us' ? '--up' : '--down');
   const down = cssVar(props.colors === 'us' ? '--down' : '--up');
-  const cfg = {
+  const cfg: Record<string, unknown> = {
     autosize: true,
     symbol: props.expression,
     interval: 'D',

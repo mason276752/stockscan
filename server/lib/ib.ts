@@ -6,6 +6,11 @@
 // touches the account - only reqHistoricalData.
 
 import { BarSizeSetting, ConnectionState, IBApiNext, LogLevel, SecType, WhatToShow } from '@stoqey/ib';
+import type { Contract } from '@stoqey/ib';
+import type { Bar } from './types.ts';
+
+/** Whether TWS is reachable. */
+type IbState = 'disconnected' | 'connecting' | 'connected';
 
 export const IB = {
   enabled: !/^(0|false|no|off)$/i.test(process.env.IB_ENABLED || '1'),
@@ -14,14 +19,14 @@ export const IB = {
   clientId: Number(process.env.IB_CLIENT_ID || 100 + (Number(process.env.PORT || 3000) % 1000)),
 };
 
-let api = null;
-let state = 'disconnected'; // disconnected | connecting | connected
-let lastError = null;
-let connectedAt = null;
+let api: IBApiNext | null = null;
+let state: IbState = 'disconnected';
+let lastError: string | null = null;
+let connectedAt: string | null = null;
 let requests = 0;
-let waiters = [];
+let waiters: ((ok: boolean) => void)[] = [];
 
-function ensureApi() {
+function ensureApi(): IBApiNext {
   if (api) return api;
   api = new IBApiNext({ host: IB.host, port: IB.port, reconnectInterval: 30_000, connectionWatchdogInterval: 0 });
   api.logLevel = LogLevel.SYSTEM; // TWS chatter (farm connections etc.) is not interesting
@@ -51,7 +56,7 @@ export function ibStatus() {
 // Connect (or wait for the auto-reconnect) for up to timeoutMs; resolves to
 // whether TWS is reachable. Safe to call repeatedly - the UI's retry button
 // does.
-export function ibConnect(timeoutMs = 4000) {
+export function ibConnect(timeoutMs = 4000): Promise<boolean> {
   if (!IB.enabled) return Promise.resolve(false);
   const a = ensureApi();
   if (state === 'connected') return Promise.resolve(true);
@@ -59,16 +64,16 @@ export function ibConnect(timeoutMs = 4000) {
     try {
       a.connect(IB.clientId);
     } catch (err) {
-      lastError = err.message;
+      lastError = (err as Error).message;
       return Promise.resolve(false);
     }
   }
-  return new Promise((resolve) => {
+  return new Promise<boolean>((resolve) => {
     const t = setTimeout(() => {
       waiters = waiters.filter((w) => w !== done);
       resolve(state === 'connected');
     }, timeoutMs);
-    const done = (ok) => {
+    const done = (ok: boolean) => {
       clearTimeout(t);
       resolve(ok);
     };
@@ -81,43 +86,50 @@ export function ibDisconnect() {
 }
 
 // IB writes share classes with a space (BRK B) where EDGAR uses "-" / "." (BRK-B).
-export const ibSymbol = (ticker) => String(ticker).toUpperCase().replace(/[-.]/g, ' ');
+export const ibSymbol = (ticker: string): string => String(ticker).toUpperCase().replace(/[-.]/g, ' ');
 
 // EDGAR's ticker table carries no exchange: an ambiguous symbol (the same
 // ticker on several IB exchanges) is retried with these primary exchanges.
 const PRIMARY = ['NASDAQ', 'NYSE', 'ARCA', 'AMEX'];
 
-const withTimeout = (p, ms, what) =>
-  Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what}: TWS did not answer within ${ms / 1000}s`)), ms).unref())]);
+const withTimeout = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${what}: TWS did not answer within ${ms / 1000}s`)), ms).unref())]);
 
 // Daily OHLC bars (split-adjusted, TWS "TRADES"), oldest first:
 // [{ date, open, high, low, close, volume }]
-export async function ibDailyBars(ticker, { years = 10, days: span = null } = {}) {
+/** How far back to ask: whole years, or a number of calendar days. */
+export interface IbBarsOptions {
+  years?: number;
+  days?: number | null;
+}
+
+export async function ibDailyBars(ticker: string, { years = 10, days: span = null }: IbBarsOptions = {}): Promise<Bar[]> {
   if (!(await ibConnect(2000))) throw Object.assign(new Error('IBKR TWS is not connected'), { status: 503 });
-  const contract = { symbol: ibSymbol(ticker), secType: SecType.STK, exchange: 'SMART', currency: 'USD' };
-  const ask = async (c) => {
+  const contract: Contract = { symbol: ibSymbol(ticker), secType: SecType.STK, exchange: 'SMART', currency: 'USD' };
+  const ask = async (c: Contract) => {
     requests++;
     const duration = span ? (span <= 365 ? `${span} D` : `${Math.ceil(span / 365)} Y`) : `${years} Y`;
-    return withTimeout(api.getHistoricalData(c, '', duration, BarSizeSetting.DAYS_ONE, WhatToShow.TRADES, 1, 1), 45_000, ticker);
+    return withTimeout(api!.getHistoricalData(c, '', duration, BarSizeSetting.DAYS_ONE, WhatToShow.TRADES, 1, 1), 45_000, ticker);
   };
-  let bars;
+  let bars: Awaited<ReturnType<IBApiNext['getHistoricalData']>> | undefined;
   const tries = [contract, ...PRIMARY.map((primaryExch) => ({ ...contract, primaryExch }))];
   for (let i = 0; i < tries.length; i++) {
     try {
-      bars = await ask(tries[i]);
+      bars = await ask(tries[i]!);
       break;
     } catch (err) {
-      const msg = err?.error?.message || err?.message || String(err);
+      const e = err as { error?: { message?: string }; message?: string };
+      const msg = e?.error?.message || e?.message || String(err);
       if (/ambiguous/i.test(msg) && i < tries.length - 1) continue;
       throw Object.assign(new Error(`IBKR: ${msg}`), { status: /no security definition|ambiguous/i.test(msg) ? 404 : 502 });
     }
   }
-  const days = [];
+  const days: Bar[] = [];
   for (const b of bars || []) {
     // formatDate 1 gives yyyymmdd for daily bars
     const m = /^(\d{4})(\d{2})(\d{2})/.exec(String(b.time || ''));
     if (!m || typeof b.close !== 'number' || b.close <= 0) continue;
-    days.push({ date: `${m[1]}-${m[2]}-${m[3]}`, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume ?? null });
+    days.push({ date: `${m[1]}-${m[2]}-${m[3]}`, open: b.open!, high: b.high!, low: b.low!, close: b.close, volume: b.volume ?? null });
   }
   days.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   return days;

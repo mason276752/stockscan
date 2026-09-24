@@ -4,7 +4,7 @@
 //   https://www.sec.gov/dera/data/financial-statement-data-sets.html
 //
 // One zip per calendar quarter, back to 2009q1 - ten years before Inline
-// XBRL, which is all ixbrl.js can read (a pre-2019 filing tags its numbers
+// XBRL, which is all ixbrl.ts can read (a pre-2019 filing tags its numbers
 // in a separate instance document, not in the HTML). Four tab-separated
 // files, keyed by `adsh`, the accession (2026q2 is grouped by it, but the
 // quarters SEC re-published in 2024 are sorted by tag - so a filing's rows
@@ -27,7 +27,7 @@
 //           label and SEC's definition of every standard concept
 //   lacks   the headings ("Operating expenses:") and with them the indent
 //           hierarchy - pre.txt carries no abstract rows at all, so every
-//           line sits at depth 0 (quarters.js already has a path for a
+//           line sits at depth 0 (quarters.ts already has a path for a
 //           statement presented flat); the filer's own statement titles,
 //           synthesised here from `stmt`; the cover page (dei), so no share
 //           count for the valuation page; and the dimensional columns of
@@ -35,14 +35,14 @@
 //           does not say which axes a statement declares (see `dimensional`).
 //
 // Measured against the crawler's own parse of the same filings (2026q2,
-// 6,001 of them, `ingest-dera.mjs --compare`): 6,000 rebuilt, and scoring
+// 6,001 of them, `ingest-dera.mts --compare`): 6,000 rebuilt, and scoring
 // each side the same way gives the identical score 95.4% of the time, a
 // score within 2 points 96.7% of the time and within 5 points 98.7%.
 //
 // Dates: ddate and sub.period are rounded to the nearest month end, while
 // the app keys a filing by EDGAR's exact period end - a 52/53-week filer
 // ends its quarter on 2026-03-28, not 2026-03-31, and two spellings of one
-// period would look like two periods (filings.js filingPeriodKey). So every
+// period would look like two periods (filings.ts filingPeriodKey). So every
 // date is snapped back onto a period end the company really filed, by the
 // snapper the caller builds from EDGAR's own filing list (dateSnapper).
 
@@ -50,15 +50,86 @@ import { DEFAULT_FORMS } from './filings.ts';
 import { classify, pickPrimary } from './statementTypes.ts';
 import { compareContexts, pruneColumns } from './statements.ts';
 import { zhFor } from './zh.ts';
+import type { Concept, FactValue, IsoDate, LineItem, ScrapeResult, Statement, StatementType, XbrlContext } from './types.ts';
 
-// The forms the app keeps (filings.js). 10-KT / 10-QT transition reports and
+/** One row of sub.txt: the submission itself. */
+export interface DeraSub {
+  name?: string;
+  instance?: string;
+  fy?: string | null;
+  fp?: string | null;
+}
+
+/** One row of pre.txt: where a number is presented. */
+export interface DeraPre {
+  report: number;
+  line: number;
+  stmt: string;
+  inpth: number;
+  tag: string;
+  version: string;
+  plabel: string;
+  negating: number;
+}
+
+/** One row of num.txt: a number and the period it covers. */
+export interface DeraNum {
+  tag: string;
+  version: string;
+  ddate: string;
+  qtrs: number;
+  uom: string;
+  segments: string;
+  coreg: string;
+  value: string;
+}
+
+/** One row of tag.txt: what a tag is. */
+export interface DeraTag {
+  datatype?: string;
+  tlabel?: string;
+  doc?: string;
+}
+
+/** (tag, version) -> its tag.txt row. */
+export type TagLookup = (tag: string, version: string) => DeraTag | null | undefined;
+
+/** Rounds a DERA month end back onto a period end the company really filed. */
+export type DateSnapper = (d: IsoDate) => IsoDate;
+
+/** The filing EDGAR knows about, which the rebuild is filed under. */
+export interface DeraFiling {
+  cik: number;
+  accession: string;
+  form: string;
+  filingDate?: IsoDate | null;
+  reportDate?: IsoDate | null;
+  primaryDocument?: string | null;
+  documentUrl?: string | null;
+  viewerUrl?: string | null;
+  indexUrl?: string | null;
+}
+
+/** Everything deraResult() needs to rebuild one filing. */
+export interface DeraInput {
+  filing: DeraFiling;
+  sub: DeraSub;
+  pre: readonly DeraPre[];
+  num: readonly DeraNum[];
+  tagOf: TagLookup;
+  snap?: DateSnapper;
+  dataset?: string | null;
+  fetchedAt?: string;
+}
+
+// The forms the app keeps (filings.ts). 10-KT / 10-QT transition reports and
 // everything else in the datasets (S-1, 8-K, 11-K …) are left alone.
 export const DERA_FORMS = DEFAULT_FORMS;
 
 // `stmt` -> the app's statement type, with a title that classify() maps back
 // to that same type: reclassify() re-runs the title classifier on every load,
 // so a title it read differently would move the statement to another slot.
-const STATEMENTS = {
+const STATEMENTS: Record<string, [StatementType, string]> = {
   BS: ['balance_sheet', 'CONSOLIDATED BALANCE SHEETS'],
   IS: ['income_statement', 'CONSOLIDATED STATEMENTS OF OPERATIONS'],
   CF: ['cash_flow', 'CONSOLIDATED STATEMENTS OF CASH FLOWS'],
@@ -73,8 +144,8 @@ for (const [stmt, [type, title]] of Object.entries(STATEMENTS)) {
 // standard one, the accession itself for the filer's own extension. The app
 // spells a concept prefix:Tag, and what SEC calls 'ifrs' the app (and the
 // filings themselves) call 'ifrs-full'.
-const NAMESPACE = { ifrs: 'ifrs-full' };
-export function conceptOf(tag, version, ownPrefix) {
+const NAMESPACE: Record<string, string> = { ifrs: 'ifrs-full' };
+export function conceptOf(tag: string, version: string, ownPrefix: string): Concept {
   const i = version.indexOf('/');
   if (i < 0) return `${ownPrefix}:${tag}`;
   const ns = version.slice(0, i);
@@ -83,14 +154,14 @@ export function conceptOf(tag, version, ownPrefix) {
 
 // The prefix the filer's own extension tags get: the instance document is
 // named after it ('aapl-20260328_htm.xml', 'aapl-20111231.xml').
-export const ownPrefixOf = (instance) => (/^([A-Za-z][A-Za-z0-9_.-]*?)-\d{8}/.exec(instance || '')?.[1] || 'ext').toLowerCase();
+export const ownPrefixOf = (instance: string | null | undefined): string => (/^([A-Za-z][A-Za-z0-9_.-]*?)-\d{8}/.exec(instance || '')?.[1] || 'ext').toLowerCase();
 
 // num.txt gives the unit of measure but not the kind of number; tag.txt's
 // datatype does. The app reads a unit with a '/' as per-share (not scalable,
 // only approximately subtractable) and 'shares' / 'pure' as counts and
-// ratios (quarters.js subtractability, StatementTable scalable), so the two
+// ratios (quarters.ts subtractability, StatementTable scalable), so the two
 // have to be spelled the way the Inline XBRL parse spells them.
-const UNIT_OF = {
+const UNIT_OF: Record<string, (uom: string) => string> = {
   perShare: (uom) => `${uom}/shares`,
   perUnit: (uom) => `${uom}/unit`,
   shares: () => 'shares',
@@ -99,7 +170,7 @@ const UNIT_OF = {
   decimal: () => 'pure',
   integer: () => 'pure',
 };
-export const unitOf = (uom, datatype) => (UNIT_OF[datatype] ? UNIT_OF[datatype](uom) : uom || null);
+export const unitOf = (uom: string, datatype: string | null | undefined): string | null => (datatype && UNIT_OF[datatype] ? UNIT_OF[datatype]!(uom) : uom || null);
 
 // 'BusinessSegments=AmericasSegment;ConsolidationItems=OperatingSegments;'
 // SEC drops the namespace prefixes and the Axis / Member suffixes; they go
@@ -107,9 +178,9 @@ export const unitOf = (uom, datatype) => (UNIT_OF[datatype] ? UNIT_OF[datatype](
 // so the column groups and reads like any other. null = unparseable, which
 // is what a segments string too long for the field looks like once SEC has
 // truncated it: that column is dropped rather than guessed at.
-export function parseSegments(s) {
+export function parseSegments(s: string | null | undefined): Record<Concept, Concept> | null {
   if (!s) return {};
-  const out = {};
+  const out: Record<Concept, Concept> = {};
   for (const part of s.split(';')) {
     if (!part) continue;
     const i = part.indexOf('=');
@@ -119,11 +190,11 @@ export function parseSegments(s) {
   return out;
 }
 
-const iso = (yyyymmdd) => `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
-const addDay = (d) => new Date(new Date(`${d}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
-const subDay = (d) => new Date(new Date(`${d}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10);
+const iso = (yyyymmdd: string): IsoDate => `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+const addDay = (d: IsoDate): IsoDate => new Date(new Date(`${d}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
+const subDay = (d: IsoDate): IsoDate => new Date(new Date(`${d}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10);
 // the month end `quarters` quarters before a month end (ddate is always one)
-function monthEndBack(yyyymmdd, quarters) {
+function monthEndBack(yyyymmdd: string, quarters: number): IsoDate {
   const y = Number(yyyymmdd.slice(0, 4));
   const m = Number(yyyymmdd.slice(4, 6));
   return new Date(Date.UTC(y, m - quarters * 3, 0)).toISOString().slice(0, 10);
@@ -132,8 +203,8 @@ function monthEndBack(yyyymmdd, quarters) {
 // DERA rounds every date to a month end. `snap` puts it back on the period
 // end the company really filed when one is within a fortnight (rounding can
 // move a date by at most half a month), else leaves it as it is.
-export function dateSnapper(periodEnds, days = 15) {
-  const list = [...new Set(periodEnds.filter(Boolean))].sort();
+export function dateSnapper(periodEnds: readonly (IsoDate | null | undefined)[], days = 15): DateSnapper {
+  const list = [...new Set(periodEnds.filter((x): x is IsoDate => !!x))].sort();
   if (!list.length) return (d) => d;
   const ms = list.map((d) => Date.parse(`${d}T00:00:00Z`));
   const window = days * 86400000;
@@ -143,14 +214,14 @@ export function dateSnapper(periodEnds, days = 15) {
     let hi = ms.length - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (ms[mid] < t) lo = mid + 1;
+      if (ms[mid]! < t) lo = mid + 1;
       else hi = mid;
     }
-    let best = null;
+    let best: { gap: number; date: IsoDate } | null = null;
     for (const i of [lo - 1, lo, lo + 1]) {
       if (i < 0 || i >= ms.length) continue;
-      const gap = Math.abs(ms[i] - t);
-      if (gap <= window && (!best || gap < best.gap)) best = { gap, date: list[i] };
+      const gap = Math.abs(ms[i]! - t);
+      if (gap <= window && (!best || gap < best.gap)) best = { gap, date: list[i]! };
     }
     return best ? best.date : d;
   };
@@ -163,7 +234,7 @@ export function dateSnapper(periodEnds, days = 15) {
 // close) one of the statement's own duration columns.
 const PERIOD_START = /\b(beginning|start)\s+(of|balance)|\bbeginning\b.*\bperiod\b|^beginning/i;
 const PERIOD_END = /\bend(ing)?\s+(of|balance)|\bend\b.*\bperiod\b|\bclosing balance/i;
-function periodRole(label) {
+function periodRole(label: string | null | undefined): string | null {
   if (PERIOD_START.test(label || '')) return 'periodStartLabel';
   if (PERIOD_END.test(label || '')) return 'periodEndLabel';
   return null;
@@ -171,15 +242,15 @@ function periodRole(label) {
 
 // buildStatement's own rule, on the columns this statement kept: an opening
 // balance is dated the day *before* a duration column starts.
-function trimRollForward(lineItems, used) {
+function trimRollForward(lineItems: LineItem[], used: Record<string, DeraContext>): void {
   const durations = Object.values(used).filter((c) => !c.instant);
   if (!durations.length) return;
-  const starts = new Set(durations.map((c) => subDay(c.start)));
-  const ends = new Set(durations.map((c) => c.end));
+  const starts = new Set(durations.map((c) => subDay(c.start!)));
+  const ends = new Set(durations.map((c) => c.end!));
   for (const item of lineItems) {
     const want = item.preferredLabel === 'periodStartLabel' ? starts : item.preferredLabel === 'periodEndLabel' ? ends : null;
     if (!want) continue;
-    item.values = Object.fromEntries(Object.entries(item.values).filter(([id]) => !used[id]?.instant || want.has(used[id].instant)));
+    item.values = Object.fromEntries(Object.entries(item.values).filter(([id]) => !used[id]?.instant || want.has(used[id]!.instant!)));
     if (item.labelZh) item.labelZh += want === starts ? '（期初）' : '（期末）';
   }
 }
@@ -192,18 +263,18 @@ const IN_CURRENCY = new Set(['monetary', 'perShare', 'perUnit']); // datatypes w
 // kind) holds one value per row and column, with no room for the second. So
 // whichever currency most of the filing's money is in is the one kept, and
 // the translation is dropped. null when there is no money in it at all.
-export function mainCurrency(num, tagOf) {
-  const by = new Map();
+export function mainCurrency(num: readonly DeraNum[], tagOf: TagLookup): string | null {
+  const by = new Map<string, number>();
   for (const r of num) {
     if (r.coreg || tagOf(r.tag, r.version)?.datatype !== 'monetary') continue;
     by.set(r.uom, (by.get(r.uom) || 0) + 1);
   }
-  let best = null;
+  let best: { uom: string; count: number } | null = null;
   for (const [uom, count] of by) if (!best || count > best.count) best = { uom, count };
   return best?.uom ?? null;
 }
 
-// One filing's statements, in the shape scrape.js produces and store.js saves.
+// One filing's statements, in the shape scrape.ts produces and store.ts saves.
 //
 //   filing   EDGAR's own record of the filing (accession, form, filingDate,
 //            reportDate, primaryDocument and the URLs) - the authority for
@@ -218,17 +289,28 @@ export function mainCurrency(num, tagOf) {
 //
 // Returns null when the submission presents none of the four statements
 // (a filing that only amends the exhibits, say): there is nothing to save.
-export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, dataset = null, fetchedAt = new Date().toISOString() }) {
+/** A context this rebuilds: the same shape buildStatement's columns take. */
+type DeraContext = Pick<XbrlContext, 'id' | 'dimensions'> & { instant?: IsoDate; start?: IsoDate; end?: IsoDate };
+
+/** One number with the context it belongs to. */
+interface DeraFact {
+  ctx: DeraContext;
+  value: number | null;
+  unit: string | null;
+  nil?: true;
+}
+
+export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, dataset = null, fetchedAt = new Date().toISOString() }: DeraInput): ScrapeResult | null {
   const own = ownPrefixOf(sub.instance);
   const currency = mainCurrency(num, tagOf);
 
   // ---- the columns, and every number in one of them ----
-  const contexts = new Map(); // ddate|qtrs|segments -> context
-  const facts = new Map(); // concept -> [{ ctx, value, unit, nil }]
+  const contexts = new Map<string, DeraContext | null>(); // ddate|qtrs|segments -> context
+  const facts = new Map<Concept, DeraFact[]>();
   let factCount = 0;
   for (const r of num) {
     if (r.coreg) continue; // a co-registrant's own figures, not this filer's
-    if (currency && r.uom !== currency && IN_CURRENCY.has(tagOf(r.tag, r.version)?.datatype)) continue;
+    if (currency && r.uom !== currency && IN_CURRENCY.has(tagOf(r.tag, r.version)?.datatype!)) continue;
     const key = `${r.ddate}|${r.qtrs}|${r.segments}`;
     let ctx = contexts.get(key);
     if (ctx === undefined) {
@@ -245,7 +327,7 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
     const concept = conceptOf(r.tag, r.version, own);
     const info = tagOf(r.tag, r.version);
     const unit = unitOf(r.uom, info?.datatype);
-    const cell = r.value === '' ? { ctx, value: null, unit, nil: true } : { ctx, value: Number(r.value), unit };
+    const cell: DeraFact = r.value === '' ? { ctx, value: null, unit, nil: true } : { ctx, value: Number(r.value), unit };
     if (cell.value !== null && !Number.isFinite(cell.value)) continue;
     const list = facts.get(concept);
     if (list) list.push(cell);
@@ -254,7 +336,7 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
   }
 
   // ---- one statement per `report` ----
-  const byReport = new Map();
+  const byReport = new Map<number, DeraPre[]>();
   for (const p of pre) {
     if (!STATEMENTS[p.stmt]) continue; // UN: the notes, which the app never shows as statements
     const list = byReport.get(p.report);
@@ -262,11 +344,11 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
     else byReport.set(p.report, [p]);
   }
 
-  const all = [];
+  const all: Statement[] = [];
   for (const report of [...byReport.keys()].sort((a, b) => a - b)) {
-    const rows = byReport.get(report).sort((a, b) => a.line - b.line);
-    const [type, baseTitle] = STATEMENTS[rows[0].stmt];
-    const parenthetical = rows[0].inpth === 1;
+    const rows = byReport.get(report)!.sort((a, b) => a.line - b.line);
+    const [type, baseTitle] = STATEMENTS[rows[0]!.stmt]!;
+    const parenthetical = rows[0]!.inpth === 1;
     // Which statement declares which axis is in the presentation linkbase,
     // which the datasets do not carry - so a dimensional number would land
     // on every statement that names its concept (segment revenue on the
@@ -274,12 +356,12 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
     // dimensional by construction, takes them.
     const dimensional = type === 'equity';
 
-    const used = {};
-    const lineItems = [];
+    const used: Record<string, DeraContext> = {};
+    const lineItems: LineItem[] = [];
     for (const row of rows) {
       const concept = conceptOf(row.tag, row.version, own);
       const info = tagOf(row.tag, row.version);
-      const item = {
+      const item: LineItem = {
         concept,
         label: row.plabel || info?.tlabel || row.tag,
         labelStandard: info?.tlabel || null,
@@ -294,13 +376,13 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
       const cells = facts.get(concept) || [];
       const plain = dimensional ? cells : cells.filter((f) => !Object.keys(f.ctx.dimensions).length);
       // A filer that tags a line only per segment or per share class shows no
-      // total for it; quarters.js adds the members up instead (rolledUp),
+      // total for it; quarters.ts adds the members up instead (rolledUp),
       // which it can only do if the member columns are there. So a row with
       // nothing undimensioned keeps its dimensional numbers - and only such
       // a row does, or the segment note would land on the income statement.
       for (const f of plain.length ? plain : cells) {
         used[f.ctx.id] = f.ctx;
-        item.values[f.ctx.id] = f.nil ? { value: null, unit: f.unit, nil: true } : { value: f.value, unit: f.unit };
+        item.values[f.ctx.id] = (f.nil ? { value: null, raw: null, unit: f.unit, nil: true } : { value: f.value, raw: null, unit: f.unit }) as FactValue;
       }
       if (Object.keys(item.values).length) lineItems.push(item);
     }
@@ -308,11 +390,11 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
 
     trimRollForward(lineItems, used);
 
-    const axes = {};
+    const axes: Record<Concept, Set<Concept>> = {};
     for (const c of Object.values(used)) for (const [a, m] of Object.entries(c.dimensions)) (axes[a] ||= new Set()).add(m);
-    const counts = Object.fromEntries(Object.keys(used).map((id) => [id, 0]));
-    for (const item of lineItems) for (const id of Object.keys(item.values)) counts[id]++;
-    const columns = pruneColumns(Object.values(used).sort(compareContexts), counts);
+    const counts: Record<string, number> = Object.fromEntries(Object.keys(used).map((id) => [id, 0]));
+    for (const item of lineItems) for (const id of Object.keys(item.values)) counts[id]!++;
+    const columns = pruneColumns(Object.values(used).sort(compareContexts as never) as unknown as XbrlContext[], counts);
     const keep = new Set(columns.map((c) => c.id));
     for (const item of lineItems) item.values = Object.fromEntries(Object.entries(item.values).filter(([id]) => keep.has(id)));
 
@@ -324,7 +406,7 @@ export function deraResult({ filing, sub, pre, num, tagOf, snap = (d) => d, data
       axes: Object.fromEntries(Object.entries(axes).map(([a, m]) => [a, [...m].sort()])),
       columns: columns.map((c) => ({
         id: c.id,
-        period: c.instant ? { instant: c.instant } : { start: c.start, end: c.end },
+        period: c.instant ? { instant: c.instant } : { start: c.start!, end: c.end! },
         dimensions: c.dimensions,
       })),
       lineItems,

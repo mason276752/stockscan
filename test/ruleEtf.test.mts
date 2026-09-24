@@ -2,10 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { screenAsOfColumns, screenAsOfIndex } from '../server/lib/screen.ts';
 import { NDX_CONSTRAINTS, breachesConstraints, capWeights, constrainWeights, marketWeights, rebalanceSessions, replaySchedule, ruleRequest, ruleSeries, singleCap, windowSchedule } from '../server/lib/ruleEtf.ts';
+import type { Bar, IsoDate, RatioValues, RuleBarsMember, RuleEvent, RuleSchedule, Score, ScreenRow } from '../server/lib/types.ts';
+import type { RuleSeriesOptions } from '../server/lib/ruleEtf.ts';
+
+/** What a fixture filing may override. */
+interface FilingExtra {
+  form?: string;
+  period?: string;
+  values?: RatioValues;
+}
 
 // --- the pieces a replay reads: the company half (index/screen.json) and
 // every scored filing (index/screen-asof-<year>.json) ---
-const company = (cik, ticker, name, sic = '7372') => ({
+const company = (cik: number, ticker: string, name: string, sic = '7372') => ({
   cik,
   ticker,
   tickers: [ticker],
@@ -20,8 +29,8 @@ const company = (cik, ticker, name, sic = '7372') => ({
   yoy: null,
   history: 0,
   market: { marketCap: 1000 },
-});
-const filing = (cik, filingDate, periodEnd, score, extra = {}) => ({
+}) as unknown as ScreenRow;
+const filing = (cik: number, filingDate: IsoDate, periodEnd: IsoDate, score: number | null, extra: FilingExtra = {}) => ({
   cik,
   accession: `${cik}-${filingDate}`,
   form: extra.form || '10-Q',
@@ -33,8 +42,8 @@ const filing = (cik, filingDate, periodEnd, score, extra = {}) => ({
   coverage: 1,
   categories: [],
   values: extra.values || {},
-});
-const indexOf = (filings) => screenAsOfIndex([screenAsOfColumns(filings)]);
+}) as unknown as Score;
+const indexOf = (filings: Score[]) => screenAsOfIndex([screenAsOfColumns(filings)]);
 
 test('a company joins the day a filing makes it pass and leaves the day one makes it fail', () => {
   const core = [company(1, 'AAA', 'Alpha'), company(2, 'BBB', 'Beta')];
@@ -55,8 +64,8 @@ test('a company joins the day a filing makes it pass and leaves the day one make
     ],
   );
   const aaa = members.find((m) => m.ticker === 'AAA');
-  assert.deepEqual(aaa.spans, [{ from: '2020-05-01', to: '2020-08-01' }]);
-  assert.deepEqual(members.find((m) => m.ticker === 'BBB').spans, [{ from: '2020-03-01', to: null }]);
+  assert.deepEqual(aaa!.spans, [{ from: '2020-05-01', to: '2020-08-01' }]);
+  assert.deepEqual(members.find((m) => m.ticker === 'BBB')!.spans, [{ from: '2020-03-01', to: null }]);
 });
 
 test('an amendment is not a filing date of its own, and a company that never passes is never a member', () => {
@@ -102,7 +111,7 @@ test('the year files are read as one: a filing in another shard is the same fili
   const all = [filing(1, '2019-05-01', '2019-03-31', 50), filing(1, '2020-05-01', '2020-03-31', 80), filing(1, '2021-05-01', '2021-03-31', 20)];
   // the static build ships one file per year of filing date; the server has
   // them all in one. Both must replay to the same thing.
-  const sharded = screenAsOfIndex([2019, 2020, 2021].map((y) => screenAsOfColumns(all.filter((f) => f.filingDate.startsWith(String(y))))));
+  const sharded = screenAsOfIndex([2019, 2020, 2021].map((y) => screenAsOfColumns(all.filter((f) => f.filingDate!.startsWith(String(y))))));
   const one = indexOf(all);
   const q = { score_min: 60 };
   assert.deepEqual(replaySchedule(core, sharded, q).events, replaySchedule(core, one, q).events);
@@ -111,10 +120,10 @@ test('the year files are read as one: a filing in another shard is the same fili
 });
 
 // --- the index ---
-const bars = (days) => days.map(([date, o, h, l, c]) => ({ date, open: o, high: h, low: l, close: c, volume: 100 }));
+const bars = (days: [IsoDate, number, number, number, number][]): Bar[] => days.map(([date, o, h, l, c]) => ({ date, open: o, high: h, low: l, close: c, volume: 100 }));
 const A = { symbol: 'A', source: 'test', days: bars([['2020-01-02', 10, 11, 9, 10], ['2020-01-03', 10, 20, 10, 20], ['2020-01-06', 20, 20, 20, 20], ['2020-01-07', 20, 20, 20, 20]]) };
 const B = { symbol: 'B', source: 'test', days: bars([['2020-01-02', 5, 5, 5, 5], ['2020-01-03', 5, 5, 5, 5], ['2020-01-06', 5, 10, 5, 10], ['2020-01-07', 10, 10, 10, 10]]) };
-const ev = (date, add = [], drop = [], n = 0) => ({ date, add, drop, n });
+const ev = (date: IsoDate, add: string[] = [], drop: string[] = [], n = 0): RuleEvent => ({ date, add, drop, n });
 
 test('equal weight is restored at the open of the session after every change', () => {
   // A from the start; B joins on the 3rd (so from the 6th); A leaves on the 6th (so from the 7th)
@@ -130,15 +139,15 @@ test('equal weight is restored at the open of the session after every change', (
   );
   assert.equal(r.start, '2020-01-02');
   assert.equal(r.end, '2020-01-07');
-  assert.equal(Math.round(r.stats.total * 100), 200);
+  assert.equal(Math.round(r.stats!.total * 100), 200);
   assert.deepEqual(r.counts, [{ date: '2020-01-02', n: 1 }, { date: '2020-01-06', n: 2 }, { date: '2020-01-07', n: 1 }]);
   const a = r.constituents.find((c) => c.symbol === 'A');
-  assert.equal(a.days, 3);
-  assert.equal(a.return, 1, 'bought at 10 the day it joined, sold at 20 the day it left');
-  assert.equal(a.in, false);
+  assert.equal(a!.days, 3);
+  assert.equal(a!.return, 1, 'bought at 10 the day it joined, sold at 20 the day it left');
+  assert.equal(a!.in, false);
   const b = r.constituents.find((c) => c.symbol === 'B');
-  assert.equal(b.return, 1, 'bought at 5 at the open of the day it joined, worth 10');
-  assert.equal(b.in, true);
+  assert.equal(b!.return, 1, 'bought at 5 at the open of the day it joined, worth 10');
+  assert.equal(b!.in, true);
 });
 
 test('holding nothing is flat, not a hole', () => {
@@ -152,7 +161,7 @@ test('holding nothing is flat, not a hole', () => {
       ['2020-01-07', 100], // B bought at its open of the 7th (10) - it did not move
     ],
   );
-  assert.equal(r.notes.find((n) => n.code === 'ruleCash').days, 2);
+  assert.equal(r.notes.find((n) => n.code === 'ruleCash')!.days, 2);
 });
 
 test('a constituent whose prices stop is sold at its last close, and the index carries on', () => {
@@ -167,7 +176,7 @@ test('a constituent whose prices stop is sold at its last close, and the index c
     r.bars.map((b) => [b.time, b.close]),
     [['2020-01-02', 100], ['2020-01-03', 150], ['2020-01-06', 150], ['2020-01-07', 150], ['2020-02-10', 150], ['2020-02-11', 150]],
   );
-  assert.equal(r.constituents.find((c) => c.symbol === 'B').delisted, true);
+  assert.equal(r.constituents.find((c) => c.symbol === 'B')!.delisted, true);
   assert.equal(r.bars.length, 6, 'one name leaving does not shorten the chart');
 });
 
@@ -175,8 +184,8 @@ test('a series that is only a day or two behind the others is carried, not treat
   const behind = { symbol: 'B', source: 'test', days: B.days.slice(0, 3) }; // nothing for the 7th yet
   const r = ruleSeries([A, behind], [ev('2020-01-01', ['A', 'B'])]);
   const b = r.constituents.find((c) => c.symbol === 'B');
-  assert.equal(b.delisted, false, 'the last session is often one symbol\'s alone');
-  assert.equal(b.last, '2020-01-07', 'it stays in the index at its last close');
+  assert.equal(b!.delisted, false, 'the last session is often one symbol\'s alone');
+  assert.equal(b!.last, '2020-01-07', 'it stays in the index at its last close');
   assert.equal(r.counts.length, 1, 'and nothing is rebalanced over it');
 });
 
@@ -188,13 +197,13 @@ test('a share too cheap to trade is held by the rules but never bought', () => {
   assert.deepEqual(r.bars.map((b) => b.close), [100, 200, 200, 200], 'A alone, as if the shell were not there');
   assert.equal(r.counts[0].n, 1);
   const c = r.constituents.find((x) => x.symbol === 'C');
-  assert.equal(c.days, 0);
-  assert.equal(c.cheap, 1, 'and the rebalances it sat out are counted - January is one of them');
-  assert.equal(ruleSeries([A, shell], [ev('2020-01-01', ['A', 'C'])], { rebalance: 'filing' }).constituents.find((x) => x.symbol === 'C').cheap, 4, 'trading on every filing looks every session');
+  assert.equal(c!.days, 0);
+  assert.equal(c!.cheap, 1, 'and the rebalances it sat out are counted - January is one of them');
+  assert.equal(ruleSeries([A, shell], [ev('2020-01-01', ['A', 'C'])], { rebalance: 'filing' }).constituents.find((x) => x.symbol === 'C')!.cheap, 4, 'trading on every filing looks every session');
   assert.equal(r.notes.find((n) => n.code === 'ruleCheap')?.n, 1);
   // with the floor off it is bought, and one tick is +4,950% on the index
   const raw = ruleSeries([A, shell], [ev('2020-01-01', ['A', 'C'])], { minPrice: 0 });
-  assert.ok(raw.stats.total > 40, 'which is exactly why the floor is there');
+  assert.ok(raw.stats!.total > 40, 'which is exactly why the floor is there');
 });
 
 test('a schedule with no prices at all says so instead of throwing', () => {
@@ -209,7 +218,7 @@ test('a window starts the index at 100 on its own first session, holding what th
   // A from the start, B from the 3rd: a window opening on the 3rd holds both
   // from the 6th's open, and the index is 100 on its first session
   const events = [ev('2020-01-01', ['A']), ev('2020-01-03', ['B'])];
-  const full = { members: [{ ticker: 'A', spans: [{ from: '2020-01-01', to: null }] }, { ticker: 'B', spans: [{ from: '2020-01-03', to: null }] }], events, skipped: [], tested: 2, first: '2020-01-01', last: '2020-01-03' };
+  const full = { members: [{ ticker: 'A', spans: [{ from: '2020-01-01', to: null }] }, { ticker: 'B', spans: [{ from: '2020-01-03', to: null }] }], events, skipped: [], tested: 2, first: '2020-01-01', last: '2020-01-03' } as unknown as RuleSchedule;
   const w = windowSchedule(full, { from: '2020-01-03' });
   assert.deepEqual(w.events, [{ date: '2020-01-03', add: ['A', 'B'], drop: [], n: 2, opening: true }], 'everything decided by then is one opening position');
   const r = ruleSeries([A, B], w.events, { from: '2020-01-03' });
@@ -228,7 +237,7 @@ test('a window ends where it is told: nothing after it is replayed', () => {
   const r = ruleSeries([A, B], [ev('2020-01-01', ['A']), ev('2020-01-03', ['B'])], { to: '2020-01-06', rebalance: 'filing' });
   assert.deepEqual(r.bars.map((b) => b.time), ['2020-01-02', '2020-01-03', '2020-01-06']);
   assert.equal(r.end, '2020-01-06');
-  assert.equal(r.constituents.find((c) => c.symbol === 'B').days, 1, "and a constituent's return is what it did inside the window");
+  assert.equal(r.constituents.find((c) => c.symbol === 'B')!.days, 1, "and a constituent's return is what it did inside the window");
 });
 
 test('a window drops the companies it never holds, so their bars are never fetched', () => {
@@ -243,7 +252,7 @@ test('a window drops the companies it never holds, so their bars are never fetch
     tested: 3,
     first: '2020-01-01',
     last: '2020-01-06',
-  };
+  } as unknown as RuleSchedule;
   const w = windowSchedule(full, { from: '2020-01-03' });
   assert.deepEqual(w.members.map((m) => m.ticker), ['B'], 'A was already out when the window opened');
   assert.deepEqual(w.events, [ev('2020-01-06', ['B'], [], 1)]);
@@ -258,7 +267,7 @@ test('the stretches a member was held for are clipped to the window', () => {
     events: [ev('2019-01-01', ['A']), ev('2020-06-01', [], ['A']), ev('2021-01-01', ['A'])],
     skipped: [],
     tested: 3,
-  };
+  } as unknown as RuleSchedule;
   const w = windowSchedule(full, { from: '2020-01-01', to: '2020-12-31' });
   assert.deepEqual(w.members[0].spans, [{ from: '2020-01-01', to: '2020-06-01' }], 'the stretch that started before the window starts with it, the one after it never happened');
   const open = windowSchedule(full, { from: '2021-06-01' });
@@ -274,18 +283,18 @@ test('a range preset is counted back from the end of the window, and no window i
   assert.equal(all.range, 'all');
   const typed = ruleRequest({ ...q, from: '2020-12-31', to: '2019-01-01' }, '2026-09-23');
   assert.deepEqual([typed.from, typed.to], ['2019-01-01', '2020-12-31'], 'a window typed back to front is turned round');
-  const schedule = { members: [], events: [] };
+  const schedule = { members: [], events: [] } as unknown as RuleSchedule;
   assert.equal(windowSchedule(schedule, all), schedule, 'no window: the schedule is handed back as it is');
 });
 
 // --- the rebalance schedule ---
-const flat = (symbol, price, days, shares = null) => ({
+const flat = (symbol: string, price: number, days: [IsoDate, number?][], shares: { date: IsoDate; value: number }[] | undefined = undefined): RuleBarsMember => ({
   symbol,
   source: 'test',
   days: days.map(([date, p]) => ({ date, open: p ?? price, high: p ?? price, low: p ?? price, close: p ?? price, volume: 100 })),
   ...(shares ? { shares } : {}),
 });
-const JAN_FEB = [['2020-01-02'], ['2020-01-03'], ['2020-01-31'], ['2020-02-03'], ['2020-02-04']];
+const JAN_FEB: [IsoDate, number?][] = [['2020-01-02'], ['2020-01-03'], ['2020-01-31'], ['2020-02-03'], ['2020-02-04']];
 
 test('the portfolio is only rebuilt on the first session of each month', () => {
   const a = flat('A', 10, JAN_FEB);
@@ -293,7 +302,7 @@ test('the portfolio is only rebuilt on the first session of each month', () => {
   // B qualifies in the middle of January - it waits for February
   const r = ruleSeries([a, b], [ev('2020-01-01', ['A']), ev('2020-01-15', ['B'])]);
   assert.deepEqual(r.counts, [{ date: '2020-01-02', n: 1 }, { date: '2020-02-03', n: 2 }]);
-  assert.equal(r.constituents.find((c) => c.symbol === 'B').first, '2020-02-03');
+  assert.equal(r.constituents.find((c) => c.symbol === 'B')!.first, '2020-02-03');
   // and quarterly waits until April, yearly until next January
   assert.deepEqual(ruleSeries([a, b], [ev('2020-01-01', ['A']), ev('2020-01-15', ['B'])], { rebalance: 'quarterly' }).counts, [{ date: '2020-01-02', n: 1 }]);
   assert.deepEqual(ruleSeries([a, b], [ev('2020-01-01', ['A']), ev('2020-01-15', ['B'])], { rebalance: 'filing' }).counts, [{ date: '2020-01-02', n: 1 }, { date: '2020-01-31', n: 2 }]);
@@ -310,17 +319,17 @@ test('a holding whose prices stop is sold between rebalances, the money spread o
     ['2020-02-03', 100],
     ['2020-02-04', 100],
   ]);
-  assert.equal(r.counts.find((c) => c.date === '2020-01-31').n, 1, 'sold the day its prices were gone, not at the next rebalance');
-  assert.equal(r.constituents.find((c) => c.symbol === 'B').delisted, true);
+  assert.equal(r.counts.find((c) => c.date === '2020-01-31')!.n, 1, 'sold the day its prices were gone, not at the next rebalance');
+  assert.equal(r.constituents.find((c) => c.symbol === 'B')!.delisted, true);
 });
 
 test('market-value weighting is the share count of the filing that was current, times the price that day', () => {
-  const shares = (v) => [{ date: '2019-01-01', value: v }];
+  const shares = (v: number) => [{ date: '2019-01-01', value: v }];
   // A is worth 100m x $10, B 10m x $5 - and B doubles the next session
   const a = flat('A', 10, [['2020-01-02'], ['2020-01-03']], shares(100));
   const b = flat('B', 5, [['2020-01-02'], ['2020-01-03', 10]], shares(10));
   const events = [ev('2020-01-01', ['A', 'B'])];
-  const at = (opts) => ruleSeries([a, b], events, opts).bars.at(-1).close;
+  const at = (opts: RuleSeriesOptions) => ruleSeries([a, b], events, opts).bars.at(-1)!.close;
   assert.equal(Math.round(at({ weighting: 'equal' }) * 100) / 100, 150, 'equal weight: half of the index doubles');
   assert.equal(Math.round(at({ weighting: 'cap', maxWeight: 1 }) * 1000) / 1000, 104.762, 'by market value, B is 1/21 of it');
   assert.equal(Math.round(at({ weighting: 'cap', maxWeight: 0.6 }) * 100) / 100, 140, 'a ceiling of 60% leaves B with 40%');
@@ -330,11 +339,11 @@ test('a company whose filings never carried a share count is weighted as the med
   const a = flat('A', 10, [['2020-01-02'], ['2020-01-03']], [{ date: '2019-01-01', value: 100 }]);
   const b = flat('B', 5, [['2020-01-02'], ['2020-01-03', 10]]); // no share count at all
   const r = ruleSeries([a, b], [ev('2020-01-01', ['A', 'B'])], { weighting: 'cap', maxWeight: 1 });
-  assert.equal(Math.round(r.bars.at(-1).close), 150, 'B takes A’s market value, so the two are even');
-  assert.equal(r.notes.find((x) => x.code === 'ruleNoShares').n, 1);
+  assert.equal(Math.round(r.bars.at(-1)!.close), 150, 'B takes A’s market value, so the two are even');
+  assert.equal(r.notes.find((x) => x.code === 'ruleNoShares')!.n, 1);
 });
 
-const w4 = (xs) => xs.map((x) => Math.round(x * 1e4) / 1e4);
+const w4 = (xs: readonly number[]) => xs.map((x) => Math.round(x * 1e4) / 1e4);
 test('the weight ceiling is spread over the rest, and an impossible one is ignored', () => {
   assert.deepEqual(w4(capWeights([0.7, 0.2, 0.1], 0.4)), [0.4, 0.4, 0.2]);
   assert.deepEqual(w4(capWeights([0.5, 0.5], 1)), [0.5, 0.5]);
@@ -344,8 +353,8 @@ test('the weight ceiling is spread over the rest, and an impossible one is ignor
 });
 
 // --- Nasdaq-100's constraints ---
-const pct = (xs) => xs.map((x) => Math.round(x * 1e4) / 100);
-const hundred = (top) => [...top, ...Array(100 - top.length).fill((1 - top.reduce((a, b) => a + b, 0)) / (100 - top.length))];
+const pct = (xs: readonly number[]) => xs.map((x) => Math.round(x * 1e4) / 100);
+const hundred = (top: number[]) => [...top, ...Array(100 - top.length).fill((1 - top.reduce((a, b) => a + b, 0)) / (100 - top.length))];
 
 test('the three stages hold together over an index the size they were written for', () => {
   const before = hundred([0.3, 0.14, 0.1, 0.08, 0.06]);
@@ -370,7 +379,7 @@ test('a target no small index could meet settles at the lowest level the rest ca
 test('a plain ceiling is watched a fifth above itself, the way Nasdaq watches 24 against 20', () => {
   const c = singleCap(0.1);
   assert.deepEqual(c.single, { over: 0.1, to: 0.1, watch: 0.12 });
-  const ten = (head) => [head, ...Array(9).fill((1 - head) / 9)];
+  const ten = (head: number) => [head, ...Array(9).fill((1 - head) / 9)];
   assert.equal(breachesConstraints(ten(0.11), c), false, 'drifting to 11% is not worth a trade');
   assert.equal(breachesConstraints(ten(0.13), c), true, '13% is');
 });
@@ -398,8 +407,8 @@ test('a name that runs away is rebuilt before the next scheduled rebalance', () 
 
 test('rebalance sessions are the first of each period', () => {
   const d = ['2024-01-02', '2024-01-03', '2024-02-01', '2024-03-28', '2024-04-01', '2025-01-02'];
-  assert.deepEqual([...rebalanceSessions(d, 'monthly')], [1, 0, 1, 1, 1, 1]);
-  assert.deepEqual([...rebalanceSessions(d, 'quarterly')], [1, 0, 0, 0, 1, 1]);
-  assert.deepEqual([...rebalanceSessions(d, 'yearly')], [1, 0, 0, 0, 0, 1]);
+  assert.deepEqual([...rebalanceSessions(d, 'monthly')!], [1, 0, 1, 1, 1, 1]);
+  assert.deepEqual([...rebalanceSessions(d, 'quarterly')!], [1, 0, 0, 0, 1, 1]);
+  assert.deepEqual([...rebalanceSessions(d, 'yearly')!], [1, 0, 0, 0, 0, 1]);
   assert.equal(rebalanceSessions(d, 'filing'), null);
 });

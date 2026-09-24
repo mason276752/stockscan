@@ -12,9 +12,16 @@ import { fileURLToPath } from 'node:url';
 
 const ZDICT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'zdict');
 
+/** What one worker reports back after a batch. */
+interface Progress {
+  done: number;
+  before: number;
+  after: number;
+}
+
 if (isMainThread) {
   const root = process.argv[2] || path.join(process.cwd(), 'data', 'store');
-  const files = [];
+  const files: [string, string][] = [];
   for (const kind of ['filings', 'scores']) {
     const base = path.join(root, kind);
     if (!fs.existsSync(base)) continue;
@@ -34,7 +41,7 @@ if (isMainThread) {
   let running = n;
   for (const shard of shards) {
     const w = new Worker(fileURLToPath(import.meta.url), { workerData: shard });
-    w.on('message', (m) => {
+    w.on('message', (m: Progress) => {
       done += m.done;
       before += m.before;
       after += m.after;
@@ -46,9 +53,9 @@ if (isMainThread) {
     });
   }
 } else {
-  const dicts = { filings: fs.readFileSync(path.join(ZDICT_DIR, 'filings-v1.zdict')), scores: fs.readFileSync(path.join(ZDICT_DIR, 'scores-v1.zdict')) };
-  let batch = { done: 0, before: 0, after: 0 };
-  for (const [kind, file] of workerData) {
+  const dicts: Record<string, Buffer> = { filings: fs.readFileSync(path.join(ZDICT_DIR, 'filings-v1.zdict')), scores: fs.readFileSync(path.join(ZDICT_DIR, 'scores-v1.zdict')) };
+  let batch: Progress = { done: 0, before: 0, after: 0 };
+  for (const [kind, file] of workerData as [string, string][]) {
     const src = fs.readFileSync(file);
     const raw = zlib.brotliDecompressSync(src);
     const out = zlib.zstdCompressSync(raw, { dictionary: dicts[kind], params: { [zlib.constants.ZSTD_c_compressionLevel]: 19 } });
@@ -60,9 +67,9 @@ if (isMainThread) {
     batch.before += src.length;
     batch.after += out.length;
     if (batch.done >= 100) {
-      parentPort.postMessage(batch);
+      parentPort!.postMessage(batch);
       batch = { done: 0, before: 0, after: 0 };
     }
   }
-  parentPort.postMessage(batch);
+  parentPort!.postMessage(batch);
 }

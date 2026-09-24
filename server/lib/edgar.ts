@@ -6,6 +6,62 @@ import { POPULAR_ETFS } from './etf.ts';
 import { DEFAULT_FORMS, filingUrls, fiscalLabel, pickFiling } from './filings.ts';
 
 export { DEFAULT_FORMS, filingUrls, fiscalLabel, pickFiling };
+import type { Fetcher } from './secClient.ts';
+import type { Company, EdgarFiling, IsoDate, Listing } from './types.ts';
+
+/** One row of EDGAR's ticker table. */
+export interface TickerRow {
+  cik: number;
+  ticker: string;
+  name: string;
+  exchange: string | null;
+}
+
+/** company_tickers_exchange.json, as SEC serves it. */
+export interface TickerFile {
+  fields?: string[];
+  data?: unknown[][];
+}
+
+/** One of EDGAR's filing tables: parallel arrays, one entry per filing. */
+interface SubmissionTable {
+  accessionNumber?: string[];
+  form?: string[];
+  filingDate?: IsoDate[];
+  reportDate?: (IsoDate | null)[];
+  primaryDocument?: string[];
+  isInlineXBRL?: (number | boolean)[];
+}
+
+/** A company's submissions record, trimmed to the forms this reads. */
+interface Submissions {
+  cik?: number;
+  name?: string;
+  tickers?: string[];
+  exchanges?: (string | null)[];
+  fiscalYearEnd?: string | null;
+  sic?: string | null;
+  sicDescription?: string | null;
+  filings?: { recent: SubmissionTable; files: { name: string }[] };
+  trimmed?: boolean;
+}
+
+/** A filing row as EDGAR lists it, before the fiscal labels and URLs. */
+interface EdgarRow {
+  accession: string;
+  form: string;
+  filingDate: IsoDate;
+  reportDate: IsoDate | null;
+  primaryDocument: string;
+  isInlineXBRL: boolean;
+}
+
+/** A company and its filings, plus how fresh the list is. */
+export interface CompanyWithFilings extends Omit<Company, 'filings'> {
+  filings: EdgarFiling[];
+  filingsUpdatedAt: string;
+  filingsStale: boolean;
+}
 
 const TICKERS_URL = 'https://www.sec.gov/files/company_tickers_exchange.json';
 const SUBMISSIONS = 'https://data.sec.gov/submissions/';
@@ -19,7 +75,7 @@ const SUBMISSIONS_TTL = 10 * 60 * 1000; // filing lists refresh every 10 minutes
 // without a cache and without SEC can still resolve tickers); refreshed from
 // SEC in the background at startup (and daily) so the first search after a
 // restart is instant.
-let tickersMemo = null;
+let tickersMemo: TickerRow[] | null = null;
 const TICKERS_DOC = 'tickers.json';
 
 // Only what trades on a real exchange is covered here. EDGAR names the
@@ -33,26 +89,29 @@ const TICKERS_DOC = 'tickers.json';
 // fresh IPO, a SPAC - so the company's own submissions record decides, and
 // silence there keeps the company.
 const MAJOR_EXCHANGE = /^(nasdaq|nyse|amex|cboe|bats|iex|arca)/i;
-export const isMajorExchange = (x) => MAJOR_EXCHANGE.test(String(x || '').trim());
+export const isMajorExchange = (x: string | null | undefined): boolean => MAJOR_EXCHANGE.test(String(x || '').trim());
 // `venuesOf(cik)` answers for a row EDGAR left the venue blank on (a couple
 // of hundred of them: fresh listings, SPACs, shells on their way out) - the
 // exchanges of the company's own submissions record. With nothing to go on
 // the company is not covered, which is an answer that survives the purge:
 // "keep whatever is unknown" would re-admit an OTC shell the moment its
 // record was deleted, crawl it, and delete it again the next day.
-export const onMajorExchange = (row, venuesOf) => (row.exchange ? isMajorExchange(row.exchange) : (venuesOf(row.cik) || []).some(isMajorExchange));
-const savedVenues = (cik) => store.getDoc(`companies/${String(cik).padStart(10, '0')}.json`)?.value?.exchanges;
+export const onMajorExchange = (row: TickerRow, venuesOf: (cik: number) => (string | null)[] | null | undefined): boolean =>
+  row.exchange ? isMajorExchange(row.exchange) : (venuesOf(row.cik) || []).some(isMajorExchange);
+const savedVenues = (cik: number) => store.getDoc<{ exchanges?: (string | null)[] }>(`companies/${String(cik).padStart(10, '0')}.json`)?.value?.exchanges;
 
 // company_tickers_exchange.json is { fields: [...], data: [[...], ...] }.
-export const tickerRows = (data) => {
-  const col = Object.fromEntries((data.fields || []).map((f, i) => [f, i]));
-  return (data.data || []).map((r) => ({ cik: Number(r[col.cik]), ticker: r[col.ticker], name: r[col.name], exchange: r[col.exchange] || null })).filter((r) => r.cik && r.ticker);
+export const tickerRows = (data: TickerFile): TickerRow[] => {
+  const col = Object.fromEntries((data.fields || []).map((f, i) => [f, i])) as Record<string, number>;
+  return (data.data || [])
+    .map((r) => ({ cik: Number(r[col.cik!]), ticker: r[col.ticker!] as string, name: r[col.name!] as string, exchange: (r[col.exchange!] as string) || null }))
+    .filter((r) => r.cik && r.ticker);
 };
 
-export async function refreshTickers(client) {
+export async function refreshTickers(client: Fetcher): Promise<TickerRow[]> {
   // SEC's file lists every filer that has a ticker, OTC included; those rows
   // are dropped here, on every refresh, so nothing downstream ever sees them
-  const rows = tickerRows(await client.json(TICKERS_URL)).filter((r) => onMajorExchange(r, savedVenues));
+  const rows = tickerRows(await client.json<TickerFile>(TICKERS_URL)).filter((r) => onMajorExchange(r, savedVenues));
   store.putKV('tickers', rows);
   store.putDoc(TICKERS_DOC, { updatedAt: new Date().toISOString(), tickers: rows });
   tickersMemo = rows;
@@ -61,13 +120,13 @@ export async function refreshTickers(client) {
 
 // The saved table without going to SEC: the cache first, else the store's
 // copy (its age from the updatedAt inside - a git checkout resets mtimes).
-export function savedTickers() {
-  const kv = store.getKV('tickers');
+export function savedTickers(): { value: TickerRow[]; ageMs: number } | null {
+  const kv = store.getKV<TickerRow[]>('tickers');
   if (kv) return kv;
-  const doc = store.getDoc(TICKERS_DOC)?.value;
+  const doc = store.getDoc<{ updatedAt?: string; tickers?: TickerRow[] }>(TICKERS_DOC)?.value;
   const rows = Array.isArray(doc?.tickers) ? doc.tickers : null;
   if (!rows?.length) return null;
-  const at = Date.parse(doc.updatedAt || '') || 0;
+  const at = Date.parse(doc!.updatedAt || '') || 0;
   return { value: rows, ageMs: Date.now() - at };
 }
 
@@ -76,7 +135,7 @@ export function savedTickers() {
 // filings, scores, company records and daily bars away. Only after a fresh,
 // plausible ticker table - a truncated download must not empty the store.
 const MIN_TICKERS = 5000;
-export function purgeDelisted(rows) {
+export function purgeDelisted(rows: readonly TickerRow[] | null | undefined) {
   if (!Array.isArray(rows) || rows.length < MIN_TICKERS) return null;
   const r = store.purgeExcept(rows.map((t) => t.cik));
   if (r.companies) console.log(`store: 移除 ${r.companies} 家已下市或轉上櫃（OTC）公司的 ${r.filings} 份財報`);
@@ -89,7 +148,7 @@ export function purgeDelisted(rows) {
 
 // Listing status of a ticker from the saved table (no network): listed, or
 // delisted, or renamed when the same company now trades under another ticker.
-export function listingOf(ticker, cik = null) {
+export function listingOf(ticker: string, cik: number | null = null): Listing | null {
   const rows = tickersMemo || savedTickers()?.value;
   if (!rows) return null; // not known yet
   if (!tickersMemo) tickersMemo = rows;
@@ -99,7 +158,7 @@ export function listingOf(ticker, cik = null) {
   return same ? { listed: false, renamed: same.ticker } : { listed: false };
 }
 
-export async function tickerTable(client) {
+export async function tickerTable(client: Fetcher): Promise<TickerRow[]> {
   if (tickersMemo) return tickersMemo;
   const saved = savedTickers();
   if (saved) {
@@ -113,11 +172,11 @@ export async function tickerTable(client) {
 // Only these forms are kept from a submissions list: the full list (every
 // 8-K, Form 4, …) is 1 MB+ for a large company and is never needed here.
 const KEEP_FORMS = /^(10-|20-F|40-F|6-K)/;
-function trimSubmissions(sub) {
-  const trimTable = (t) => {
-    const keep = [];
-    for (let i = 0; i < (t.accessionNumber || []).length; i++) if (KEEP_FORMS.test(t.form[i])) keep.push(i);
-    const pick = (arr) => (arr ? keep.map((i) => arr[i]) : undefined);
+function trimSubmissions(sub: Submissions & SubmissionTable): Submissions & SubmissionTable {
+  const trimTable = (t: SubmissionTable): SubmissionTable => {
+    const keep: number[] = [];
+    for (let i = 0; i < (t.accessionNumber || []).length; i++) if (KEEP_FORMS.test(t.form![i]!)) keep.push(i);
+    const pick = <T,>(arr: T[] | undefined) => (arr ? keep.map((i) => arr[i]!) : undefined);
     return { accessionNumber: pick(t.accessionNumber), form: pick(t.form), filingDate: pick(t.filingDate), reportDate: pick(t.reportDate), primaryDocument: pick(t.primaryDocument), isInlineXBRL: pick(t.isInlineXBRL) };
   };
   if (sub.filings?.recent) {
@@ -130,12 +189,12 @@ function trimSubmissions(sub) {
 // Per-company submissions (the filing list): the store's copy
 // (data/store/companies/<name>.json) if fresh enough, otherwise SEC -
 // falling back to the stale copy when SEC is unreachable.
-async function cachedJson(client, name, url, ttlMs) {
+async function cachedJson(client: Fetcher, name: string, url: string, ttlMs: number): Promise<{ value: Submissions & SubmissionTable; updatedAt: number; fromCache: boolean; stale?: boolean }> {
   const doc = `companies/${name}.json`;
-  const saved = store.getDoc(doc);
+  const saved = store.getDoc<Submissions & SubmissionTable>(doc);
   if (saved && saved.ageMs < ttlMs) return { value: saved.value, updatedAt: Date.now() - saved.ageMs, fromCache: true };
   try {
-    const value = trimSubmissions(await client.json(url));
+    const value = trimSubmissions(await client.json<Submissions & SubmissionTable>(url));
     store.putDoc(doc, value);
     return { value, updatedAt: Date.now(), fromCache: false };
   } catch (err) {
@@ -144,7 +203,7 @@ async function cachedJson(client, name, url, ttlMs) {
   }
 }
 
-export async function searchCompanies(client, q, limit = 10) {
+export async function searchCompanies(client: Fetcher, q: string, limit = 10): Promise<TickerRow[]> {
   const needle = q.trim().toUpperCase().replace(/\./g, '-');
   if (!needle) return [];
   const rows = await tickerTable(client);
@@ -153,7 +212,7 @@ export async function searchCompanies(client, q, limit = 10) {
   return [...starts, ...names].slice(0, limit);
 }
 
-export async function resolveCik(client, tickerOrCik) {
+export async function resolveCik(client: Fetcher, tickerOrCik: string | number): Promise<number> {
   const s = String(tickerOrCik).trim();
   if (/^\d+$/.test(s)) return Number(s);
   const wanted = s.toUpperCase().replace(/\./g, '-');
@@ -162,16 +221,16 @@ export async function resolveCik(client, tickerOrCik) {
   return row.cik;
 }
 
-function rowsOf(table) {
-  const n = table.accessionNumber.length;
-  const out = [];
+function rowsOf(table: SubmissionTable): EdgarRow[] {
+  const n = table.accessionNumber!.length;
+  const out: EdgarRow[] = [];
   for (let i = 0; i < n; i++) {
     out.push({
-      accession: table.accessionNumber[i],
-      form: table.form[i],
-      filingDate: table.filingDate[i],
-      reportDate: table.reportDate[i] || null,
-      primaryDocument: table.primaryDocument[i],
+      accession: table.accessionNumber![i]!,
+      form: table.form![i]!,
+      filingDate: table.filingDate![i]!,
+      reportDate: table.reportDate?.[i] || null,
+      primaryDocument: table.primaryDocument![i]!,
       isInlineXBRL: !!table.isInlineXBRL?.[i],
     });
   }
@@ -184,25 +243,34 @@ function rowsOf(table) {
 // catches new filings anyway).
 // `inlineOnly` (the default) leaves out the filings nothing here can read:
 // before 2019 a filer tagged its numbers in a separate instance document,
-// not in the HTML, and ixbrl.js only reads Inline XBRL. Such a filing is
+// not in the HTML, and ixbrl.ts only reads Inline XBRL. Such a filing is
 // still offered once its numbers are in the store - that is what
-// ingest-dera.mjs puts there, from SEC's quarterly datasets. Pass false to
+// ingest-dera.mts puts there, from SEC's quarterly datasets. Pass false to
 // see every filing EDGAR lists (the ingester, deciding what to fill in).
-export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, includeOlder = true, refresh = false, maxAge = SUBMISSIONS_TTL, inlineOnly = true } = {}) {
+/** How much of a company's filing list to fetch. */
+export interface GetCompanyOptions {
+  forms?: readonly string[];
+  includeOlder?: boolean;
+  refresh?: boolean;
+  maxAge?: number;
+  inlineOnly?: boolean;
+}
+
+export async function getCompany(client: Fetcher, tickerOrCik: string | number, { forms = DEFAULT_FORMS, includeOlder = true, refresh = false, maxAge = SUBMISSIONS_TTL, inlineOnly = true }: GetCompanyOptions = {}): Promise<CompanyWithFilings> {
   const cik = await resolveCik(client, tickerOrCik);
   const padded = String(cik).padStart(10, '0');
   const main = await cachedJson(client, padded, `${SUBMISSIONS}CIK${padded}.json`, refresh ? 0 : maxAge);
   const sub = main.value;
-  let rows = rowsOf(sub.filings.recent);
+  let rows = rowsOf(sub.filings!.recent);
   if (includeOlder) {
-    for (const f of sub.filings.files || []) {
+    for (const f of sub.filings!.files || []) {
       // older pages only ever gain nothing new; refresh them daily
       const older = await cachedJson(client, f.name.replace(/\.json$/, ''), `${SUBMISSIONS}${f.name}`, Math.max(TICKERS_TTL, maxAge));
       rows = rows.concat(rowsOf(older.value));
     }
   }
   const allowed = new Set(forms.map((f) => f.toUpperCase()));
-  const filings = rows
+  const filings: EdgarFiling[] = rows
     .filter((r) => allowed.has(r.form.toUpperCase()) && r.primaryDocument && (!inlineOnly || r.isInlineXBRL || store.hasFiling(r.accession)))
     .map((r) => ({
       cik,
@@ -227,13 +295,24 @@ export async function getCompany(client, tickerOrCik, { forms = DEFAULT_FORMS, i
 
 const ARCHIVE_RE = /\/Archives\/edgar\/data\/(\d+)\/(\d{18})\/([^/?#]+)/;
 
-export function filingFromUrl(url) {
+/** A filing named by its EDGAR document URL. */
+export interface FilingFromUrl {
+  cik: number;
+  accession: string;
+  primaryDocument: string;
+  folderUrl: string;
+  documentUrl: string;
+  viewerUrl: string;
+  indexUrl: string;
+}
+
+export function filingFromUrl(url: string): FilingFromUrl {
   const u = new URL(url);
   let path = u.pathname;
   if (path.replace(/\/$/, '').endsWith('/ix')) path = u.searchParams.get('doc') || '';
   const m = ARCHIVE_RE.exec(path);
   if (!m) throw Object.assign(new Error(`Cannot recognise EDGAR document URL: ${url}`), { status: 400 });
-  const [, cik, acc, doc] = m;
+  const [, cik, acc, doc] = m as unknown as [string, string, string, string];
   const accession = `${acc.slice(0, 10)}-${acc.slice(10, 12)}-${acc.slice(12)}`;
   return { cik: Number(cik), accession, primaryDocument: doc, ...filingUrls(Number(cik), accession, doc) };
 }

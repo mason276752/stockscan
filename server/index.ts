@@ -1,4 +1,5 @@
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +27,17 @@ import { barStore, openBarStore } from './lib/barStore.ts';
 import { createBarCrawler } from './lib/barCrawler.ts';
 import { ibConnect, ibStatus } from './lib/ib.ts';
 import { tvStatus } from './lib/tvws.ts';
+import type { CompanyWithFilings, GetCompanyOptions } from './lib/edgar.ts';
+import type { PreviousFiling } from './lib/current.ts';
+import type { EdgarFiling, IsoDate, ScreenQueryParams } from './lib/types.ts';
+import type { BasketEnv, RunBasketOptions } from './lib/basket.ts';
+import type { BasketRequest } from './lib/types.ts';
+
+/** An error carrying the HTTP status (and, for a rule ETF, why it was refused). */
+interface ApiError extends Error {
+  status?: number;
+  tooMany?: { n: number; max: number };
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -52,14 +64,14 @@ const refresh = () =>
       console.log(`ticker table refreshed: ${rows.length} companies`);
       purgeDelisted(rows);
     })
-    .catch((e) => console.warn(`ticker refresh failed: ${e.message}`));
+    .catch((e) => console.warn(`ticker refresh failed: ${(e as Error).message}`));
 setTimeout(refresh, 1000);
 setInterval(refresh, 24 * 3600 * 1000).unref();
 
 // Filer universe (SIC / filer status for the browse pages): build it in the
 // background when missing or older than a week, so the first visit is instant.
 setTimeout(() => {
-  if (universeStale()) refreshUniverse(client, 'low').catch((e) => console.warn(`universe build failed: ${e.message}`));
+  if (universeStale()) refreshUniverse(client, 'low').catch((e) => console.warn(`universe build failed: ${(e as Error).message}`));
 }, 5000);
 setTimeout(() => crawler.start(), 15_000);
 setTimeout(() => barCrawler.start(), 20_000);
@@ -80,7 +92,7 @@ if (ibStatus().enabled) {
 // Score every saved filing that has no score yet (new version, or filings
 // saved before scoring existed) - a few ms each, in the background.
 setTimeout(() => {
-  scoreUnscored({ log: (m) => console.log(`${m} in the background`) }).catch((err) => console.warn(`scoring: ${err.message}`));
+  scoreUnscored({ log: (m) => console.log(`${m} in the background`) }).catch((err) => console.warn(`scoring: ${(err as Error).message}`));
 }, 8000);
 
 const app = express();
@@ -91,21 +103,23 @@ app.use('/api', (req, _res, next) => {
 });
 
 // In-flight de-duplication: two browser tabs asking for the same filing share one scrape.
-const inflight = new Map();
-function dedupe(key, fn) {
-  if (inflight.has(key)) return inflight.get(key);
+const inflight = new Map<string, Promise<unknown>>();
+function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  if (inflight.has(key)) return inflight.get(key) as Promise<T>;
   const p = fn().finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
 
-const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+/** An async route handler, with its rejections handed to the error middleware. */
+type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
+const wrap = (fn: AsyncHandler) => (req: Request, res: Response, next: NextFunction) => fn(req, res, next).catch(next);
 
 // The company as EDGAR lists it, with one thing added: an amendment whose
 // saved score has no coverage is the Part III-only kind, with no statements
 // in it. It corrects nothing, so it is flagged and whoever picks a period's
-// filing keeps the original (filings.js collapseAmendments).
-async function companyOf(id, opts) {
+// filing keeps the original (filings.ts collapseAmendments).
+async function companyOf(id: string | number, opts?: GetCompanyOptions): Promise<CompanyWithFilings> {
   const c = await getCompany(client, id, opts);
   for (const f of c.filings) {
     if (!/\/A$/i.test(f.form || '')) continue;
@@ -117,11 +131,11 @@ async function companyOf(id, opts) {
 
 // Scrape a filing and, with ?view=current, reduce it to its own period
 // (needs the previous 10-Q for year-to-date-only statements).
-async function filingResponse(req, company, filing) {
+async function filingResponse(req: Request, company: CompanyWithFilings, filing: EdgarFiling) {
   const data = await dedupe(filing.accession, () => scrapeFiling(client, filing, company));
   prefetcher.schedule(company, filing);
   if (req.query.view !== 'current') return data;
-  let prev = null;
+  let prev: PreviousFiling | null = null;
   const q = /^Q([2-3])$/.exec(filing.fiscalPeriod || '');
   if (q) {
     const pf = pickFiling(company.filings, { year: filing.fiscalYear, period: `Q${Number(q[1]) - 1}` });
@@ -129,7 +143,7 @@ async function filingResponse(req, company, filing) {
       try {
         prev = { filing: pf, data: await dedupe(pf.accession, () => scrapeFiling(client, pf, company)) };
       } catch (err) {
-        console.warn(`previous filing ${pf.accession} unavailable: ${err.message}`);
+        console.warn(`previous filing ${pf.accession} unavailable: ${(err as Error).message}`);
       }
     }
   }
@@ -177,7 +191,7 @@ app.get(
   wrap(async (req, res) => {
     const forms = req.query.form ? String(req.query.form).split(',') : DEFAULT_FORMS;
     const company = await companyOf(req.params.id, { forms });
-    const filing = pickFiling(company.filings, { year: req.query.year, period: req.query.period });
+    const filing = pickFiling(company.filings, { year: String(req.query.year ?? '') || null, period: String(req.query.period ?? '') || null });
     if (!filing) {
       return res.status(404).json({
         error: `No filing for ${company.name} matching year=${req.query.year || '*'} period=${req.query.period || '*'}`,
@@ -196,8 +210,9 @@ app.get(
     const year = Number(req.query.year);
     if (!year) return res.status(400).json({ error: 'year query parameter required' });
     const company = await companyOf(req.params.id);
-    res.json(await dedupe(`q4:${company.cik}:${year}`, () => buildQuarterly((f) => scrapeFiling(client, f, company), company, year)));
-    prefetcher.schedule(company, pickFiling(company.filings, { year, period: 'FY' }));
+    res.json(await dedupe(`q4:${company.cik}:${year}`, () => buildQuarterly((f) => scrapeFiling(client, f as EdgarFiling, company), company, year)));
+    const fy = pickFiling(company.filings, { year, period: 'FY' });
+    if (fy) prefetcher.schedule(company, fy);
   }),
 );
 
@@ -212,12 +227,12 @@ app.get(
     const year = Number(req.query.year);
     const period = String(req.query.period || 'FY').toUpperCase();
     if (!year || !/^(Q[1-4]|FY)$/.test(period)) return res.status(400).json({ error: 'year and period (Q1-Q4 or FY) required' });
-    const mode = ['year', 'same'].includes(req.query.mode) ? req.query.mode : 'quarter';
+    const mode = ['year', 'same'].includes(String(req.query.mode)) ? String(req.query.mode) : 'quarter';
     const n = Math.min(mode === 'quarter' ? 40 : 10, Math.max(1, Number(req.query.n) || (mode === 'quarter' ? 20 : 5)));
     const basis = req.query.basis === 'ttm' ? 'ttm' : 'x4';
     const company = await companyOf(req.params.id);
     res.json(
-      await dedupe(`ind:${company.cik}:${year}:${period}:${n}:${basis}:${mode}`, () => buildIndicators((f) => scrapeFiling(client, f, company), company, { year, period, n, basis, mode })),
+      await dedupe(`ind:${company.cik}:${year}:${period}:${n}:${basis}:${mode}`, () => buildIndicators((f) => scrapeFiling(client, f as EdgarFiling, company), company, { year, period, n, basis, mode })),
     );
   }),
 );
@@ -244,15 +259,15 @@ app.get(
   '/api/filing/:cik/:accession',
   wrap(async (req, res) => {
     const company = await companyOf(req.params.cik);
-    let filing = company.filings.find((f) => f.accession === req.params.accession);
+    let filing: EdgarFiling | undefined = company.filings.find((f) => f.accession === req.params.accession);
     if (!filing) {
       // Not in the list (odd form type): look it up from the folder index.
       const cik = company.cik;
       const nodash = req.params.accession.replace(/-/g, '');
-      const idx = await client.json(`https://www.sec.gov/Archives/edgar/data/${cik}/${nodash}/index.json`);
+      const idx = await client.json<{ directory: { item: { name: string }[] } }>(`https://www.sec.gov/Archives/edgar/data/${cik}/${nodash}/index.json`);
       const doc = idx.directory.item.find((i) => /^[a-z0-9-]+-\d{8}\.htm$/i.test(i.name));
       if (!doc) return res.status(404).json({ error: `Cannot find an Inline XBRL document in ${req.params.accession}` });
-      filing = { cik, accession: req.params.accession, primaryDocument: doc.name, ...filingUrls(cik, req.params.accession, doc.name) };
+      filing = { cik, accession: req.params.accession, form: '', reportDate: null, primaryDocument: doc.name, ...filingUrls(cik, req.params.accession, doc.name) };
     }
     res.json(await filingResponse(req, company, filing));
   }),
@@ -265,7 +280,7 @@ app.get(
     if (!req.query.url) return res.status(400).json({ error: 'url query parameter required' });
     const base = filingFromUrl(String(req.query.url));
     const company = await companyOf(String(base.cik));
-    const filing = company.filings.find((f) => f.accession === base.accession) || base;
+    const filing = company.filings.find((f) => f.accession === base.accession) || ({ ...base, form: '', reportDate: null } as EdgarFiling);
     res.json(await filingResponse(req, company, filing));
   }),
 );
@@ -295,7 +310,7 @@ app.get(
   '/api/browse/companies',
   wrap(async (req, res) => {
     const u = await getUniverse(client);
-    res.json({ updatedAt: u.updatedAt, ...browseCompanies(u.companies, req.query) });
+    res.json({ updatedAt: u.updatedAt, ...browseCompanies(u.companies, req.query as ScreenQueryParams) });
   }),
 );
 
@@ -333,7 +348,7 @@ app.get(
       .map((x) => Number(x))
       .filter((x) => Number.isInteger(x) && x > 0)
       .slice(0, 6000);
-    const out = {};
+    const out: Record<number, unknown> = {};
     for (const cik of ciks) {
       const s = await latestScore(cik);
       out[cik] = scoreBadge(s);
@@ -351,7 +366,7 @@ app.get(
       const company = await companyOf(req.params.cik);
       const filing = company.filings.find((f) => f.accession === req.params.accession);
       if (!filing) return res.status(404).json({ error: `Filing ${req.params.accession} not found` });
-      await dedupe(filing.accession, () => scrapeFiling(client, filing, company));
+      await dedupe(filing.accession, () => scrapeFiling(client, filing!, company));
       s = await scoreAccession(filing.accession);
     }
     if (!s) return res.status(404).json({ error: 'Cannot score this filing' });
@@ -364,10 +379,10 @@ app.get(
 // asof.min: how far back the screener's date may go - the oldest filing the
 // store has a score for (the crawler digs backwards, so this moves with it).
 // The static build answers with the oldest as-of index file it published.
-let asOfMinMemo = null;
-function asOfMin() {
+let asOfMinMemo: { at: number; min: IsoDate | null } | null = null;
+function asOfMin(): IsoDate | null {
   if (asOfMinMemo && Date.now() - asOfMinMemo.at < 60_000) return asOfMinMemo.min;
-  let min = null;
+  let min: IsoDate | null = null;
   for (const r of store.scoreIndex(SCORE_VERSION)) if (r.report_date && (!min || r.report_date < min)) min = r.report_date;
   asOfMinMemo = { at: Date.now(), min };
   return min;
@@ -387,8 +402,8 @@ app.get('/api/screen/fields', (_req, res) => res.json({ fields: SCREEN_FIELDS, d
 // the rows are built once per (scores, universe, market snapshot) - each of
 // those is memoised by its module, so the same objects come back until one
 // is refreshed
-let screenMemo = null;
-async function screenerRows(asof, wait) {
+let screenMemo: { u: unknown; market: unknown; scores: unknown; rows: ReturnType<typeof screenRows> } | null = null;
+async function screenerRows(asof: IsoDate | null, wait: boolean) {
   const u = await getUniverse(client);
   const market = await marketSnapshot({ wait });
   const scores = latestScores(asof);
@@ -402,8 +417,8 @@ app.get(
   '/api/screen',
   wrap(async (req, res) => {
     const asof = asOfDate(req.query.asof);
-    const { rows, scores } = await screenerRows(asof, wantsMarket(req.query));
-    res.json({ ...screenQuery(rows, req.query), scored: scores.length, asof, market: marketStatus() });
+    const { rows, scores } = await screenerRows(asof, wantsMarket(req.query as ScreenQueryParams));
+    res.json({ ...screenQuery(rows, req.query as ScreenQueryParams), scored: scores.length, asof, market: marketStatus() });
   }),
 );
 
@@ -455,10 +470,10 @@ app.get(
   }),
 );
 
-// The custom-ETF index (basket.js): every constituent's daily bars, a few at
+// The custom-ETF index (basket.ts): every constituent's daily bars, a few at
 // a time, then the index; with `emit` the page draws while the rest lands.
-const basketEnv = () => ({ listingOf, extra: { ib: ibStatus().connected, tv: tvStatus().connected } });
-const runBasket = (req, opts = {}) => runBasketWith(req, (ticker) => dedupe(`bars:${ticker}`, () => dailyBars(ticker)), { ...opts, ...basketEnv() });
+const basketEnv = (): BasketEnv => ({ listingOf, extra: { ib: ibStatus().connected, tv: tvStatus().connected } });
+const runBasket = (req: BasketRequest, opts: RunBasketOptions = {}) => runBasketWith(req, (ticker) => dedupe(`bars:${ticker}`, () => dailyBars(ticker)), { ...opts, ...basketEnv() });
 
 // POST /api/basket { constituents: [{ ticker, cik, weight }], range | from + to, rebalance, benchmark }
 //  -> index bars (base 100), stats, per-constituent returns, benchmark overlay
@@ -482,13 +497,13 @@ app.post(
     res.flushHeaders();
     const ac = new AbortController();
     res.on('close', () => ac.abort());
-    const emit = (ev) => {
+    const emit = (ev: Record<string, unknown>) => {
       if (!res.writableEnded && !ac.signal.aborted) res.write(`${JSON.stringify(ev)}\n`);
     };
     try {
       await runBasket(request, { emit, signal: ac.signal, interim: req.body?.interim ? 1200 : 0 });
     } catch (err) {
-      emit({ type: 'error', error: err.message });
+      emit({ type: 'error', error: (err as Error).message });
     }
     res.end();
   }),
@@ -496,10 +511,10 @@ app.post(
 
 // ---- rule ETF: the screener's filters replayed through history ----
 // Nobody picks these constituents: the filters do, at every filing date from
-// the oldest one on record (ruleEtf.js). The schedule comes from the whole
-// store - every scored filing as the as-of index (score.js asOfIndex) - and
+// the oldest one on record (ruleEtf.ts). The schedule comes from the whole
+// store - every scored filing as the as-of index (score.ts asOfIndex) - and
 // the index itself from the daily bars of whoever it ever held.
-async function ruleSchedule(body) {
+async function ruleSchedule(body: Record<string, unknown>) {
   const req = ruleRequest(body);
   const { rows } = await screenerRows(null, false);
   // the replay is the whole history either way (what the rules held when a
@@ -536,7 +551,7 @@ app.post(
     res.flushHeaders();
     const ac = new AbortController();
     res.on('close', () => ac.abort());
-    const emit = (ev) => {
+    const emit = (ev: Record<string, unknown>) => {
       if (!res.writableEnded && !ac.signal.aborted) res.write(`${JSON.stringify(ev)}\n`);
     };
     try {
@@ -545,7 +560,7 @@ app.post(
       const r = await runRuleEtf(schedule, request, (t) => dedupe(`bars:${t}`, () => dailyBars(t)), { emit, signal: ac.signal, extra: ruleExtra() });
       if (r) emit({ type: 'series', ...r });
     } catch (err) {
-      emit({ type: 'error', error: err.message, tooMany: err.tooMany });
+      emit({ type: 'error', error: (err as ApiError).message, tooMany: (err as ApiError).tooMany });
     }
     res.end();
   }),
@@ -566,7 +581,7 @@ if (fs.existsSync(dist)) {
   app.get(/^(?!\/api\/).*/, (_req, res) => res.type('html').send(page));
 }
 
-app.use((err, _req, res, _next) => {
+app.use((err: ApiError, _req: Request, res: Response, _next: NextFunction) => {
   const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
   if (status === 500) console.error(err);
   res.status(status).json({ error: err.message, ...(err.tooMany ? { tooMany: err.tooMany } : {}) });

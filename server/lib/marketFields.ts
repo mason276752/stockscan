@@ -1,7 +1,15 @@
 // The market-snapshot fields the screener offers (shared with the browser build).
 
+/** A screener column the market snapshot fills in. */
+export interface MarketField {
+  key: string;
+  name: string;
+  unit: string;
+  group: string;
+}
+
 // the screener fields the snapshot provides (unit as shown to the user)
-export const MARKET_FIELDS = [
+export const MARKET_FIELDS: MarketField[] = [
   { key: 'price', name: '股價', unit: '美元', group: '市場' },
   { key: 'marketCap', name: '總市值', unit: '百萬', group: '市場' },
   { key: 'change', name: '今日漲跌 %', unit: '%', group: '市場' },
@@ -18,4 +26,3 @@ export const MARKET_FIELDS = [
   { key: 'peg', name: 'PEG', unit: '', group: '股價估值' },
   { key: 'divYield', name: '現金股利殖利率 %', unit: '%', group: '股價估值' },
 ];
-

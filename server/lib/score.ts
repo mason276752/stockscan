@@ -1,5 +1,5 @@
 // Scores backed by the store: score a saved filing, the newest score of
-// every company (for the screener). The scoring itself is in scoreModel.js
+// every company (for the screener). The scoring itself is in scoreModel.ts
 // (no I/O, shared with the browser build).
 
 import { store } from './store.ts';
@@ -8,6 +8,7 @@ import { fiscalLabel } from './filings.ts';
 import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.ts';
 import { SCORE_HISTORY, pickAsOf, screenAsOfColumns, screenAsOfIndex } from './screen.ts';
 import { collapseAmendments } from './filings.ts';
+import type { AsOfIndex, Company, FilingHeader, FilingRef, IsoDate, Score, ScoreBrief, ScoreWithHistory, ScrapeResult } from './types.ts';
 
 export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf, SCORE_HISTORY };
 
@@ -17,10 +18,10 @@ export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALA
 // static build does), from the store alone so scoring never waits on SEC.
 // Scoring one filing needs at most the year's 10-Qs and the quarter before.
 const WINDOW_DAYS = 480;
-function savedCompany(cik, reportDate) {
-  const fye = store.getDoc(`companies/${String(cik).padStart(10, '0')}.json`)?.value?.fiscalYearEnd || null;
+function savedCompany(cik: number, reportDate: IsoDate): Company {
+  const fye = store.getDoc<{ fiscalYearEnd?: string | null }>(`companies/${String(cik).padStart(10, '0')}.json`)?.value?.fiscalYearEnd || null;
   const from = new Date(new Date(reportDate).getTime() - WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
-  const filings = [];
+  const filings: FilingRef[] = [];
   for (const r of store.filingIndex(cik)) {
     if (!r.report_date || r.report_date < from || r.report_date > reportDate) continue;
     const h = store.filingHeader(r.accession);
@@ -30,23 +31,23 @@ function savedCompany(cik, reportDate) {
     const label = fye ? fiscalLabel(form, end, fye) : { fiscalYear: h.fiscalYear ? Number(h.fiscalYear) : null, fiscalPeriod: h.fiscalPeriod || null };
     filings.push({ accession: r.accession, cik: Number(cik), form, filingDate: h.filingDate || null, reportDate: end, ...label });
   }
-  filings.sort((a, b) => (a.filingDate < b.filingDate ? 1 : a.filingDate > b.filingDate ? -1 : 0));
+  filings.sort((a, b) => (a.filingDate! < b.filingDate! ? 1 : a.filingDate! > b.filingDate! ? -1 : 0));
   return { cik: Number(cik), filings };
 }
 
-const loadSaved = (f) => {
+const loadSaved = (f: { accession: string }): ScrapeResult => {
   const data = store.getFiling(f.accession);
   if (!data) throw new Error(`${f.accession} not saved`);
   return reclassify(data);
 };
 
 // The score of a saved filing, computed from the store alone (no cache).
-async function computeScore(accession, header) {
+async function computeScore(accession: string, header?: FilingHeader | null): Promise<Score | null> {
   const h = header || store.filingHeader(accession);
   if (!h) return null;
-  const company = savedCompany(h.cik, h.periodEnd);
+  const company = savedCompany(h.cik, h.periodEnd!);
   const filing = company.filings.find((f) => f.accession === accession);
-  return filing ? await scoreFilingOf(loadSaved, company, filing) : scoreFiling(loadSaved({ accession }));
+  return filing ? await scoreFilingOf(loadSaved as never, company, filing) : scoreFiling(loadSaved({ accession }));
 }
 
 // Score of a saved filing, cached by accession. A score that had to do
@@ -54,10 +55,10 @@ async function computeScore(accession, header) {
 // saved of a company) is cached like any other - the screener still wants
 // it as the year-earlier comparison - and recomputed when the crawler asks
 // (`redoPartial`) after saving more of the company's filings.
-export async function scoreAccession(accession, { redoPartial = false, force = false } = {}) {
+export async function scoreAccession(accession: string, { redoPartial = false, force = false }: { redoPartial?: boolean; force?: boolean } = {}): Promise<Score | null> {
   const hit = store.getScore(accession, SCORE_VERSION);
   // `force`: the filing itself changed under it (a stand-in rebuilt from the
-  // quarterly datasets replaced by the parse of the document, scrape.js)
+  // quarterly datasets replaced by the parse of the document, scrape.ts)
   if (hit && !force && !(redoPartial && hit.basis?.partial)) return hit;
   const h = store.filingHeader(accession);
   if (!h) return null;
@@ -69,7 +70,7 @@ export async function scoreAccession(accession, { redoPartial = false, force = f
 // Score every saved filing without a current score (a new version, or
 // filings saved before scoring existed), `budgetMs` at a time between yields
 // so a server stays responsive.
-export async function scoreUnscored({ budgetMs = 50, log = () => {} } = {}) {
+export async function scoreUnscored({ budgetMs = 50, log = (_m: string) => {} }: { budgetMs?: number; log?: (m: string) => void } = {}): Promise<number> {
   const todo = store.unscoredAccessions(SCORE_VERSION);
   if (!todo.length) return 0;
   log(`scoring ${todo.length} saved filings`);
@@ -80,10 +81,10 @@ export async function scoreUnscored({ budgetMs = 50, log = () => {} } = {}) {
       const s = await scoreAccession(acc);
       if (s?.basis.partial) partial++;
     } catch (err) {
-      console.warn(`score ${acc}: ${err.message}`);
+      console.warn(`score ${acc}: ${(err as Error).message}`);
     }
     if (Date.now() - t0 > budgetMs) {
-      await new Promise((r) => setTimeout(r, 20));
+      await new Promise<void>((r) => setTimeout(r, 20));
       t0 = Date.now();
     }
   }
@@ -99,12 +100,28 @@ export async function scoreUnscored({ budgetMs = 50, log = () => {} } = {}) {
 // the handful that moved is a commit of a few kilobytes. Same numbers either
 // way - what the version buys is that a store nobody ran this over is
 // recomputed lazily, so bump it when the change is broad.
-export async function rescoreAll({ budgetMs = 50, log = () => {}, cik = null, limit = 0, dryRun = false, onProgress = null } = {}) {
+/** How far a rescore got. */
+export interface RescoreProgress {
+  scanned: number;
+  changed: number;
+  failed: number;
+}
+
+export interface RescoreOptions {
+  budgetMs?: number;
+  log?: (m: string) => void;
+  cik?: number | string | null;
+  limit?: number;
+  dryRun?: boolean;
+  onProgress?: ((p: RescoreProgress) => void) | null;
+}
+
+export async function rescoreAll({ budgetMs = 50, log = (_m: string) => {}, cik = null, limit = 0, dryRun = false, onProgress = null }: RescoreOptions = {}): Promise<RescoreProgress> {
   let todo = store.allFilings();
   if (cik) todo = todo.filter((f) => Number(f.cik) === Number(cik));
   if (limit) todo = todo.slice(0, limit);
   log(`rescoring ${todo.length} saved filings (${dryRun ? 'dry run: nothing is written' : 'writing only what changes'})`);
-  const out = { scanned: 0, changed: 0, failed: 0 };
+  const out: RescoreProgress = { scanned: 0, changed: 0, failed: 0 };
   let t0 = Date.now();
   for (const f of todo) {
     out.scanned++;
@@ -114,17 +131,17 @@ export async function rescoreAll({ budgetMs = 50, log = () => {}, cik = null, li
       if (s) {
         const prev = store.getScore(f.accession, SCORE_VERSION);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(s)) {
-          if (!dryRun) store.putScore(f.accession, h.cik, h.periodEnd, SCORE_VERSION, s);
+          if (!dryRun) store.putScore(f.accession, h!.cik, h!.periodEnd, SCORE_VERSION, s);
           out.changed++;
         }
       }
     } catch (err) {
       out.failed++;
-      console.warn(`rescore ${f.accession}: ${err.message}`);
+      console.warn(`rescore ${f.accession}: ${(err as Error).message}`);
     }
     if (onProgress && out.scanned % 500 === 0) onProgress(out);
     if (Date.now() - t0 > budgetMs) {
-      await new Promise((r) => setTimeout(r, 5));
+      await new Promise<void>((r) => setTimeout(r, 5));
       t0 = Date.now();
     }
   }
@@ -138,24 +155,24 @@ export async function rescoreAll({ budgetMs = 50, log = () => {}, cik = null, li
 // accession so a refresh only decodes what is new.
 // a company's scores newest first -> the one current at `asof` (null = the
 // newest of all) with `prev` / `yoy` attached
-export function withHistory(scores, asof = null) {
+export function withHistory(scores: readonly (Score | null)[], asof: IsoDate | null = null): ScoreWithHistory | null {
   const { cur, prev, yoy, history } = pickAsOf(scores, asof);
   if (!cur) return null;
-  const brief = (x) => ({ accession: x.accession, fiscalYear: x.fiscalYear, fiscalPeriod: x.fiscalPeriod, periodEnd: x.periodEnd, score: x.score, values: x.values });
+  const brief = (x: Score): ScoreBrief => ({ accession: x.accession, fiscalYear: x.fiscalYear, fiscalPeriod: x.fiscalPeriod, periodEnd: x.periodEnd, score: x.score, values: x.values });
   return { ...cur, prev: prev ? brief(prev) : null, yoy: yoy ? brief(yoy) : null, history };
 }
-const decoded = new Map(); // accession -> score
-function scoreOf(accession) {
+const decoded = new Map<string, Score | null>(); // accession -> score
+function scoreOf(accession: string): Score | null {
   if (!decoded.has(accession)) decoded.set(accession, store.scoreJson(accession));
-  return decoded.get(accession);
+  return decoded.get(accession)!;
 }
 // Every company's current score as of a date (null = now), for the
 // screener. Without a date only the newest SCORE_HISTORY filings of a
 // company are decoded; with one every saved filing may be the current one,
 // so all of them are (the decoded cache above makes the next date cheap).
 // One row set per date is memoised, a few dates at a time.
-const latestMemo = new Map(); // asof ('' = now) -> { n, at, rows }
-export function latestScores(asof = null) {
+const latestMemo = new Map<string, { n: number; at: number; rows: ScoreWithHistory[] }>(); // asof ('' = now) -> { n, at, rows }
+export function latestScores(asof: IsoDate | null = null): ScoreWithHistory[] {
   const key = asof || '';
   const n = store.scoreCount(SCORE_VERSION);
   const hit = latestMemo.get(key);
@@ -164,15 +181,15 @@ export function latestScores(asof = null) {
   // only the newest SCORE_HISTORY *periods* are decoded - every version of
   // them, since an amendment shares its original's period end and pickAsOf
   // has to see both to choose.
-  const byCik = new Map();
+  const byCik = new Map<number, { accs: string[]; periods: Set<string> }>();
   for (const r of store.scoreIndex(SCORE_VERSION)) {
     if (!r.report_date) continue;
-    const rec = byCik.get(r.cik) || byCik.set(r.cik, { accs: [], periods: new Set() }).get(r.cik);
+    const rec = byCik.get(r.cik) || byCik.set(r.cik, { accs: [], periods: new Set<string>() }).get(r.cik)!;
     if (!asof && rec.periods.size >= SCORE_HISTORY && !rec.periods.has(r.report_date)) continue;
     rec.periods.add(r.report_date);
     rec.accs.push(r.accession);
   }
-  const rows = [];
+  const rows: ScoreWithHistory[] = [];
   for (const [, rec] of byCik) {
     const row = withHistory(rec.accs.map(scoreOf), asof);
     if (row) rows.push(row);
@@ -184,16 +201,16 @@ export function latestScores(asof = null) {
 }
 
 // Every saved score as the as-of index the screener's time machine reads
-// (screen.js): each company's filings newest first, the values addressed by
+// (screen.ts): each company's filings newest first, the values addressed by
 // (shard, row). The static build ships the same thing as one file per
 // filing year; here it is one shard over the whole store, rebuilt only when
-// the store has grown. This is what a rule ETF replays (ruleEtf.js) - it
+// the store has grown. This is what a rule ETF replays (ruleEtf.ts) - it
 // asks for every filing at once, not for one date.
-let asOfMemo = null;
-export function asOfIndex() {
+let asOfMemo: { n: number; index: AsOfIndex } | null = null;
+export function asOfIndex(): AsOfIndex {
   const n = store.scoreCount(SCORE_VERSION);
   if (asOfMemo?.n === n) return asOfMemo.index;
-  const all = [];
+  const all: Score[] = [];
   for (const r of store.scoreIndex(SCORE_VERSION)) {
     if (!r.report_date) continue;
     const s = scoreOf(r.accession);
@@ -205,18 +222,18 @@ export function asOfIndex() {
 
 // Latest saved filing of a company and its score (null when nothing is
 // saved yet). A period that was amended is read as its amendment, unless
-// that one has no statements in it (filings.js collapseAmendments).
-const thinSaved = (r) => {
+// that one has no statements in it (filings.ts collapseAmendments).
+const thinSaved = (r: { accession: string }) => {
   const s = store.getScore(r.accession, SCORE_VERSION);
   return s ? !(Number(s.coverage) > 0) : false; // not scored yet: nothing says it is empty
 };
-export async function latestScore(cik) {
+export async function latestScore(cik: number | string): Promise<Score | null> {
   const rows = store
     .filingIndex(cik)
     .filter((r) => r.report_date)
     .map((r) => ({ ...r, periodEnd: r.report_date }));
   if (!rows.length) return null;
-  rows.sort((a, b) => (a.report_date < b.report_date ? 1 : a.report_date > b.report_date ? -1 : 0));
+  rows.sort((a, b) => (a.report_date! < b.report_date! ? 1 : a.report_date! > b.report_date! ? -1 : 0));
   const pick = collapseAmendments(rows, thinSaved)[0];
   return pick ? scoreAccession(pick.accession) : null;
 }
