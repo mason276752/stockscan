@@ -8,7 +8,7 @@ import { barStore, openBarStore } from '../server/lib/barStore.ts';
 import type { BarSeries } from '../server/lib/types.ts';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stockscan-bars-'));
-openStore(path.join(tmp, 'store'));
+openStore(path.join(tmp, 'store'), path.join(tmp, 'cache.sqlite'));
 openBarStore(path.join(tmp, 'bars'));
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 

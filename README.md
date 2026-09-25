@@ -180,7 +180,7 @@ data/cache.sqlite                                                         快取
   - **站台收到裝滿為止**：GitHub Pages 一個站**硬上限 1 GB**，所以 build 時把日線、索引、app 佔掉的扣掉，剩下的額度從最新的財報往回收，收滿為止（`STOCKSCAN_PUBLISH_MB` 可覆寫）。build 最後會印出各部分佔用與總量，超過 85% 會警告。
   - **沒收進站台的照樣點得開**：申報清單列的是**全部**財報，站台沒有的那幾份標成 `off`，瀏覽器直接向 **`raw.githubusercontent.com/<owner>/<repo>/refs/data/main/data/store/…`** 取同一個檔（它回 `access-control-allow-origin: *`，而且 store 在那邊是同一棵樹，路徑一模一樣；build 會把這個 base 寫進 `meta.json` 的 `store`，`STOCKSCAN_DATA_URL` / `STOCKSCAN_DATA_REF` 可覆寫）。抓回來一樣進 Cache Storage，之後不再下載。Service worker 只管同源，所以這些請求直接走網路。
   - 代價：多一個外連（raw 有匿名流量限制，正常瀏覽沒問題，大量抓會被擋）；repo 沒有那個檔（沒 push、或 repo 是 private）時，那份財報就真的打不開，頁面會講。
-- **clone 下來就是完整的**：財報、評分、申報清單都在 `data/store/`，所以新環境開任何一家公司不用等下載，爬蟲第一輪掃描時「最近 5 期都已存」的公司**一個請求都不會發**（申報清單一週內的就直接用；當天的新申報由每日索引監看補上）。`data/cache.sqlite` 只剩真正的快取（代號表、市場快照、產業宇宙、ETF 清單），刪掉也只是重抓這些。
+- **clone 下來就是完整的**：財報、評分、申報清單都在 `data/store/`，所以新環境開任何一家公司不用等下載，爬蟲第一輪掃描時「最近 5 期都已存」的公司**一個請求都不會發**（申報清單一週內的就直接用；當天的新申報由每日索引監看補上）。`data/cache.sqlite` 只剩真正的快取（代號表、市場快照、產業宇宙、ETF 清單），損毀時啟動會先隔離 `.sqlite`、`-wal`、`-shm` 三檔再自動重建；刪掉也只是重抓這些。
 
 ### 2019 年以前的財報（SEC 季度資料集）
 
@@ -223,6 +223,7 @@ docker compose up -d --build # http://localhost:3000（或 BASE_URL 下）
 
 - `Dockerfile` 兩階段：先 build 前端（含 `web/assets/tradingview/` 的授權版 Advanced Charts，有放才會複製），再以 Node 24 alpine 跑 server（僅 production 依賴，非 root）。
 - `./data` 掛進容器的 `/app/data`：`data/store/`（財報、評分，`npm run data:pull` 取回的那份）與 `data/cache.sqlite` 在重建映像後保留；映像本身不含資料。
+- `data/cache.sqlite` 損毀時，server 啟動會將 `.sqlite`、`-wal`、`-shm` 一起改名隔離後，在同一路徑重建，絕不動 `data/store/`。
 - 連主機上的 TWS / IB Gateway：`IB_HOST` 預設 `host.docker.internal`（Linux 由 compose 的 `extra_hosts` 提供）；TWS 的 API 設定要關掉「只允許 localhost 連線」並信任 Docker 網段的 IP，否則自製 ETF 的日線走 TradingView / Yahoo。
 - 健康檢查打 `/api/status`（含前綴）。
 

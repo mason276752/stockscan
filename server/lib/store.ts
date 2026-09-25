@@ -161,6 +161,83 @@ const rmdirQuiet = (d: string) => {
   }
 };
 
+type SqliteFailure = Error & { code?: string; errcode?: number; errstr?: string };
+const cacheFailure = (err: unknown): err is SqliteFailure => {
+  const e = err as SqliteFailure;
+  return e?.errcode === 11 || e?.errcode === 26 || e?.code === 'SQLITE_CORRUPT' || e?.code === 'SQLITE_NOTADB' || /database disk image is malformed|file is not a database/i.test(e?.message || '');
+};
+const closeCache = (db: DatabaseSync | null) => {
+  try {
+    db?.close();
+  } catch {
+    /* closing an already damaged cache must not hide the original failure */
+  }
+};
+function configureCache(db: DatabaseSync) {
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    CREATE TABLE IF NOT EXISTS kv (
+      key        TEXT PRIMARY KEY,
+      json       BLOB NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+}
+function checkCache(db: DatabaseSync) {
+  const rows = db.prepare('PRAGMA quick_check').all();
+  const result = rows.map((row) => String(Object.values(row)[0])).join('; ');
+  if (result === 'ok') return;
+  const err = new Error(`cache integrity check failed: ${result || 'no result'}`) as SqliteFailure;
+  err.errcode = 11;
+  throw err;
+}
+function quarantineCache(file: string, db: DatabaseSync | null): string[] {
+  const token = `${Date.now()}-${process.pid}`;
+  const moved: string[] = [];
+  const sidecars = [`${file}-wal`, `${file}-shm`];
+  // Keep a byte-for-byte copy before close(): SQLite may remove empty sidecars
+  // while closing the damaged connection.
+  for (const from of sidecars) {
+    if (!fs.existsSync(from)) continue;
+    const to = `${from}.corrupt-${token}`;
+    fs.copyFileSync(from, to);
+    moved.push(to);
+  }
+  closeCache(db);
+  for (const from of [file, ...sidecars]) {
+    if (!fs.existsSync(from)) continue;
+    const base = `${from}.corrupt-${token}`;
+    const to = fs.existsSync(base) ? `${base}.after-close` : base;
+    fs.renameSync(from, to);
+    moved.push(to);
+  }
+  return moved;
+}
+function rebuildCache(file: string, db: DatabaseSync | null, reason: SqliteFailure): DatabaseSync {
+  const moved = quarantineCache(file, db);
+  console.warn(`store: SQLite 快取損毀（${reason.message}），已隔離 ${moved.map((name) => path.basename(name)).join(', ') || path.basename(file)} 並重建；${root}/ 未受影響`);
+  const fresh = new DatabaseSync(file);
+  configureCache(fresh);
+  checkCache(fresh);
+  return fresh;
+}
+function openCache(file: string): DatabaseSync {
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(file);
+    checkCache(db);
+    configureCache(db);
+    return db;
+  } catch (err) {
+    if (!cacheFailure(err)) {
+      closeCache(db);
+      throw err;
+    }
+    return rebuildCache(file, db, err);
+  }
+}
+
 // scan the tree once: file names carry everything the indexes need
 function scan<T extends { accession: string; version: number; file: string }>(kind: StoreKind, re: RegExp, into: Map<string, T>, make: (m: RegExpExecArray, cik: number, file: string) => T) {
   into.clear();
@@ -215,16 +292,7 @@ export function openStore(storeDir: string = process.env.STOCKSCAN_STORE || path
   cacheDir = path.dirname(cacheFile);
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(cacheDir, { recursive: true });
-  cache = new DatabaseSync(cacheFile);
-  cache.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = NORMAL;
-    CREATE TABLE IF NOT EXISTS kv (
-      key        TEXT PRIMARY KEY,
-      json       BLOB NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
+  cache = openCache(cacheFile);
   loadDocs();
   scanFilings();
   scanScores();
