@@ -22,14 +22,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 import type { Universe } from '../lib/universe.ts';
 import type { MarketSnapshot } from '../lib/market.ts';
 import type { TickerRow } from '../lib/edgar.ts';
-import type { AsOfRef, Company, FilingHeader, IsoDate, Score } from '../lib/types.ts';
+import type { AsOfRef, Company, FilingHeader, IsoDate, Score, ScoreRow } from '../lib/types.ts';
 import type { Etf } from '../lib/etf.ts';
 
 /** index/etfs.json: the ETF list plus which holdings files were written. */
@@ -85,6 +85,49 @@ const NATIVE = (() => {
   return fs.existsSync(bin) ? bin : null;
 })();
 const native = (...cmd: string[]) => execFileSync(NATIVE!, cmd, { stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: 1 << 30 });
+
+/**
+ * The helper's `decode-lines`, read a record at a time.
+ *
+ * This cannot go through execFileSync like the other two commands: the decoded
+ * headers and scores are around half a gigabyte, which is past both
+ * execFileSync's buffer and - the wall with no way around it - the 512 MB a
+ * Node string tops out at (buffer.constants.MAX_STRING_LENGTH), so there is no
+ * moment at which the whole answer exists as one string to hand to JSON.parse.
+ * The helper prints one record per line instead and each is parsed on its own,
+ * so nothing here grows with the size of the store.
+ */
+async function decodeStore(): Promise<{ filings: Map<string, FilingHeader>; scores: Map<string, ScoreRow> }> {
+  const filings = new Map<string, FilingHeader>();
+  const scores = new Map<string, ScoreRow>();
+  const child = spawn(NATIVE!, ['decode-lines', store.file!, path.join(REPO, 'server', 'data', 'zdict')], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const take = (line: string) => {
+    if (!line) return;
+    const tab = line.indexOf('\t');
+    const end = line.indexOf('\t', tab + 1);
+    if (line.length < 3 || tab !== 1 || end < 0) throw new Error(`decode-lines: malformed record: ${line.slice(0, 80)}`);
+    const accession = line.slice(2, end);
+    const value = JSON.parse(line.slice(end + 1));
+    if (line[0] === 'f') filings.set(accession, value as FilingHeader);
+    else scores.set(accession, value as ScoreRow);
+  };
+  let rest = '';
+  child.stdout.setEncoding('utf8');
+  for await (const chunk of child.stdout) {
+    rest += chunk;
+    for (let nl = rest.indexOf('\n'); nl >= 0; nl = rest.indexOf('\n')) {
+      take(rest.slice(0, nl));
+      rest = rest.slice(nl + 1);
+    }
+  }
+  take(rest.trim());
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', resolve);
+  });
+  if (code !== 0) throw new Error(`decode-lines: the helper exited ${code}`);
+  return { filings, scores };
+}
 console.log(`build-static: ${NATIVE ? `native helper ${path.relative(REPO, NATIVE)}` : 'pure Node'}`);
 
 // ---- 1. the app ----
@@ -236,13 +279,16 @@ const write = (name: string, obj: unknown, { compress = true }: { compress?: boo
 // reading and inflating each file on demand
 if (NATIVE) {
   const t = Date.now();
-  const decoded = JSON.parse(native('decode', store.file!, path.join(REPO, 'server', 'data', 'zdict')).toString('utf8')) as { filings: Record<string, FilingHeader>; scores: Record<string, Score> };
-  const headers = decoded.filings;
-  const scoreJson = decoded.scores;
-  store.filingHeader = (accession: string) => (store.hasFiling(accession) ? (headers[accession] ?? null) : null);
+  const { filings: headers, scores: scoreJson } = await decodeStore();
+  store.filingHeader = (accession: string) => (store.hasFiling(accession) ? (headers.get(accession) ?? null) : null);
   const scoreVersion = new Map(store.allScores().map((s) => [s.accession, s.version]));
-  store.scoreJson = (accession) => (scoreVersion.has(accession) ? scoreJson[accession] ?? null : null);
-  console.log(`build-static: decoded ${Object.keys(headers).length} headers, ${Object.keys(scoreJson).length} scores in ${((Date.now() - t) / 1000).toFixed(1)} s`);
+  // The scores here have no `items` (the helper leaves them out: 59% of the
+  // bytes, and nothing in this build reads them - score.ts readScoreRow drops
+  // them at once, and the two places that reach for a whole score only want
+  // `coverage`). The site's own copies are the published score files, which go
+  // over verbatim, so what a reader sees there is unaffected.
+  store.scoreJson = (accession) => (scoreVersion.has(accession) ? ((scoreJson.get(accession) ?? null) as Score | null) : null);
+  console.log(`build-static: decoded ${headers.size} headers, ${scoreJson.size} scores in ${((Date.now() - t) / 1000).toFixed(1)} s`);
 }
 
 // the ticker table, the SIC / filer universe and the market snapshot: from

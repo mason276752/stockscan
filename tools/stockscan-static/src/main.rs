@@ -6,13 +6,32 @@
 //!   copy <from> <to> [--link]        replace <to> with a copy of the tree
 //!                                    <from> (*.tmp skipped); --link makes
 //!                                    hard links instead of copies
-//!   decode <store> <zdict-dir>       every filings/**/*.zst and
+//!   decode-lines <store> <zdict-dir> every filings/**/*.zst and
 //!                                    scores/**/*.zst of the store, decoded
-//!                                    with the dictionaries; prints one JSON
-//!                                    object to stdout:
-//!                                      { "filings": { accession: <data.filing> },
-//!                                        "scores":  { accession: <score> } }
-//!                                    (numbers are passed through verbatim)
+//!                                    with the dictionaries; one record per
+//!                                    line on stdout, tab-separated:
+//!                                      f<TAB><accession><TAB><data.filing>
+//!                                      s<TAB><accession><TAB><score>
+//!                                    A line, not one big JSON object: the
+//!                                    whole thing is about half a gigabyte and
+//!                                    Node cannot hold it as a string at all
+//!                                    (buffer.constants.MAX_STRING_LENGTH is
+//!                                    512 MB), so the consumer has to be able
+//!                                    to take it a record at a time.
+//!                                    `score.items` is left out - the
+//!                                    seventeen benchmark rows with their
+//!                                    names and thresholds are 59% of a
+//!                                    score's bytes and nothing reading this
+//!                                    output looks at them (score.ts
+//!                                    readScoreRow drops them the moment they
+//!                                    arrive; the site's own copies come from
+//!                                    the published score files, which are
+//!                                    verbatim). Every other value is passed
+//!                                    through as it was written, so no number
+//!                                    is ever reformatted.
+//!                                    The values carry no newline of their own:
+//!                                    the store writes them with JSON.stringify
+//!                                    and no indent.
 //!   compress <level> <file>...       <file> -> <file>.zst (the original is
 //!                                    removed), zstd at <level>
 //!
@@ -31,9 +50,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("copy") => copy(&args[1..]),
-        Some("decode") => decode(&args[1..]),
+        Some("decode-lines") => decode(&args[1..]),
         Some("compress") => compress(&args[1..]),
-        _ => Err("usage: stockscan-static copy <from> <to> [--link] | decode <store> <zdict-dir> | compress <level> <file>...".to_string()),
+        _ => Err("usage: stockscan-static copy <from> <to> [--link] | decode-lines <store> <zdict-dir> | compress <level> <file>...".to_string()),
     };
     if let Err(e) = result {
         eprintln!("stockscan-static: {e}");
@@ -109,27 +128,19 @@ fn decode(args: &[String]) -> Result<(), String> {
     let scores = decode_tree(&store.join("scores"), &dict.scores, "scores")?;
     eprintln!("stockscan-static: decoded {} filing headers, {} scores", filings.len(), scores.len());
 
-    // one JSON object, streamed out: {"filings":{...},"scores":{...}}
+    // one record per line: <tag> TAB <accession> TAB <json>
     let stdout = io::stdout();
     let mut out = io::BufWriter::with_capacity(1 << 20, stdout.lock());
-    let write_map = |out: &mut dyn Write, name: &str, map: &BTreeMap<String, String>| -> io::Result<()> {
-        write!(out, "{}:{{", serde_json::to_string(name).unwrap())?;
-        for (i, (k, v)) in map.iter().enumerate() {
-            if i > 0 {
-                out.write_all(b",")?;
-            }
-            out.write_all(serde_json::to_string(k).unwrap().as_bytes())?;
-            out.write_all(b":")?;
-            out.write_all(v.as_bytes())?;
-        }
-        out.write_all(b"}")
-    };
     (|| -> io::Result<()> {
-        out.write_all(b"{")?;
-        write_map(&mut out, "filings", &filings)?;
-        out.write_all(b",")?;
-        write_map(&mut out, "scores", &scores)?;
-        out.write_all(b"}\n")?;
+        for (tag, map) in [(b'f', &filings), (b's', &scores)] {
+            for (accession, json) in map.iter() {
+                out.write_all(&[tag, b'\t'])?;
+                out.write_all(accession.as_bytes())?;
+                out.write_all(b"\t")?;
+                out.write_all(json.as_bytes())?;
+                out.write_all(b"\n")?;
+            }
+        }
         out.flush()
     })()
     .map_err(|e| format!("decode: writing output: {e}"))
@@ -154,8 +165,21 @@ struct ScoreFile<'a> {
     score: Option<&'a RawValue>,
 }
 
+// A score without its `items`: the seventeen benchmark rows are 59% of its
+// bytes and no reader of this output touches them. Only the outer object is
+// rebuilt - every value keeps the text it was written with, so the numbers
+// come through untouched (only the key order changes, which nothing reads).
+fn without_items(score: &RawValue) -> Result<String, String> {
+    // BTreeMap, not serde_json::Map: the latter only carries owned Values, and
+    // the point here is to keep each value as the text it already is
+    let mut map: BTreeMap<&str, &RawValue> = serde_json::from_str(score.get()).map_err(|e| e.to_string())?;
+    map.remove("items");
+    serde_json::to_string(&map).map_err(|e| e.to_string())
+}
+
 // accession -> the JSON text of the wanted member (`data.filing` of a filing
-// file, `score` of a score file), from every .zst / .br under `dir`
+// file, `score` of a score file minus its `items`), from every .zst / .br
+// under `dir`
 fn decode_tree(dir: &Path, dict: &[u8], kind: &str) -> Result<BTreeMap<String, String>, String> {
     if !dir.is_dir() {
         return Ok(BTreeMap::new());
@@ -183,15 +207,17 @@ fn decode_tree(dir: &Path, dict: &[u8], kind: &str) -> Result<BTreeMap<String, S
             // only the wanted member is looked at; the rest of the file (the
             // statements, most of a filing) is skimmed over, and the member's
             // text is passed through untouched
-            let (accession, member): (Option<&str>, Option<&RawValue>) = if kind == "filings" {
+            if kind == "filings" {
                 let f: FilingFile = serde_json::from_slice(&json).map_err(|e| format!("{}: json: {e}", file.display()))?;
-                (f.accession, f.data.and_then(|d| d.filing))
-            } else {
-                let f: ScoreFile = serde_json::from_slice(&json).map_err(|e| format!("{}: json: {e}", file.display()))?;
-                (f.accession, f.score)
-            };
-            Ok(match (accession, member) {
-                (Some(a), Some(m)) => Some((a.to_string(), m.get().to_string())),
+                return Ok(match (f.accession, f.data.and_then(|d| d.filing)) {
+                    // passed through as written: no number is reformatted
+                    (Some(a), Some(m)) => Some((a.to_string(), m.get().to_string())),
+                    _ => None,
+                });
+            }
+            let f: ScoreFile = serde_json::from_slice(&json).map_err(|e| format!("{}: json: {e}", file.display()))?;
+            Ok(match (f.accession, f.score) {
+                (Some(a), Some(m)) => Some((a.to_string(), without_items(m).map_err(|e| format!("{}: json: {e}", file.display()))?)),
                 _ => None,
             })
         })

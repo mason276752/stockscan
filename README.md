@@ -674,7 +674,7 @@ Q4 = 全年 − 前三季），再對每一期計算下列指標；概念對照�
 | `server/lib/secClient.ts` | sec.gov HTTP client：User-Agent、每個請求間隔至少 101 ms（單調時鐘，最多 4 個同時在路上）、重試、高/低優先權（預抓讓路） |
 | `server/lib/filings.ts`、`statementTypes.ts`、`storeFormat.ts`、`scoreModel.ts`、`screen.ts`、`marketFields.ts`、`sic.ts` | 純計算 / 純資料模組（無 Node I/O），伺服器與純前端版共用：申報清單工具、報表分類、存檔格式還原、評分模型、尋找股票與分類瀏覽的篩選排序、市場欄位、SIC 表 |
 | `server/tools/build-static.mts`、`fetch-new.mts`、`enrich-cover-shares.mts` | 產生純前端版（`npm run build:static`）；一次性抓最近幾天的新申報（`npm run fetch:new`，排程用）；安全補齊舊財報的封面股數（`npm run enrich:cover-shares`） |
-| `tools/stockscan-static/` | Rust：靜態版 build 的重活（`copy` 平行複製／hard link、`decode` 平行解開 store 取每份財報表頭與評分、`compress` 多執行緒 zstd）；索引的內容仍由 build-static.mts 決定，兩條路輸出相同 |
+| `tools/stockscan-static/` | Rust：靜態版 build 的重活（`copy` 平行複製／hard link、`decode-lines` 平行解開 store 取每份財報表頭與評分、一筆一行輸出且略去評分的 `items`、`compress` 多執行緒 zstd）；索引的內容仍由 build-static.mts 決定，兩條路輸出相同 |
 | `web/src/api.ts`、`api.http.ts`、`api.static.ts`、`api.static.worker.ts`、`staticData.ts` | 前端資料層：dispatcher、打 `/api` 的實作、純前端實作（頁面上的 proxy 與做事的 Web Worker：讀靜態檔 + 瀏覽器內計算、WASM zstd） |
 | `web/src/theme.ts`、`busy.ts` | 配色（跟隨系統 / 淺 / 深，圖表用的 token 讀取）；載入中指示與下載進度的共用狀態 |
 | `server/lib/barStore.ts` | 日線快取：一檔一個 brotli 檔、記憶體 LRU、增量接續（`mergeDays` 核對重疊段）、一個月未用清除；舊 kv 裡的日線第一次啟動會搬過來 |
