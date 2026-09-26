@@ -313,6 +313,25 @@ function openCompany(idOrRow: string | { ticker?: string | null; cik: number }) 
   loadCompany(id);
 }
 
+// Hovering a row in a list is a good guess at what the next click wants, so
+// the report's two requests are started then instead of after it. Which half
+// that saves depends on the build: the company record is the slow one on the
+// server (a few hundred ms cold and sometimes seconds, when EDGAR's
+// submissions file has to be fetched; cached there for ten minutes), the
+// filing is the slow one in the static build (fetched and inflated in the
+// worker, with no server to have cached it), so both are warmed. Only the row
+// the pointer rests on - a new row drops the last one's tasks, and the dwell
+// means a row merely crossed on the way down the table costs nothing.
+function hoverCompany(row: { cik?: number | null; ticker?: string | null; accession?: string | null } | null): void {
+  drop('hover');
+  if (!row?.cik) return;
+  const id = row.ticker || String(row.cik);
+  const opts = { tag: 'hover', priority: 3, delay: 150 };
+  prefetch(`hover:company:${id}`, () => api.company(id), opts);
+  const accn = row.accession;
+  if (accn) prefetch(`filing:${accn}:${view.value}`, () => cached.filing(row.cik!, accn, view.value), opts);
+}
+
 async function loadCompany(id: string, accession: string | null = null, quartersYear: number | null = null) {
   error.value = null;
   loadingCompany.value = true;
@@ -532,9 +551,9 @@ onMounted(() => {
     </header>
     <p v-if="crawlText" class="muted small crawl" :title="t(isStatic ? 'crawl.staticTitle' : 'crawl.title')">{{ crawlText }}</p>
 
-    <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" @basket="page = 'basket'" />
-    <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" />
-    <ScreenerPage v-else-if="page === 'screen'" :params="screenParams" @open="openCompany" @basket="page = 'basket'" @navigate="screenParams = $event" />
+    <BrowsePage v-if="page === 'browse'" :params="browseParams" @open="openCompany" @navigate="browseParams = $event" @basket="page = 'basket'" @hover="hoverCompany" />
+    <WatchlistPage v-else-if="page === 'watch'" @open="openCompany" @basket="page = 'basket'" @hover="hoverCompany" />
+    <ScreenerPage v-else-if="page === 'screen'" :params="screenParams" @open="openCompany" @basket="page = 'basket'" @navigate="screenParams = $event" @hover="hoverCompany" />
     <BasketPage v-else-if="page === 'basket'" @open="openCompany" @screen="editScreen" />
 
     <template v-else>

@@ -13,7 +13,7 @@ const props = defineProps({
   showAfs: { type: Boolean, default: true },
   scores: { type: Object as PropType<Record<string, ScoreBadgeData | null>>, default: () => ({}) }, // cik -> score summary | null
 });
-const emit = defineEmits(['open']);
+const emit = defineEmits(['open', 'hover']);
 
 const sortKey = ref('float');
 const sortDir = ref(-1);
@@ -61,7 +61,7 @@ const arrow = (k: string) => (sortKey.value === k ? (sortDir.value > 0 ? ' ▲' 
         </tr>
       </thead>
       <tbody>
-        <tr v-for="c in rows" :key="c.cik" class="row" @click="emit('open', c)">
+        <tr v-for="c in rows" :key="c.cik" class="row" @click="emit('open', c)" @mouseenter="emit('hover', { cik: c.cik, ticker: c.tickers?.[0], accession: scores[c.cik]?.accession })" @mouseleave="emit('hover', null)">
           <td class="star" @click.stop="toggleWatch(c)"><span :class="{ on: isWatched(c.cik) }" :title="isWatched(c.cik) ? t('watch.remove') : t('watch.add')">{{ isWatched(c.cik) ? '★' : '☆' }}</span></td>
           <td class="mono">
             <a :href="`?company=${c.ticker || c.cik}`" @click.prevent>{{ c.ticker || `CIK ${c.cik}` }}</a>

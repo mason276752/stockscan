@@ -9,7 +9,6 @@ import { reclassify } from './statementTypes.ts';
 import { fiscalLabel } from './filings.ts';
 import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.ts';
 import { SCORE_HISTORY, asOfKept, asOfReader, asOfSubset, pickAsOf, screenAsOfColumns, screenAsOfIndex } from './screen.ts';
-import { collapseAmendments } from './filings.ts';
 import type { AsOfColumns, AsOfIndex, Company, FilingHeader, FilingRef, IsoDate, Score, ScoreRow, ScoreWithHistory, ScrapeResult } from './types.ts';
 
 export { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf, SCORE_HISTORY };
@@ -306,20 +305,21 @@ export function asOfIndex(): AsOfIndex {
   return index;
 }
 
-// Latest saved filing of a company and its score (null when nothing is
-// saved yet). A period that was amended is read as its amendment, unless
-// that one has no statements in it (filings.ts collapseAmendments).
-const thinSaved = (r: { accession: string }) => {
-  const s = store.getScore(r.accession, SCORE_VERSION);
-  return s ? !(Number(s.coverage) > 0) : false; // not scored yet: nothing says it is empty
-};
-export async function latestScore(cik: number | string): Promise<Score | null> {
-  const rows = store
-    .filingIndex(cik)
-    .filter((r) => r.report_date)
-    .map((r) => ({ ...r, periodEnd: r.report_date }));
-  if (!rows.length) return null;
-  rows.sort((a, b) => (a.report_date! < b.report_date! ? 1 : a.report_date! > b.report_date! ? -1 : 0));
-  const pick = collapseAmendments(rows, thinSaved)[0];
-  return pick ? scoreAccession(pick.accession) : null;
+// The rows above as a lookup by company, which is what a score badge asks
+// for: the browse pages want a few thousand at once and the search box ten
+// per keystroke. It used to be one walk of the company's filings and one
+// score file opened per company - 1,500 of them took two and a half seconds
+// of *synchronous* work, so every other request on the server waited too -
+// where latestScores already holds every one of them, decoded, for a minute
+// at a time. (It is also what the static build's scores-min.json is built
+// from, so the two builds now answer badges from the same place.)
+//
+// Keyed on the row array latestScores memoised: a refreshed set is a new
+// array, so the map cannot go stale behind it.
+const byCikMemo = new WeakMap<readonly ScoreWithHistory[], Map<number, ScoreWithHistory>>();
+export function latestScoresByCik(asof: IsoDate | null = null): Map<number, ScoreWithHistory> {
+  const rows = latestScores(asof);
+  let m = byCikMemo.get(rows);
+  if (!m) byCikMemo.set(rows, (m = new Map(rows.map((r) => [r.cik, r]))));
+  return m;
 }

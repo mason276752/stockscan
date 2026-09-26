@@ -11,7 +11,7 @@ import Loading from './Loading.vue';
 import type { ScoreBadge as ScoreBadgeData } from '../../../server/lib/types.ts';
 import type { WatchEntry } from '../watchlist';
 
-const emit = defineEmits(['open', 'basket']);
+const emit = defineEmits(['open', 'basket', 'hover']);
 const scores = shallowRef<Record<string, ScoreBadgeData | null>>({});
 const loading = ref(false);
 const sortKey = ref('addedAt');
@@ -180,7 +180,7 @@ async function addFromSearch(ticker: string) {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="x in rows" :key="x.cik" class="row" @click="emit('open', x)">
+              <tr v-for="x in rows" :key="x.cik" class="row" @click="emit('open', x)" @mouseenter="emit('hover', { cik: x.cik, ticker: x.ticker, accession: scores[x.cik]?.accession })" @mouseleave="emit('hover', null)">
                 <td class="star" :title="t('watch.remove')" @click.stop="removeWatch(x.cik)">★</td>
                 <td class="mono"><a :href="`?company=${x.ticker || x.cik}`" @click.prevent>{{ x.ticker || `CIK ${x.cik}` }}</a></td>
                 <td class="name">{{ x.name }}</td>

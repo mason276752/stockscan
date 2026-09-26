@@ -14,7 +14,7 @@ import { buildQuarterly } from './lib/quarters.ts';
 import { buildIndicators } from './lib/indicators.ts';
 import { currentView } from './lib/current.ts';
 import { serverValuation } from './lib/valuationServer.ts';
-import { ITEMS as SCORE_ITEMS, SCORE_VERSION, asOfIndex, latestScore, latestScores, scoreAccession, scoreUnscored } from './lib/score.ts';
+import { ITEMS as SCORE_ITEMS, SCORE_VERSION, asOfIndex, latestScores, latestScoresByCik, scoreAccession, scoreUnscored } from './lib/score.ts';
 import { SCREEN_FIELDS, asOfDate, browseCompanies, filerCounts, scoreBadge, screenQuery, screenRows, sicCounts, wantsMarket } from './lib/screen.ts';
 import { marketSnapshot, marketStatus } from './lib/market.ts';
 import { FILER_STATUS, SIC, getUniverse, lookupFiler, refreshUniverse, sicInfo, universeStale } from './lib/universe.ts';
@@ -137,8 +137,16 @@ const wrap = (fn: AsyncHandler) => (req: Request, res: Response, next: NextFunct
 // saved score has no coverage is the Part III-only kind, with no statements
 // in it. It corrects nothing, so it is flagged and whoever picks a period's
 // filing keeps the original (filings.ts collapseAmendments).
+//
+// The EDGAR submissions file behind this has a ten-minute cache but no
+// in-flight sharing of its own, so two callers arriving together on a cold
+// entry each fetched it. That is now the normal case - a list row's hover
+// starts the request and the click that follows wants the same company - so
+// the second one joins the first instead of going to SEC again. ?refresh=1 is
+// deliberately asking for a fresh read and is left out.
 async function companyOf(id: string | number, opts?: GetCompanyOptions): Promise<CompanyWithFilings> {
-  const c = await getCompany(client, id, opts);
+  const key = `company:${id}:${(opts?.forms || DEFAULT_FORMS).join(',')}`;
+  const c = opts?.refresh ? await getCompany(client, id, opts) : await dedupe(key, () => getCompany(client, id, opts));
   for (const f of c.filings) {
     if (!/\/A$/i.test(f.form || '')) continue;
     const s = store.getScore(f.accession, SCORE_VERSION);
@@ -174,19 +182,8 @@ app.get(
   '/api/search',
   wrap(async (req, res) => {
     const rows = await searchCompanies(client, String(req.query.q || ''), Number(req.query.limit) || 10);
-    res.json(
-      await Promise.all(
-        rows.map(async (r) => {
-          let score = null;
-          try {
-            score = await latestScore(r.cik);
-          } catch {
-            /* unscorable filing: no badge */
-          }
-          return { ...r, score: scoreBadge(score) };
-        }),
-      ),
-    );
+    const scores = latestScoresByCik(); // in memory: no file read per suggestion
+    res.json(rows.map((r) => ({ ...r, score: scoreBadge(scores.get(r.cik)) })));
   }),
 );
 
@@ -366,11 +363,11 @@ app.get(
       .map((x) => Number(x))
       .filter((x) => Number.isInteger(x) && x > 0)
       .slice(0, 6000);
+    // from the row set the screener already holds (score.ts): a lookup each,
+    // where this used to open a score file per company on the event loop
+    const scores = latestScoresByCik();
     const out: Record<number, unknown> = {};
-    for (const cik of ciks) {
-      const s = await latestScore(cik);
-      out[cik] = scoreBadge(s);
-    }
+    for (const cik of ciks) out[cik] = scoreBadge(scores.get(cik));
     res.json({ version: SCORE_VERSION, items: SCORE_ITEMS.map(({ key, name, category, benchmark, weight }) => ({ key, name, category, benchmark, weight })), scores: out });
   }),
 );

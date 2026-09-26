@@ -37,7 +37,7 @@ type UrlParams = Record<string, string | undefined>;
 // params: the screen as it appears in the URL (see App.vue); `navigate`
 // reports every change so the URL and the browser history follow along
 const props = defineProps({ params: { type: Object as PropType<UrlParams>, default: () => ({}) } });
-const emit = defineEmits(['open', 'basket', 'navigate']);
+const emit = defineEmits(['open', 'basket', 'navigate', 'hover']);
 
 const meta = shallowRef<ScreenFieldsResponse | null>(null); // { fields, divisions, filer, market }
 const sic = shallowRef<BrowseSicResponse | null>(null); // /api/browse/sic
@@ -538,7 +538,7 @@ onMounted(async () => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(r, ri) in result.rows" :key="r.cik" class="row" @click="emit('open', r)">
+              <tr v-for="(r, ri) in result.rows" :key="r.cik" class="row" @click="emit('open', r)" @mouseenter="emit('hover', { cik: r.cik, ticker: r.ticker, accession: r.score.accession })" @mouseleave="emit('hover', null)">
                 <td class="star" @click.stop="toggleWatch(r)"><span :class="{ on: isWatched(r.cik) }">{{ isWatched(r.cik) ? '★' : '☆' }}</span></td>
                 <td class="mono"><a :href="`?company=${r.ticker || r.cik}`" @click.prevent>{{ r.ticker || `CIK ${r.cik}` }}</a></td>
                 <td class="name">{{ r.name }}<span class="muted small afs hide-p"> {{ afsShort(r.afs) }}</span></td>

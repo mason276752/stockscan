@@ -26,7 +26,7 @@ interface BrowseParams {
 
 // params: { cat: 'sic'|'filer'|'etf', code, afs, etf }
 const props = defineProps({ params: { type: Object as PropType<BrowseParams>, default: () => ({}) } });
-const emit = defineEmits(['open', 'navigate', 'basket']);
+const emit = defineEmits(['open', 'navigate', 'basket', 'hover']);
 
 const cat = ref<'sic' | 'filer' | 'etf'>(props.params.cat || 'sic');
 const code = ref(props.params.code || '');
@@ -297,7 +297,7 @@ onMounted(async () => {
             </div>
           </div>
           <Loading v-if="loadingCompanies" :text="t('br.loadingCompanies')" />
-          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-sic="false" :scores="scores" @open="emit('open', $event)" />
+          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-sic="false" :scores="scores" @open="emit('open', $event)" @hover="emit('hover', $event)" />
         </template>
         <p v-else class="empty muted">{{ t('br.pickSic') }}</p>
       </main>
@@ -329,7 +329,7 @@ onMounted(async () => {
             </div>
           </div>
           <Loading v-if="loadingCompanies" :text="t('br.loadingCompanies')" />
-          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-afs="false" :scores="scores" @open="emit('open', $event)" />
+          <CompanyTable v-else-if="companies" :companies="visibleCompanies" :show-afs="false" :scores="scores" @open="emit('open', $event)" @hover="emit('hover', $event)" />
         </template>
         <Loading v-else-if="loadingCompanies" :text="t('br.loadingCompanies')" />
         <p v-else class="empty muted">{{ t('br.pickFiler') }}</p>
@@ -396,7 +396,7 @@ onMounted(async () => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(h, i) in visibleHoldings" :key="h.cusip || h.name + i" :class="{ row: h.cik, dim: !h.cik }" @click="h.cik && emit('open', { cik: h.cik, ticker: h.symbol })">
+                <tr v-for="(h, i) in visibleHoldings" :key="h.cusip || h.name + i" :class="{ row: h.cik, dim: !h.cik }" @click="h.cik && emit('open', { cik: h.cik, ticker: h.symbol })" @mouseenter="emit('hover', h.cik ? { cik: h.cik, ticker: h.symbol } : null)" @mouseleave="emit('hover', null)">
                   <td class="num muted small">{{ i + 1 }}</td>
                   <td class="star" @click.stop="h.cik && toggleWatch({ cik: h.cik, ticker: h.symbol, name: h.name })"><span v-if="h.cik" :class="{ on: isWatched(h.cik) }">{{ isWatched(h.cik) ? '★' : '☆' }}</span></td>
                   <td class="mono">
