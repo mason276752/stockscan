@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import CompanySearch from './CompanySearch.vue';
@@ -12,7 +12,7 @@ import type { ScoreBadge as ScoreBadgeData } from '../../../server/lib/types.ts'
 import type { WatchEntry } from '../watchlist';
 
 const emit = defineEmits(['open', 'basket']);
-const scores = ref<Record<string, ScoreBadgeData | null>>({});
+const scores = shallowRef<Record<string, ScoreBadgeData | null>>({});
 const loading = ref(false);
 const sortKey = ref('addedAt');
 const sortDir = ref(-1);

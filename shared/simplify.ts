@@ -31,7 +31,6 @@ export interface SimplifyColumn {
   /** a merged column: the instants its period opens and closes on */
   opening?: string | null;
   closing?: string | null;
-  [key: string]: unknown;
 }
 
 export interface SimplifyLineItem {
@@ -42,7 +41,6 @@ export interface SimplifyLineItem {
   abstract: boolean;
   depth: number;
   values: Record<string, SimplifyCell>;
-  [key: string]: unknown;
 }
 
 export interface SimplifyStatement {
@@ -50,7 +48,6 @@ export interface SimplifyStatement {
   columns: SimplifyColumn[];
   lineItems: SimplifyLineItem[];
   axes?: Record<string, string[]>;
-  [key: string]: unknown;
 }
 
 /** What simplifyStatement() adds to the statement it is given. */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { api } from '../api';
 import ScoreBadge from './ScoreBadge.vue';
 import SicPicker from './SicPicker.vue';
@@ -39,8 +39,8 @@ type UrlParams = Record<string, string | undefined>;
 const props = defineProps({ params: { type: Object as PropType<UrlParams>, default: () => ({}) } });
 const emit = defineEmits(['open', 'basket', 'navigate']);
 
-const meta = ref<ScreenFieldsResponse | null>(null); // { fields, divisions, filer, market }
-const sic = ref<BrowseSicResponse | null>(null); // /api/browse/sic
+const meta = shallowRef<ScreenFieldsResponse | null>(null); // { fields, divisions, filer, market }
+const sic = shallowRef<BrowseSicResponse | null>(null); // /api/browse/sic
 const text = ref('');
 const division = ref('');
 const sicCode = ref('');
@@ -65,7 +65,7 @@ const conditions = ref<Condition[]>(DEFAULT_CONDITIONS.map((c) => ({ ...c })));
 const sortKey = ref('score');
 const sortDir = ref<'asc' | 'desc'>('desc');
 const sortMode = ref<'now' | 'chg' | 'yoy'>('now');
-const result = ref<ScreenResponse | null>(null);
+const result = shallowRef<ScreenResponse | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
@@ -383,6 +383,18 @@ function cell(r: ScreenRow, col: Column): { text: string; neg: boolean; pos?: bo
   const title = `${base!.fiscalYear} ${base!.fiscalPeriod}: ${fmt(f, b)} → ${fmt(f, cur)}`;
   return { text: `${d > 0 ? '+' : ''}${f1.format(d)}${isPct(f.key) ? '%' : ' pt'}`, neg: d < 0, pos: d > 0, title };
 }
+// Every cell of the table, worked out once per (rows, columns, language)
+// instead of on every render. The template used to call cell() four times per
+// cell - for the text, two classes and the tooltip - so a keystroke anywhere
+// in the filter panel re-derived 500 x 12 x 4 of them; now a keystroke that
+// does not change the result set costs nothing here.
+const cells = computed(() => {
+  const rows = result.value?.rows;
+  if (!rows) return [];
+  const cols = columns.value;
+  return rows.map((r) => cols.map((col) => cell(r, col)));
+});
+
 // a field name without its parenthetical / circled-number qualifiers, for column heads and basket names
 const shortName = (name: string) =>
   tr(name)
@@ -526,13 +538,13 @@ onMounted(async () => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in result.rows" :key="r.cik" class="row" @click="emit('open', r)">
+              <tr v-for="(r, ri) in result.rows" :key="r.cik" class="row" @click="emit('open', r)">
                 <td class="star" @click.stop="toggleWatch(r)"><span :class="{ on: isWatched(r.cik) }">{{ isWatched(r.cik) ? '★' : '☆' }}</span></td>
                 <td class="mono"><a :href="`?company=${r.ticker || r.cik}`" @click.prevent>{{ r.ticker || `CIK ${r.cik}` }}</a></td>
                 <td class="name">{{ r.name }}<span class="muted small afs hide-p"> {{ afsShort(r.afs) }}</span></td>
                 <td class="small hide-p">{{ r.sic }} {{ sicName(r) }}</td>
                 <td><ScoreBadge :score="r.score" /></td>
-                <td v-for="col in columns" :key="col.id" class="num" :class="{ neg: cell(r, col).neg, pos: cell(r, col).pos, chg: col.mode !== 'now' }" :title="cell(r, col).title || ''">{{ cell(r, col).text }}</td>
+                <td v-for="(col, ci) in columns" :key="col.id" class="num" :class="{ neg: cells[ri]?.[ci]?.neg, pos: cells[ri]?.[ci]?.pos, chg: col.mode !== 'now' }" :title="cells[ri]?.[ci]?.title || ''">{{ cells[ri]?.[ci]?.text }}</td>
                 <td class="num small hide-p">{{ bigMoney(r.float) }}</td>
               </tr>
             </tbody>

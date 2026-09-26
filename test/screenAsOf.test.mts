@@ -165,3 +165,32 @@ test('change filters compare with the filings of that date', () => {
   assert.equal(screenQuery(staticTable('2026-05-15'), { ...query, roe_yoy_min: 20 }).rows[0]!.ticker, 'T1');
   assert.equal(screenQuery(staticTable('2026-05-15'), { ...query, roe_yoy_min: 21 }).total, 0);
 });
+
+test('prev / yoy travel only when a change filter or column asks for them', () => {
+  const asof = '2026-05-15';
+  // the plain query has no change filter: the two bases are three fifths of
+  // the answer's bytes and nothing reads them, so they do not go out
+  for (const rows of [screenQuery(serverRows(asof), query).rows, screenQuery(staticTable(asof), query).rows]) {
+    assert.ok(rows.length, 'rows came back');
+    for (const r of rows) {
+      assert.equal(r.prev, null, 'no prev without a change filter');
+      assert.equal(r.yoy, null, 'no yoy without a change filter');
+    }
+  }
+  // each of the three things that needs them brings them back
+  for (const q of [
+    { ...query, roe_yoy_min: -1e9 }, // a yoy filter
+    { ...query, roe_chg_min: -1e9 }, // a change filter
+    { ...query, sortmode: 'yoy', sort: 'roe' }, // sorted by a change
+    { ...query, history: '1' }, // a change column on screen, before it has a number
+  ]) {
+    const [r] = screenQuery(serverRows(asof), q).rows;
+    assert.ok(r, `rows for ${JSON.stringify(q)}`);
+    assert.ok(r.yoy, `yoy kept for ${JSON.stringify(q)}`);
+    assert.equal(r.yoy!.values.roe, 60);
+  }
+  // the figures themselves are untouched either way
+  const bare = screenQuery(serverRows(asof), query).rows[0]!;
+  const full = screenQuery(serverRows(asof), { ...query, history: '1' }).rows[0]!;
+  assert.deepEqual({ ...bare, prev: null, yoy: null }, { ...full, prev: null, yoy: null });
+});

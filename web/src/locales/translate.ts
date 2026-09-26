@@ -20,17 +20,20 @@ export const MESSAGES: Record<string, Messages> = { zh, en };
 
 // t(key, params) of i18n.ts for an explicit locale: "{n}" placeholders,
 // "one|many" picks by params.n, a function entry is called with params
-export function translate(locale: string, key: string, params?: Record<string, unknown> | null): string {
+// `params` is any object - the placeholders are looked up by name, so a
+// caller can hand over a typed record (a note, a basket warning) unchanged
+export function translate(locale: string, key: string, params?: object | null): string {
   const m = MESSAGES[locale] || MESSAGES.zh!;
   let s = (m[key] ?? MESSAGES.zh![key]) as Message | undefined;
   if (s == null) return key;
-  if (typeof s === 'function') return s(params || {});
-  if (params) {
-    if (typeof params.n === 'number' && s.includes('|')) {
+  const p = (params || null) as Record<string, unknown> | null;
+  if (typeof s === 'function') return s(p || {});
+  if (p) {
+    if (typeof p.n === 'number' && s.includes('|')) {
       const [one, many] = s.split('|') as [string, string];
-      s = params.n === 1 ? one : many;
+      s = p.n === 1 ? one : many;
     }
-    s = s.replace(/\{(\w+)\}/g, (_, k: string) => (params[k] == null ? '' : String(params[k])));
+    s = s.replace(/\{(\w+)\}/g, (_, k: string) => (p[k] == null ? '' : String(p[k])));
   }
   return s;
 }

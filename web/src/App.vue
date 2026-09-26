@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, shallowRef, watch } from 'vue';
 import { api } from './api';
 import CompanySearch from './components/CompanySearch.vue';
 import FilingPicker from './components/FilingPicker.vue';
@@ -8,11 +8,6 @@ import IndicatorsTable from './components/IndicatorsTable.vue';
 import ValuationPanel from './components/ValuationPanel.vue';
 import TvEmbedChart from './components/TvEmbedChart.vue';
 import { simplifyStatement } from '../../shared/simplify.ts';
-import BrowsePage from './components/BrowsePage.vue';
-import WatchlistPage from './components/WatchlistPage.vue';
-import ScreenerPage from './components/ScreenerPage.vue';
-// the custom-ETF page brings its charting library along: loaded when first opened
-const BasketPage = defineAsyncComponent(() => import('./components/BasketPage.vue'));
 import ScoreCard from './components/ScoreCard.vue';
 import Note from './components/Note.vue';
 import Loading from './components/Loading.vue';
@@ -28,6 +23,25 @@ import type { CompanyResponse } from './apiTypes.ts';
 import type { EdgarFiling, Indicators, Score, ScrapeResult, Statement } from '../../server/lib/types.ts';
 import type { Valuation } from '../../server/lib/valuation.ts';
 import type { Basket } from './baskets';
+
+// The pages other than the report are each a chunk of their own: they are
+// mutually exclusive (v-if below), so nothing but the report is needed to show
+// the first screen, and the screener alone is 860 lines. They are not left to
+// the click that opens them either - PAGE_CHUNKS below fetches them while the
+// browser is idle, so by the time a tab is clicked the chunk is in hand.
+const BrowsePage = defineAsyncComponent(() => import('./components/BrowsePage.vue'));
+const WatchlistPage = defineAsyncComponent(() => import('./components/WatchlistPage.vue'));
+const ScreenerPage = defineAsyncComponent(() => import('./components/ScreenerPage.vue'));
+// the custom-ETF page brings its charting library along: loaded when first opened
+const BasketPage = defineAsyncComponent(() => import('./components/BasketPage.vue'));
+// what the idle prefetcher warms after start-up, in the order a visitor is
+// most likely to want them (the data indexes, queued in onMounted, come first)
+const PAGE_CHUNKS: [key: string, load: () => Promise<unknown>][] = [
+  ['page:screen', () => import('./components/ScreenerPage.vue')],
+  ['page:browse', () => import('./components/BrowsePage.vue')],
+  ['page:watch', () => import('./components/WatchlistPage.vue')],
+  ['page:basket', () => import('./components/BasketPage.vue')],
+];
 
 /** GET /api/status, as the header reads it. */
 interface StatusResponse {
@@ -56,7 +70,7 @@ interface StatusResponse {
 type ShownFiling = Partial<EdgarFiling> & { accession: string; form: string; quartersYear?: number };
 
 // background crawl progress (server-side), shown in the header
-const status = ref<StatusResponse | null>(null);
+const status = shallowRef<StatusResponse | null>(null);
 async function pollStatus() {
   try {
     status.value = (await api.status()) as StatusResponse;
@@ -98,9 +112,9 @@ const cached = {
   tvSymbol: memoize((ticker: string) => api.tvSymbol(ticker), 60),
 };
 
-const company = ref<CompanyResponse | null>(null);
+const company = shallowRef<CompanyResponse | null>(null);
 const filing = ref<ShownFiling | null>(null); // the filing row picked from the list
-const data = ref<ScrapeResult | null>(null); // scraped statements JSON
+const data = shallowRef<ScrapeResult | null>(null); // scraped statements JSON
 const loadingCompany = ref(false);
 const refreshing = ref(false);
 const refreshMessage = ref('');
@@ -146,7 +160,7 @@ watch(simple, (v) => localStorage.setItem('stockscan.simple', v ? '1' : '0'));
 const view = ref('current'); // current = only the filing's own period | all = every column in the filing
 
 // financial indicators page
-const indicators = ref<Indicators | null>(null);
+const indicators = shallowRef<Indicators | null>(null);
 const loadingIndicators = ref(false);
 const indicatorsError = ref<string | null>(null);
 const indBasis = ref('x4'); // x4 | ttm
@@ -182,7 +196,7 @@ async function loadIndicators() {
 }
 
 // valuation page (relative multiples over N quarters + absolute models)
-const valuation = ref<Valuation | null>(null);
+const valuation = shallowRef<Valuation | null>(null);
 const loadingValuation = ref(false);
 const valuationError = ref<string | null>(null);
 const valCount = ref(20);
@@ -480,6 +494,9 @@ function applyUrl() {
 
 onMounted(() => {
   for (const [key, task, priority] of api.warmup()) prefetch(key, task, { tag: 'boot', priority });
+  // after the indexes (negative priority): a page's own chunk, so switching to
+  // it stays instant even though it is no longer in the first bundle
+  for (const [key, load] of PAGE_CHUNKS) prefetch(key, load, { tag: 'boot', priority: -2 });
   pollStatus();
   setInterval(pollStatus, 15_000);
   applyUrl();

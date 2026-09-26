@@ -47,7 +47,8 @@ export interface FilingRecord {
   reportDate: IsoDate | null;
   version: number;
   file: string;
-  bytes: number;
+  /** the file's size, filled in on demand (bytesOf) - see scanFilings */
+  bytes?: number;
 }
 
 /** The same for a saved score. */
@@ -263,8 +264,22 @@ function scan<T extends { accession: string; version: number; file: string }>(ki
     }
   }
 }
-const scanFilings = () =>
-  scan('filings', FILING_RE, filings, (m, cik, file) => ({ accession: m[1]!, cik, reportDate: unsafe(m[2]!), form: unsafe(m[3]!), version: Number(m[4]), file, bytes: fs.statSync(file).size }));
+// The scan reads the file names only. A filing's size is not in them, and
+// stat'ing all ~200,000 of them cost a third of a second on every start for
+// the sake of two callers - the static build's byte budget (publish.ts) and
+// the byte total on /api/status - so it is filled in on demand instead and
+// kept on the record.
+const scanFilings = () => scan('filings', FILING_RE, filings, (m, cik, file) => ({ accession: m[1]!, cik, reportDate: unsafe(m[2]!), form: unsafe(m[3]!), version: Number(m[4]), file }));
+const bytesOf = (rec: FilingRecord): number => {
+  if (rec.bytes == null) {
+    try {
+      rec.bytes = fs.statSync(rec.file).size;
+    } catch {
+      rec.bytes = 0; // gone from under us: it is only a size
+    }
+  }
+  return rec.bytes;
+};
 const scanScores = () => scan('scores', SCORE_RE, scores, (m, cik, file) => ({ accession: m[1]!, cik, reportDate: unsafe(m[2]!), version: Number(m[3]), file }));
 
 function loadDocs() {
@@ -330,10 +345,10 @@ function recompress() {
         const file = rec.file.replace(/\.json\.br$/, EXT);
         writeAtomic(file, buf);
         unlinkQuiet(rec.file);
-        const bytes = (rec as FilingRecord).bytes;
-        saved += (bytes || 0) - buf.length;
+        const was = kind === 'filings' ? bytesOf(rec as FilingRecord) : 0;
+        saved += was - buf.length;
         rec.file = file;
-        if (bytes != null) (rec as FilingRecord).bytes = buf.length;
+        if (kind === 'filings') (rec as FilingRecord).bytes = buf.length;
       } catch (err) {
         console.warn(`store: ${path.basename(rec.file)} 轉檔失敗：${(err as Error).message}`);
       }
@@ -526,7 +541,7 @@ export const store = {
   // path relative to the store - for the static-site build
   allFilings(): FilingRecord[] {
     need();
-    return [...filings.values()].map((f) => ({ accession: f.accession, cik: f.cik, form: f.form, reportDate: f.reportDate, version: f.version, bytes: f.bytes, file: path.relative(root!, f.file) }));
+    return [...filings.values()].map((f) => ({ accession: f.accession, cik: f.cik, form: f.form, reportDate: f.reportDate, version: f.version, bytes: bytesOf(f), file: path.relative(root!, f.file) }));
   },
   allScores(): ScoreRecord[] {
     need();
@@ -726,7 +741,7 @@ export const store = {
   size(): { filings: number; filingsBytes: number; scores: number; kv: number; kvBytes: number } {
     need();
     let bytes = 0;
-    for (const f of filings.values()) bytes += f.bytes;
+    for (const f of filings.values()) bytes += bytesOf(f); // the first call stats what it has not seen; a write records its own size
     const k = cache.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(json)), 0) AS bytes FROM kv').get()!;
     return { filings: filings.size, filingsBytes: bytes, scores: scores.size, kv: k.n as number, kvBytes: k.bytes as number };
   },

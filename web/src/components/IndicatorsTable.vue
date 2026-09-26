@@ -20,7 +20,6 @@ function rawValue(row: IndicatorRow, col: IndicatorColumn): number | null {
 }
 
 // hovered row: colour each cell by the row's benchmark (green passes, red fails)
-const hoverKey = ref<string | null>(null);
 const OPS: Record<Benchmark['op'], (a: number, b: number) => boolean> = { '>': (a, b) => a > b, '>=': (a, b) => a >= b, '<': (a, b) => a < b, '<=': (a, b) => a <= b };
 const OP_TEXT: Record<Benchmark['op'], string> = { '>': '>', '>=': '≥', '<': '<', '<=': '≤' };
 function benchmarkText(row: IndicatorRow) {
@@ -28,8 +27,12 @@ function benchmarkText(row: IndicatorRow) {
   const unit = row.unit === '百萬' ? '' : row.unit === '%' ? '%' : ` ${tr(row.unit)}`;
   return `${OP_TEXT[row.benchmark.op]} ${row.benchmark.value}${unit}`;
 }
+// Whether a cell meets its row's benchmark. Only shown while the row is
+// hovered, but that is now the stylesheet's job (tbody tr:hover td.good):
+// keeping the hovered row out of here is what lets the cells below be worked
+// out once instead of on every mouse move.
 function verdict(row: IndicatorRow, col: IndicatorColumn) {
-  if (hoverKey.value !== row.key || !row.benchmark) return '';
+  if (!row.benchmark) return '';
   const v = rawValue(row, col);
   if (v == null) return '';
   return OPS[row.benchmark.op](v, row.benchmark.value) ? 'good' : 'bad';
@@ -63,6 +66,28 @@ function cellTitle(row: IndicatorRow, col: IndicatorColumn) {
   if (col.missing) return props.data.mode === 'year' && props.data.quarterly ? t('it.missingYear') : t('it.missingPeriod');
   return '';
 }
+
+// Every cell of the table, worked out once per data set and language rather
+// than on every render: the template used to call cell() twice plus verdict()
+// and cellTitle() for each of the ~35 x 20 cells, and any reactive change -
+// a mouse move over a row, most of all - paid for all of them again.
+interface Cell {
+  key: string;
+  text: string;
+  neg: boolean;
+  missing: boolean;
+  verdict: string;
+  title: string;
+}
+const cellsByRow = computed(() => {
+  const cols = props.data.columns;
+  return new Map<string, Cell[]>(
+    props.data.rows.map((row) => [
+      row.key,
+      cols.map((col) => ({ key: col.label, ...cell(row, col), missing: !!col.missing, verdict: verdict(row, col), title: cellTitle(row, col) })),
+    ]),
+  );
+});
 
 // rows grouped for the rowspan group column
 const groups = computed(() => {
@@ -119,7 +144,7 @@ const tipStyle = computed((): Record<string, string> => {
       </thead>
       <tbody>
         <template v-for="g in groups" :key="g.name">
-          <tr v-for="(row, i) in g.rows" :key="row.key" :class="{ first: i === 0, flow: row.kind === 'flow', hover: hoverKey === row.key }" @mouseenter="hoverKey = row.key" @mouseleave="hoverKey = null">
+          <tr v-for="(row, i) in g.rows" :key="row.key" :class="{ first: i === 0, flow: row.kind === 'flow' }">
             <td v-if="i === 0" class="group hide-p" :rowspan="g.rows.length">{{ tr(g.name) }}</td>
             <td class="name" @mouseenter="showTip(row, $event)" @mouseleave="hideTip">
               {{ tr(row.name) }}
@@ -128,8 +153,8 @@ const tipStyle = computed((): Record<string, string> => {
               <span v-else-if="row.kind === 'flow' && annualizeAmounts && quarterMode" class="badge">{{ basisLabel }}</span>
               <span v-if="row.benchmark" class="bench muted" :title="`${t('it.benchmark')}${benchmarkText(row)}`">{{ benchmarkText(row) }}</span>
             </td>
-            <td v-for="c in data.columns" :key="c.label" class="num" :class="[{ neg: cell(row, c).neg, missing: c.missing }, verdict(row, c)]" :title="cellTitle(row, c)">
-              {{ cell(row, c).text }}
+            <td v-for="c in cellsByRow.get(row.key) || []" :key="c.key" class="num" :class="[{ neg: c.neg, missing: c.missing }, c.verdict]" :title="c.title">
+              {{ c.text }}
             </td>
           </tr>
         </template>
@@ -215,16 +240,18 @@ td.num {
 td.neg {
   color: var(--neg);
 }
-tr.hover td {
+/* the hovered row, and the benchmark verdict of its cells: done here rather
+   than through a reactive `hoverKey`, so a mouse move costs no render */
+tbody tr:hover td {
   background: var(--row-alt);
 }
-tr.hover td.name {
+tbody tr:hover td.name {
   background: var(--accent-soft);
 }
-td.good {
+tbody tr:hover td.good {
   background: var(--good-soft) !important;
 }
-td.bad {
+tbody tr:hover td.bad {
   background: var(--neg-soft) !important;
 }
 .bench {

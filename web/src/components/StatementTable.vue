@@ -51,9 +51,10 @@ interface TableStatement {
   axes: Record<Concept, Concept[]>;
   columns: TableColumn[];
   lineItems: TableRow[];
+  /** set by simplifyStatement (shared/simplify.ts): the rolled-up view */
+  simplified?: boolean;
   hiddenGroups?: Record<string, string>[];
   reconciliation?: Record<string, Reconciliation>;
-  [key: string]: unknown;
 }
 
 const props = defineProps({

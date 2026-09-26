@@ -27,6 +27,7 @@ import { barStore, openBarStore } from './lib/barStore.ts';
 import { createBarCrawler } from './lib/barCrawler.ts';
 import { ibConnect, ibStatus } from './lib/ib.ts';
 import { tvStatus } from './lib/tvws.ts';
+import { apiCompression, cacheControl, staticCompression } from './lib/compress.ts';
 import type { CompanyWithFilings, GetCompanyOptions } from './lib/edgar.ts';
 import type { PreviousFiling } from './lib/current.ts';
 import type { EdgarFiling, IsoDate, ScreenQueryParams } from './lib/types.ts';
@@ -95,8 +96,25 @@ setTimeout(() => {
   scoreUnscored({ log: (m) => console.log(`${m} in the background`) }).catch((err) => console.warn(`scoring: ${(err as Error).message}`));
 }, 8000);
 
+// Warm the screener's row set (the as-of index and every company's current
+// score) once the start-up work has settled: built cold it takes one to three
+// seconds, and without this the first visitor to the screener pays for it.
+setTimeout(() => {
+  try {
+    const t0 = Date.now();
+    const n = latestScores().length;
+    console.log(`screener rows warmed: ${n.toLocaleString()} companies in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  } catch (err) {
+    console.warn(`screener warm-up failed: ${(err as Error).message}`);
+  }
+}, 25_000);
+
 const app = express();
 app.use(express.json());
+// The JSON answers are big and very compressible (the screener's 500 rows are
+// 2 MB), and nothing in front of the server compresses them; the NDJSON
+// streams below write with res.write and are left alone. See lib/compress.ts.
+app.use('/api', apiCompression());
 app.use('/api', (req, _res, next) => {
   if (req.path !== '/status') client.touch(); // any user request pauses background work (the status poll is not one)
   next();
@@ -577,8 +595,12 @@ app.get('/api/status', (_req, res) => {
 const dist = path.join(__dirname, '..', 'web', 'dist');
 if (fs.existsSync(dist)) {
   const page = fs.readFileSync(path.join(dist, 'index.html'), 'utf8').replace('</head>', `<script>window.__STOCKSCAN_BASE__=${JSON.stringify(BASE)}</script></head>`);
-  app.use(express.static(dist, { index: false }));
-  app.get(/^(?!\/api\/).*/, (_req, res) => res.type('html').send(page));
+  // the hashed assets, brotli'd once and kept (compress.ts), then cached in
+  // the browser for good - their names change when their contents do
+  app.use(staticCompression(dist));
+  app.use(express.static(dist, { index: false, setHeaders: (res, file) => res.setHeader('Cache-Control', cacheControl(`/${path.relative(dist, file).split(path.sep).join('/')}`)) }));
+  // index.html names this build's assets, so it is always revalidated
+  app.get(/^(?!\/api\/).*/, (_req, res) => res.type('html').set('Cache-Control', 'no-cache').send(page));
 }
 
 app.use((err: ApiError, _req: Request, res: Response, _next: NextFunction) => {

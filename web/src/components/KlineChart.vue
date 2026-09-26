@@ -71,11 +71,23 @@ let ro: ResizeObserver | null = null;
 const UP = computed(() => (isDark.value != null && cssVar(props.colors === 'us' ? '--up' : '--down')) as string);
 const DOWN = computed(() => (isDark.value != null && cssVar(props.colors === 'us' ? '--down' : '--up')) as string);
 
-const byTime = computed(() => new Map(props.bars.map((b) => [b.time, b])));
+// Where each day sits in `bars`. Both things the crosshair needs go through
+// it - the bar under the pointer, and the one before it for the day's change -
+// and both happen on every mouse move, where a scan of ten years of daily
+// bars was 2,500 comparisons a frame.
+const indexAt = computed(() => {
+  const m = new Map<IsoDate, number>();
+  props.bars.forEach((b, i) => m.set(b.time, i));
+  return m;
+});
+const barAt = (time: IsoDate): Candle | undefined => {
+  const i = indexAt.value.get(time);
+  return i == null ? undefined : props.bars[i];
+};
 const shown = computed((): HoverBar | null => hover.value || (props.bars.length ? { ...props.bars.at(-1)!, overlay: props.overlay.at(-1)?.value ?? null, last: true } : null));
 const prevClose = (bar: Candle) => {
-  const i = props.bars.findIndex((b) => b.time === bar.time);
-  return i > 0 ? props.bars[i - 1]!.close : null;
+  const i = indexAt.value.get(bar.time);
+  return i != null && i > 0 ? props.bars[i - 1]!.close : null;
 };
 const f2 = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 const pct = (v: number | null | undefined) => (v == null ? '' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
@@ -107,7 +119,7 @@ function mountLight() {
       hover.value = null;
       return;
     }
-    const bar = byTime.value.get(p.time as unknown as IsoDate);
+    const bar = barAt(p.time as unknown as IsoDate);
     if (!bar) {
       hover.value = null;
       return;

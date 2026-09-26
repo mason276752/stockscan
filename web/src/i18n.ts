@@ -39,7 +39,7 @@ watch(
   { immediate: true },
 );
 
-export const t = (key: string, params?: Record<string, unknown> | null): string => translate(locale.value, key, params);
+export const t = (key: string, params?: object | null): string => translate(locale.value, key, params);
 
 // Chinese text from the shared computation modules (server/lib) -> English
 export function tr(s: string): string;
@@ -58,9 +58,11 @@ export function tr(s: string | null | undefined): string | null | undefined {
 }
 
 // a record with both languages, e.g. SIC { zh, title } or filer status { zh, label }
-export function pick(obj: Record<string, unknown> | null | undefined, zhKey: string, enKey: string): string {
+// (any object: the two keys are looked up by name, so the callers need no cast)
+export function pick(obj: object | null | undefined, zhKey: string, enKey: string): string {
   if (!obj) return '';
-  return String((locale.value === 'zh' ? obj[zhKey] || obj[enKey] : obj[enKey] || obj[zhKey]) || '');
+  const o = obj as Record<string, unknown>;
+  return String((locale.value === 'zh' ? o[zhKey] || o[enKey] : o[enKey] || o[zhKey]) || '');
 }
 
 // number formatting locale for dates etc.

@@ -533,7 +533,14 @@ export function screenQuery(rows: readonly ScreenRow[] | ScreenColumns | ScreenT
     return (x < y ? -1 : x > y ? 1 : 0) * dir;
   });
   const limit = Math.min(2000, Math.max(1, Number(q.limit) || 300));
-  return { total: out.length, count: Math.min(out.length, limit), rows: order.slice(0, limit).map((k) => t.row(out[k]!)) };
+  const rowsOut = order.slice(0, limit).map((k) => t.row(out[k]!));
+  // The prev / yoy figures are three fifths of the answer's bytes (1.3 MB of
+  // 2.1 MB at 500 rows) and nothing reads them unless a change filter or a
+  // change column is in play - which is exactly what wantsHistory tests, and
+  // what the page already says with `history=1`. The static build never had
+  // them here either (its history columns are a separate file, loaded on the
+  // same condition), so dropping them is what makes the two builds agree.
+  return { total: out.length, count: Math.min(out.length, limit), rows: wantsHistory(q) ? rowsOut : rowsOut.map((r) => ({ ...r, prev: null, yoy: null })) };
 }
 
 // does a query need the market snapshot (so the server may wait for it)?

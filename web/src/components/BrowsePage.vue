@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue';
 import { api } from '../api';
 import { createBasket } from '../baskets';
 import CompanyTable from './CompanyTable.vue';
@@ -52,7 +52,7 @@ watch(
 );
 
 // ---------- SIC ----------
-const sic = ref<BrowseSicResponse | null>(null);
+const sic = shallowRef<BrowseSicResponse | null>(null);
 const sicFilter = ref('');
 const openDivisions = ref(new Set<string>());
 
@@ -79,10 +79,10 @@ function toggleDivision(id: string) {
 }
 
 // ---------- filer status ----------
-const filer = ref<BrowseFilerResponse | null>(null);
+const filer = shallowRef<BrowseFilerResponse | null>(null);
 
 // ---------- company list (SIC / filer) ----------
-const companies = ref<BrowseCompaniesResponse | null>(null);
+const companies = shallowRef<BrowseCompaniesResponse | null>(null);
 const loadingCompanies = ref(false);
 const companiesKey = computed(() => (cat.value === 'sic' && code.value ? `sic=${code.value}` : cat.value === 'filer' && afs.value ? `afs=${afs.value}` : ''));
 
@@ -106,7 +106,7 @@ async function loadCompanies() {
 watch([companiesKey, listedOnly], loadCompanies);
 
 // latest-filing scores for whatever is on screen (batched; server reads them from SQLite)
-const scores = ref<Record<string, ScoreBadgeData | null>>({});
+const scores = shallowRef<Record<string, ScoreBadgeData | null>>({});
 async function loadScores(ciks: readonly (number | null | undefined)[]) {
   const need = [...new Set(ciks.filter((c) => c && !(c in scores.value)))];
   for (let i = 0; i < need.length; i += 1500) {
@@ -128,10 +128,10 @@ const visibleCompanies = computed(() => {
 });
 
 // ---------- ETF ----------
-const etfs = ref<BrowseEtfsResponse | null>(null);
+const etfs = shallowRef<BrowseEtfsResponse | null>(null);
 const etfQuery = ref('');
-const etfResults = ref<Etf[]>([]);
-const holdings = ref<EtfHoldingsResponse | null>(null);
+const etfResults = shallowRef<Etf[]>([]);
+const holdings = shallowRef<EtfHoldingsResponse | null>(null);
 const loadingHoldings = ref(false);
 const equityOnly = ref(true);
 let etfTimer: ReturnType<typeof setTimeout> | undefined;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { api } from '../api';
 import { url } from '../base';
 import CompanySearch from './CompanySearch.vue';
@@ -110,7 +110,7 @@ watch(colors, (v) => localStorage.setItem('stockscan.kcolors', v));
 // buttons are not shown for one - what can be set is how often the book is
 // rebuilt and how the weights are worked out, not which names are in it.
 const isRule = computed(() => current.value?.mode === 'rule');
-const schedule = ref<StreamEvent | null>(null); // the replay's summary, before the bars land
+const schedule = shallowRef<StreamEvent | null>(null); // the replay's summary, before the bars land
 // A screen on the statements alone admits shells quoted at $0.000001, where
 // one tick is a 100% move and a few of them at equal weight are the whole
 // index. Under this price a name is held by the rules but not bought (0 =
@@ -131,9 +131,9 @@ watch(weighting, (v) => localStorage.setItem('stockscan.rule.weighting', v));
 watch(maxWeight, (v) => localStorage.setItem('stockscan.rule.maxweight', v));
 watch(special, (v) => localStorage.setItem('stockscan.rule.special', v ? '1' : '0'));
 
-const quotes = ref<QuotesStatus | null>(null); // /api/quotes/status
+const quotes = shallowRef<QuotesStatus | null>(null); // /api/quotes/status
 const advanced = ref(false); // TradingView Advanced Charts loaded
-const result = ref<IndexResult | null>(null);
+const result = shallowRef<IndexResult | null>(null);
 const loading = ref(false);
 const progress = ref<Progress | null>(null); // while the bars stream in
 let aborter: AbortController | null = null;
