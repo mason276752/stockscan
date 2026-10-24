@@ -7821,7 +7821,7 @@
  "us-gaap:StockRepurchaseProgramNumberOfSharesAuthorizedToBeRepurchased": "The number of shares authorized to be repurchased by an entity's Board of Directors under a stock repurchase plan.",
  "us-gaap:StockRepurchaseProgramPeriodInForce1": "Period share may be purchased under authorized share repurchase plan, in 'PnYnMnDTnHnMnS' format, for example, 'P1Y5M13D' represents reported fact of one year, five months, and thirteen days. Includes, but is not limited to, repurchase of stock and unit of ownership.",
  "us-gaap:StockRepurchaseProgramRemainingAuthorizedRepurchaseAmount": "Amount remaining of a stock repurchase plan authorized by an entity's Board of Directors.",
- "us-gaap:StockRepurchaseProgramRemainingAuthorizedRepurchaseAmount1": "Amount remaining of a stock repurchase plan authorized.",
+ "us-gaap:StockRepurchaseProgramRemainingAuthorizedRepurchaseAmount1": "Amount remaining authorized for purchase of share under share repurchase plan. Includes, but is not limited to, repurchase of stock and unit of ownership.",
  "us-gaap:StockRepurchaseProgramRemainingNumberOfSharesAuthorizedToBeRepurchased": "The remaining number of shares authorized to be repurchased by an entity's Board of Directors under a stock repurchase plan.",
  "us-gaap:StockRepurchasedAndRetiredDuringPeriodShares": "Number of shares that have been repurchased and retired during the period.",
  "us-gaap:StockRepurchasedAndRetiredDuringPeriodValue": "Equity impact of the value of stock that has been repurchased and retired during the period. The excess of the purchase price over par value can be charged against retained earnings (once the excess is fully allocated to additional paid in capital).",
