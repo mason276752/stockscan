@@ -71,8 +71,8 @@ npm run build:static        # -> web/dist-static/（網頁 + data/store + data/b
 repo 的 Settings → Pages → Source 選 **GitHub Actions**；`SEC_USER_AGENT`（`名字 email`）用 Settings → Secrets 的同名 secret，沒設就用 workflow 檔裡寫的預設值。
 **資料在 `refs/data/main`，不在 `main`**（見「資料存放」）：workflow checkout `main`（程式），再把 `refs/data/main`（`data/store`、`data/bars`）fetch 到 `data-repo/`，用 `STOCKSCAN_STORE` / `STOCKSCAN_BARS` 指過去；push 程式碼因此只帶程式的 diff，不再拖著十幾萬個資料檔。
 Runner 上沒有快取，build 會自己向 SEC 抓代號表與產業宇宙、向 TradingView 抓市場快照（約 3–4 分鐘）；財報、申報清單、以及 SEC 抓不到時的代號表與產業宇宙，直接用 data ref 裡的 `data/store`。代號表或產業宇宙完全拿不到時 build 會失敗（exit 1），不會把搜尋不到東西的網站部署出去。
-除了 push，也**定時**跑（cron 是 UTC，美東夏令 UTC-4、冬令 UTC-5，每個時間以其中一種寫、另一種會差一小時）：財報在最常出現的時段——美東 08:30、17:45、22:30（夏令）；
-日線則要在當天的 K 棒收完之後——16:00 收盤那根在 17:45 那次就有了，但 12 月起美股改成 23 小時交易（美東 20:00 到隔天 19:00，19:00–20:00 休市），整天的 K 棒只在那一小時是定案的，所以另外排 23:30 UTC（夏令 19:30）和 00:30 UTC（冬令 19:30）各一次，兩種時制總有一次落在休市那小時。
+除了 push，也**定時**跑，每個交易日兩次：**開盤前**（美東 09:30 開盤）與**收盤後**（16:00 收盤）。cron 是 UTC，美東夏令 UTC-4、冬令 UTC-5，所以夏令跑在美東 08:30、17:45，冬令早一小時跑在 07:30、16:45，兩種時制都落在開盤前、收盤後。
+財報大多在開盤前和收盤後馬上出現；晚上才進 EDGAR 的（收件到 22:00）由隔天開盤前那次補上。日線在收盤後那次抓，16:00 收盤那根那時已經定案。
 每次都先 `npm run fetch:new` 從 EDGAR 每日索引把最近幾天新的 10-K / 10-Q 抓下來、解析、評分（順便補算 store 裡還沒有現行版本評分的），
 在 `refs/data/main` 上**多 commit 一個並 push**（推這個 ref 不會觸發 workflow，`main` 完全不動；一定要接在前一個 commit 後面——git 只送父 commit 沒有的物件，孤兒 commit 或改寫過的 ref 每次都會重送整個 600 MB），再用新資料重建網站。`fetch:new` 在本機也能跑，等於爬蟲「監看新申報」那一步跑一次就結束。
 日線：data ref 裡只有已結束年份的 `data/bars/**/<年>.zst`，每次 build 前 `npm run fetch:bars` 從 TradingView 把今年的 `head.zst` 補到最新（8 條並發約 12 分鐘；`actions/cache` 在兩次 run 之間留住 head，之後每次只接最後幾根），

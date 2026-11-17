@@ -1,8 +1,8 @@
 # Publish the pure-frontend build (web/dist-static) to GitHub Pages:
 #   - on every push to main (code only: the data comes from the data ref)
-#   - on a schedule around the hours filings land on EDGAR: first the day's new
-#     10-K / 10-Q / 20-F / 40-F are fetched, parsed, scored and pushed to the
-#     data ref, then the site is rebuilt with them
+#   - on a schedule, before the open and after the close of each trading day:
+#     first the day's new 10-K / 10-Q / 20-F / 40-F are fetched, parsed,
+#     scored and pushed to the data ref, then the site is rebuilt with them
 #   - by hand (Actions → Run workflow)
 # Data lives on the ref refs/data/main, never on main: data/store (filings,
 # scores, filing lists) and data/bars (the finished years of daily bars).
@@ -30,17 +30,12 @@ on:
     # the first Sunday of November) and UTC-5 in winter (EST), so each time
     # below is written for one clock and drifts an hour under the other.
     #
-    # Filings - EDGAR accepts them 06:00-22:00 ET; most 10-Q / 10-K arrive
-    # right after the 16:00 close and in the morning before the open:
-    - cron: '30 12 * * 1-5' # 08:30 EDT / 07:30 EST - the morning's filings
-    - cron: '45 21 * * 1-5' # 17:45 EDT / 16:45 EST - right after the 16:00 close (and the day's bars: the 16:00 bar is final)
-    - cron: '30 2 * * 2-6'  # 22:30 EDT / 21:30 EST - the end of EDGAR's day (UTC: the next day)
-    #
-    # Daily bars - from December the US session runs 23 hours (20:00 ET to
-    # 19:00 ET the next day, closed 19:00-20:00). The day's bar is final only
-    # in that hour, so a run must land in it whichever clock is in force:
-    - cron: '30 23 * * 1-5' # 19:30 EDT - in the pause (18:30 EST: too early, the next one covers winter)
-    - cron: '30 0 * * 2-6'  # 19:30 EST - in the pause (20:30 EDT: the next session has opened; yesterday's bar is final anyway)
+    # Twice a trading day, around the 09:30-16:00 ET session. EDGAR accepts
+    # filings 06:00-22:00 ET; most 10-Q / 10-K arrive in the morning before
+    # the open and right after the close, and what comes in later in the
+    # evening waits for the next morning's run.
+    - cron: '30 12 * * 1-5' # 08:30 EDT / 07:30 EST - before the 09:30 open
+    - cron: '45 21 * * 1-5' # 17:45 EDT / 16:45 EST - after the 16:00 close (and the day's bars: the 16:00 bar is final)
   workflow_dispatch:
     inputs:
       enrich_cover_shares:
