@@ -69,6 +69,8 @@ test('whose statements they are', () => {
   assert.ok(namesCompany(['F-5', 'Anthropic, PBC'], 'Anthropic, PBC'));
   assert.ok(namesCompany(['ACME WIDGETS, INC. AND SUBSIDIARIES'], 'Acme Widgets Inc'));
   assert.ok(!namesCompany(['Target Business LLC'], 'Acme Widgets Inc'));
+  assert.ok(namesCompany(['Arm Limited'], 'ARM HOLDINGS PLC /UK'), 'EDGAR appends the country');
+  assert.ok(!namesCompany(['Pharma Widgets Ltd'], 'ARM HOLDINGS PLC /UK'), 'a whole word');
 });
 
 // ---- a prospectus ----
@@ -263,6 +265,13 @@ test('a merger: the shell’s statements are not the company’s', () => {
   // the shell's pages talk about the merger: that does not make them the company's
   const chatty = shell.replace('<p>Blank Check', '<p>Holders of Acme Widgets who are eligible to participate in the earnout under the agreement.</p><p>Blank Check');
   assert.equal(value(read(prospectus(chatty, statements()))[0]!.statements.balance_sheet, 'us-gaap:Assets', 'i20260930'), 420_000);
+});
+
+test('a merger: when the company’s own statements cannot be read, the shell’s do not take their place', () => {
+  const shell = statements({ name: 'Blank Check Acquisition Corp. III', ...SHELL });
+  const unreadable = BALANCE.map((x) => (x.includes('>Total assets<') ? line('Total assets', '1', '2', '3') : x));
+  assert.deepEqual(read(prospectus(shell, statements({ balance: unreadable }))), []);
+  assert.deepEqual(read(prospectus(shell)), [], 'nor when they are not there at all');
 });
 
 test('a merger: when there is no telling whose they are, nothing is read', () => {

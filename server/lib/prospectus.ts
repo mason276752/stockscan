@@ -46,7 +46,7 @@ import type { Concept, FactValue, IsoDate, LineItem, ScrapeResult, Statement, St
 
 // Bump it when the reading changes: what an older version read (or gave up
 // on) is read again, and replaced (newListings.ts).
-export const PROSPECTUS_PARSER = 2;
+export const PROSPECTUS_PARSER = 3;
 
 // ---- the document: tables, and the lines of text between them ----
 
@@ -885,9 +885,10 @@ const nameKey = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, ' 
 // says anything will do: "Anthropic, PBC" over a statement of "Anthropic,
 // PBC and subsidiaries".
 export function namesCompany(lines: readonly string[], name: string | null | undefined): boolean {
-  const words = nameKey(name || '').split(' ').filter((w) => !/^(?:the|inc|corp|co|ltd|plc|llc|holdings?|group|company|limited|sa|ag|nv|ab|se|of|and)$/.test(w));
+  // EDGAR appends where a company is from ("ARM HOLDINGS PLC /UK")
+  const words = nameKey((name || '').replace(/\s*\/[A-Z]{2,4}\/?\s*$/, '')).split(' ').filter((w) => !/^(?:the|inc|corp|co|ltd|plc|llc|holdings?|group|company|limited|sa|ag|nv|ab|se|of|and)$/.test(w));
   const want = words.slice(0, 2).join(' ');
-  return !!want && lines.some((l) => nameKey(l).includes(want) || (words[0]!.length >= 5 && nameKey(l).split(' ').includes(words[0]!)));
+  return !!want && lines.some((l) => ` ${nameKey(l)} `.includes(` ${want} `) || (words[0]!.length >= 5 && nameKey(l).split(' ').includes(words[0]!)));
 }
 
 const isIfrs = (html: string, rows: readonly Printed[]): boolean => {
@@ -906,11 +907,11 @@ interface Located {
 type StatementSet = Partial<Record<LabelledType, Located>>;
 
 const AUDITOR = /ernst|kpmg|pricewaterhouse|\bpwc\b|deloitte|\bbdo\b|grant thornton|marcum|withum|mazars|forvis|\brsm\b|crowe|baker tilly|\buhy\b|cbiz|audit|accountant|\bllp\b/i;
-const CORPORATE = /\b(?:inc|corp|corporation|ltd|limited|llc|l\.?p|plc|company|co|s\.?a|ag|n\.?v|ab|oyj?|se|s\.?p\.?a|gmbh|trust|fund|(?:corp|inc|ltd)\.?\W+[iv]+)\b\.?\W*(?:and (?:its )?subsidiar(?:y|ies)\W*)?(?:\((?:formerly|f\/k\/a)[^)]*\)\W*)?$/i;
+const CORPORATE = /\b(?:inc|corp|corporation|ltd|limited|llc|l\.?p|plc|company|co|s\.?a|ag|n\.?v|ab|oyj?|se|s\.?p\.?a|s\.?a\.?s|s\.?r\.?l|b\.?v|gmbh|trust|fund|(?:corp|inc|ltd)\.?\W+[iv]+)\b\.?\W*(?:and (?:its )?subsidiar(?:y|ies)\W*)?(?:\((?:formerly|f\/k\/a)[^)]*\)\W*)?$/i;
 
 // The company a statement is headed with, when its heading names one.
 function ownerOf(p: Printed): string | null {
-  const line = [...p.context, ...p.under].reverse().find((l) => l.length < 90 && CORPORATE.test(l) && !AUDITOR.test(l) && !titleOf(l));
+  const line = [...p.context, ...p.under].reverse().find((l) => l.length < 90 && CORPORATE.test(l) && !/^\(?an? /i.test(l) && !AUDITOR.test(l) && !titleOf(l));
   return line ? nameKey(line).replace(/ and (?:its )?subsidiar(?:y|ies)$/, '') : null;
 }
 
@@ -955,18 +956,20 @@ export function oneOwner(sets: readonly StatementSet[], name: string | null | un
     if (named) o.names.add(named);
     o.own ||= own;
   }
+  // the company's own pages settle it even when they could not be read: what
+  // is left over is then somebody else's
   const real = owners.filter((o) => o.assets.size > 0);
   const size = (o: (typeof owners)[number]) => Math.max(...o.assets.values());
-  const own = real.filter((o) => o.own).sort((a, b) => size(b) - size(a));
-  if (own.length) {
+  if (owners.some((o) => o.own)) {
+    const own = real.filter((o) => o.own).sort((a, b) => size(b) - size(a))[0];
     // the holding company set up for the merger: the business is another's
-    const year = own[0]!.sets.some((s) => s.income_statement?.p.periods.some((p) => p && monthsOf(p) >= 11));
-    return !year && real.length > own.length ? [] : own[0]!.sets;
+    const year = own?.sets.some((s) => s.income_statement?.p.periods.some((p) => p && monthsOf(p) >= 11));
+    return own && (year || owners.every((o) => o.own)) ? own.sets : [];
   }
-  if (ownOnly) return [];
-  if (real.length === 1) return real[0]!.sets;
+  // nobody is named as the company: only statements that name nobody will do
+  // (a table in the notes that looks like a statement does not count)
   const unnamed = real.filter((o) => !o.names.size);
-  return unnamed.length === 1 ? unnamed[0]!.sets : [];
+  return !ownOnly && unnamed.length === 1 ? unnamed[0]!.sets : [];
 }
 
 // Every period the prospectus reports, newest first, each as the filing a
