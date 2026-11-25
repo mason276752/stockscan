@@ -26,6 +26,9 @@
 //      balance sheet that does not balance, a cash flow whose parts do not
 //      sum, an income statement whose bottom line is not the cash flow's top
 //      one were misread somewhere: better no statement than a wrong one.
+//   5. make sure whose they are. A company that merged with a shell (a SPAC)
+//      registers its shares with both parties' statements in one document,
+//      and the shell's balance just as well. See `oneOwner`.
 //
 // One prospectus reports several periods (two or three years and an interim
 // one); each that has a balance sheet becomes a filing of its own, cut to
@@ -40,6 +43,10 @@ import type { LabelEntry, LabelFile, LabelledType, Section } from './rowLabels.t
 import { pickPrimary } from './statementTypes.ts';
 import { zhFor } from './zh.ts';
 import type { Concept, FactValue, IsoDate, LineItem, ScrapeResult, Statement, StatementColumn } from './types.ts';
+
+// Bump it when the reading changes: what an older version read (or gave up
+// on) is read again, and replaced (newListings.ts).
+export const PROSPECTUS_PARSER = 2;
 
 // ---- the document: tables, and the lines of text between them ----
 
@@ -281,7 +288,8 @@ const currencyIn = (s: string): string | null => CURRENCIES.find(([, re]) => re.
 // data)": the first scale is the money's. Shares go by the same one unless
 // the line excepts them - and then by their own when it gives one.
 export function unitsIn(lines: readonly string[]): Units {
-  const line = lines.find((l) => scaleIn(l) != null && (/\bin\b|amounts?|express|stated|['’]000|\bunits?\b/i.test(l) || /^\(?(?:us\$|u\.s\. dollars?|\$|€|£)?\s*(?:thousand|million|billion)s?\b/i.test(l))) || '';
+  // (not a sentence about an amount: "net loss on investments of $11.3 million")
+  const line = lines.find((l) => scaleIn(l) != null && l.length < 220 && !/\d\s*(?:thousand|million|billion)/i.test(l) && (/\bin\b|amounts?|express|stated|['’]000|\bunits?\b/i.test(l) || /^\(?(?:us\$|u\.s\. dollars?|\$|€|£)?\s*(?:thousand|million|billion)s?\b/i.test(l))) || '';
   const money = scaleIn(line) ?? 1;
   const [, except = ''] = /\b(?:except|other than)\b(.*)$/i.exec(line) || [];
   const own = /\bshares?\b[^,;)]*?\b(?:thousand|million)s?\b/i.exec(except)?.[0];
@@ -606,10 +614,11 @@ const FALLBACK: Record<string, [LabelledType, Section | null, RegExp, string][]>
     ['balance_sheet', null, /subject to possible redemption|^(?:series .*)?redeemable|^convertible preferred stock|redeemable convertible/, 'TemporaryEquityCarryingAmountAttributableToParent+'],
     ['balance_sheet', null, /^additional paid in capital/, 'AdditionalPaidInCapital+'],
     ['balance_sheet', null, /^(?:accumulated deficit|retained earnings)/, 'RetainedEarningsAccumulatedDeficit'],
-    ['balance_sheet', 'eq', /^total (?:stockholders|shareholders|members|partners|owners).*(?:equity|deficit|deficiency|capital)/, 'StockholdersEquity'],
+    ['balance_sheet', 'eq', /^total (?:stockholders?|shareholders?|members?|partners?|owners).*(?:equity|deficit|deficiency|capital)|^(?:total )?net parent investment$/, 'StockholdersEquity'],
+    ['balance_sheet', null, /^(?:total )?net parent investment$/, 'StockholdersEquity'],
     ['balance_sheet', 'eq', /^total (?:equity|deficit)$/, 'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest'],
-    ['income_statement', 'is', /^(?:total )?(?:net )?(?:revenues?|sales)(?: net)?$|^total (?:net )?(?:revenues?|sales)/, 'Revenues'],
-    ['income_statement', 'is', /^(?:total )?costs? of (?:net )?(?:revenues?|sales|goods sold|goods and services)(?: sold)?(?: (?:exclusive|inclusive|excluding|including|exclud|includ).*)?$/, 'CostOfRevenue+'],
+    ['income_statement', 'is', /^(?:total )?(?:net )?(?:revenues?|sales)(?: net| including .*)?$|^total (?:net )?(?:\w+ )?(?:revenues?|sales)$/, 'Revenues'],
+    ['income_statement', 'is', /^(?:total )?costs? of (?:net )?(?:revenues?|sales|goods sold|goods and services)(?: sold)?(?: (?:exclusive|inclusive|excluding|including) .*)?$/, 'CostOfRevenue+'],
     ['income_statement', 'is', /^gross (?:profit|loss|margin)/, 'GrossProfit'],
     ['income_statement', 'is', /^total operating expenses/, 'OperatingExpenses+'],
     ['income_statement', 'is', /^total costs and expenses/, 'CostsAndExpenses+'],
@@ -642,14 +651,16 @@ const FALLBACK: Record<string, [LabelledType, Section | null, RegExp, string][]>
     ['balance_sheet', null, /^cash and cash equivalents/, 'CashAndCashEquivalents+'],
     ['balance_sheet', null, /^inventor(?:y|ies)/, 'Inventories+'],
     ['balance_sheet', null, /^property plant and equipment/, 'PropertyPlantAndEquipment+'],
-    ['balance_sheet', null, /^total (?:shareholders |stockholders )?(?:equity|deficit|capital deficiency)(?: deficit)?$/, 'Equity'],
-    ['income_statement', 'is', /^(?:total )?(?:net )?(?:revenues?|sales)(?: from contracts with customers)?$/, 'Revenue+'],
+    ['balance_sheet', null, /^total (?:shareholders? |stockholders? )?(?:equity|deficit|deficiency|capital deficiency)(?: deficit)?$/, 'Equity'],
+    ['balance_sheet', null, /^(?:total )?equity attributable to (?:the )?(?:owners|shareholders|equity holders|parent)/, 'EquityAttributableToOwnersOfParent'],
+    ['income_statement', 'is', /^(?:total )?(?:net )?(?:revenues?|sales)(?: from (?:contracts with customers|ordinary activities)| including .*)?$/, 'Revenue+'],
     ['income_statement', 'is', /^costs? of (?:revenues?|sales|goods sold)/, 'CostOfSales+'],
     ['income_statement', 'is', /^gross (?:profit|loss|margin)/, 'GrossProfit'],
     ['income_statement', 'is', /^operating (?:loss|income|profit|profit loss|loss profit|result)$|^(?:loss|profit|profit loss) from operat/, 'ProfitLossFromOperatingActivities'],
     ['income_statement', 'is', /^(?:net )?(?:loss|income|profit|result|profit loss|loss profit|income loss|loss income)\b.*\bbefore\b.*\b(?:tax|taxes|taxation)\b/, 'ProfitLossBeforeTax'],
     ['income_statement', 'is', /^(?:income )?tax(?:ation|es)?\b|^income tax/, 'IncomeTaxExpenseContinuingOperations'],
     ['income_statement', 'is', /^(?:net )?(?:loss|profit|income|results?|profit loss|loss profit|income loss|loss income)(?: for the (?:year|period|financial).*| from continuing operations)?$/, 'ProfitLoss'],
+    ['income_statement', 'is', /^(?:net )?(?:loss|profit|income|result|profit loss|loss profit|income loss|loss income)(?: for the (?:year|period))? attributable to (?:the )?(?:owners|shareholders|equity holders|parent)/, 'ProfitLossAttributableToOwnersOfParent'],
     ['income_statement', 'eps', /\bdiluted\b/, 'DilutedEarningsLossPerShare'],
     ['income_statement', 'eps', /\bbasic\b/, 'BasicEarningsLossPerShare'],
     ['cash_flow', 'op', /^net cash.*operating activities/, 'CashFlowsFromUsedInOperatingActivities'],
@@ -734,6 +745,11 @@ const rowLike = (rows: readonly NamedRow[], re: RegExp): NamedRow | undefined =>
 const isBottom = (r: NamedRow): boolean => hasValue(r) && r.kind === 'money' && (NET_INCOME.some((x) => r.concept.endsWith(`:${x}`)) || /^(?:consolidated )?net (?:loss|income|earnings|profit|result)|^(?:total )?(?:loss|profit|income(?! tax)|results?|earnings)\b.*\b(?:year|period|tax|taxes|taxation|attributable|continuing operations)\b/.test(r.key));
 const NET_INCOME = ['NetIncomeLoss', 'ProfitLoss', 'NetIncomeLossAvailableToCommonStockholdersBasic'];
 
+// Nobody has ten trillion dollars: the units were misread. (A won or a yen
+// is a different matter.)
+const MOST_ASSETS = 1e13;
+const SMALL_UNIT = /^(?:KRW|JPY|INR|TWD)$/;
+
 // Does column k of this statement add up? `income` is the other statements'
 // net income for the same period, where they have it.
 function adds(p: Printed, rows: readonly NamedRow[], k: number): boolean {
@@ -741,7 +757,7 @@ function adds(p: Printed, rows: readonly NamedRow[], k: number): boolean {
   if (p.type === 'balance_sheet') {
     const assets = v(rowBy(rows, 'Assets') ?? rowLike(rows, /^total assets/));
     const both = v(rowBy(rows, 'LiabilitiesAndStockholdersEquity', 'EquityAndLiabilities'));
-    if (assets === undefined || !assets) return false;
+    if (assets === undefined || !assets || (assets * p.units.money > MOST_ASSETS && !SMALL_UNIT.test(p.units.currency))) return false;
     if (both !== undefined) return near(both, assets, 1);
     const liabilities = v(rowBy(rows, 'Liabilities'));
     const equity = v(rowBy(rows, 'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest', 'StockholdersEquity', 'Equity'));
@@ -765,7 +781,7 @@ function adds(p: Printed, rows: readonly NamedRow[], k: number): boolean {
 // The income statement's bottom line is the cash flow's top line. A filer
 // that prints its losses as plain numbers ("Net loss 1,531") is put right
 // here: the cash flow has the sign.
-function reconcile(is: Printed, isRows: NamedRow[], cf: Printed | null, cfRows: readonly NamedRow[]): (k: number) => boolean {
+function reconcile(is: Printed, isRows: NamedRow[], cf: Printed | null, cfRows: readonly NamedRow[], taxonomy: string): (k: number) => boolean {
   // the cash flow's top line, when it is one of those (an IFRS filer may
   // start at the profit before tax, or at the cash generated)
   const top = cfRows.slice(0, 12).find((r) => hasValue(r) && (isBottom(r) || /^(?:loss|profit|result)\b/.test(r.key)));
@@ -777,6 +793,12 @@ function reconcile(is: Printed, isRows: NamedRow[], cf: Printed | null, cfRows: 
   };
   const same = pairs().filter(([, j]) => top?.values[j]);
   const scale = cf ? cf.units.money / is.units.money : 1;
+  // no line is called what the dictionary calls net income ("Loss and
+  // comprehensive loss for the year"): it is the one the cash flow starts from
+  if (top && !isRows.some((r) => hasValue(r) && NET_INCOME.some((x) => r.concept.endsWith(`:${x}`)))) {
+    const r = bottom.find((x) => !/before|attributable/.test(x.key) && same.length > 0 && same.every(([i, j]) => x.values[i] !== undefined && near(Math.abs(x.values[i]!), Math.abs(top.values[j]! * scale), 1, 1)));
+    if (r) Object.assign(r, { concept: `${taxonomy}:${taxonomy === 'us-gaap' ? 'NetIncomeLoss' : 'ProfitLoss'}`, flip: false });
+  }
   const opposite = same.length > 0 && same.every(([i, j]) => bottom.some((r) => r.values[i] !== undefined && near(-r.values[i]! , top!.values[j]! * scale, 1, 1)) && !bottom.some((r) => r.values[i] !== undefined && near(r.values[i]!, top!.values[j]! * scale, 1, 1)));
   if (opposite) for (const r of isRows) if (hasValue(r) && /\bloss\b/.test(r.key) && !/\bincome\b|\bgain\b|\bprofit\b/.test(r.key) && r.kind !== 'shares') r.flip = !r.flip;
   return (k) => {
@@ -881,16 +903,77 @@ interface Located {
   ok: (k: number) => boolean;
 }
 
+type StatementSet = Partial<Record<LabelledType, Located>>;
+
+const AUDITOR = /ernst|kpmg|pricewaterhouse|\bpwc\b|deloitte|\bbdo\b|grant thornton|marcum|withum|mazars|forvis|\brsm\b|crowe|baker tilly|\buhy\b|cbiz|audit|accountant|\bllp\b/i;
+const CORPORATE = /\b(?:inc|corp|corporation|ltd|limited|llc|l\.?p|plc|company|co|s\.?a|ag|n\.?v|ab|oyj?|se|s\.?p\.?a|gmbh|trust|fund|(?:corp|inc|ltd)\.?\W+[iv]+)\b\.?\W*(?:and (?:its )?subsidiar(?:y|ies)\W*)?(?:\((?:formerly|f\/k\/a)[^)]*\)\W*)?$/i;
+
+// The company a statement is headed with, when its heading names one.
+function ownerOf(p: Printed): string | null {
+  const line = [...p.context, ...p.under].reverse().find((l) => l.length < 90 && CORPORATE.test(l) && !AUDITOR.test(l) && !titleOf(l));
+  return line ? nameKey(line).replace(/ and (?:its )?subsidiar(?:y|ies)$/, '') : null;
+}
+
+// Whether it is this company's: by that name, else by any heading above it
+// (not by a sentence: the shell's pages go on about the merger).
+function isOwn(p: Printed, name: string | null | undefined): boolean {
+  const owner = ownerOf(p);
+  return namesCompany(owner ? [owner] : [...p.context, ...p.under].filter((l) => l.length < 90), name);
+}
+
+const assetsOf = (s: StatementSet): Map<IsoDate, number> => {
+  const b = s.balance_sheet;
+  const row = b && (rowBy(b.rows, 'Assets') ?? rowLike(b.rows, /^total assets/));
+  const out = new Map<IsoDate, number>();
+  b?.p.periods.forEach((p, k) => p?.instant && row?.values[k] !== undefined && b.ok(k) && out.set(p.instant, row.values[k]! * b.p.units.money));
+  return out;
+};
+
+// The sets of one company, out of a document that may hold several: the
+// business that was bought, the shell it merged into, the new holding
+// company with nothing in it yet. Two sets are one company's when they are
+// in the same currency and agree on the total assets of every date they
+// share; a name in the heading that is not the company's is somebody else's.
+// When that does not leave exactly one, there is no telling, and nothing is
+// read.
+export function oneOwner(sets: readonly StatementSet[], name: string | null | undefined, ownOnly: boolean): StatementSet[] {
+  const owners: { sets: StatementSet[]; assets: Map<IsoDate, number>; currency: string; names: Set<string>; own: boolean }[] = [];
+  for (const s of sets) {
+    const b = s.balance_sheet;
+    if (!b) continue; // no period without one
+    const assets = assetsOf(s);
+    const named = Object.values(s).map((x) => ownerOf(x.p)).find(Boolean) ?? null;
+    const own = Object.values(s).some((x) => isOwn(x.p, name));
+    const same = owners.find((o) => {
+      if (o.currency !== b.p.units.currency || (named && o.names.size > 0 && !o.names.has(named) && !(own && o.own))) return false;
+      const shared = [...assets].filter(([d]) => o.assets.has(d));
+      return shared.every(([d, v]) => Math.abs(v - o.assets.get(d)!) <= Math.abs(v) * 0.01) && (shared.length > 0 || (!!named && o.names.has(named)));
+    });
+    const o = same ?? owners[owners.push({ sets: [], assets: new Map(), currency: b.p.units.currency, names: new Set(), own: false }) - 1]!;
+    o.sets.push(s);
+    for (const [d, v] of assets) if (!o.assets.has(d)) o.assets.set(d, v);
+    if (named) o.names.add(named);
+    o.own ||= own;
+  }
+  const real = owners.filter((o) => o.assets.size > 0);
+  const size = (o: (typeof owners)[number]) => Math.max(...o.assets.values());
+  const own = real.filter((o) => o.own).sort((a, b) => size(b) - size(a));
+  if (own.length) {
+    // the holding company set up for the merger: the business is another's
+    const year = own[0]!.sets.some((s) => s.income_statement?.p.periods.some((p) => p && monthsOf(p) >= 11));
+    return !year && real.length > own.length ? [] : own[0]!.sets;
+  }
+  if (ownOnly) return [];
+  if (real.length === 1) return real[0]!.sets;
+  const unnamed = real.filter((o) => !o.names.size);
+  return unnamed.length === 1 ? unnamed[0]!.sets : [];
+}
+
 // Every period the prospectus reports, newest first, each as the filing a
 // 10-K or 10-Q of it would have been. Empty when nothing in it could be read
 // and checked.
 export function prospectusResults(html: string, filing: ProspectusFiling, company: ProspectusCompany, { fetchedAt = new Date().toISOString(), ownOnly = false }: { fetchedAt?: string; ownOnly?: boolean } = {}): ScrapeResult[] {
-  let printed = printedStatements(html);
-  // the statements of a business it bought, or of the shell it merges into,
-  // stand in the same pages
-  const own = printed.filter((p) => namesCompany([...p.context, ...p.under], company.name));
-  if (own.some((p) => p.type === 'balance_sheet')) printed = own;
-  else if (ownOnly) return [];
+  const printed = printedStatements(html);
   const taxonomy = isIfrs(html, printed) ? 'ifrs-full' : 'us-gaap';
   const prefix = (company.tickers?.[0] || 'ext').toLowerCase().replace(/[^a-z0-9]/g, '') || 'ext';
 
@@ -900,22 +983,24 @@ export function prospectusResults(html: string, filing: ProspectusFiling, compan
   // Statements in sets, as printed (some print the balance sheet first, some
   // the income statement): a set has one of each, with dates in common. The
   // statements of a period are taken from one set, never mixed.
-  const sets: Partial<Record<LabelledType, Located>>[] = [];
+  const all: StatementSet[] = [];
   for (const p of printed) {
     const rows = nameRows(p, taxonomy, prefix);
-    const last = sets.at(-1);
+    const last = all.at(-1);
     const ends = new Set(p.periods.flatMap((x) => (x ? [endOf(x)] : [])));
-    const fits = last && !last[p.type] && Object.values(last).every((x) => x.p.periods.some((y) => y && ends.has(endOf(y))));
-    const set = fits ? last : sets[sets.push({}) - 1]!;
+    const name = ownerOf(p);
+    const fits = last && !last[p.type] && Object.values(last).every((x) => x.p.periods.some((y) => y && ends.has(endOf(y))) && (!name || (ownerOf(x.p) ?? name) === name));
+    const set = fits ? last : all[all.push({}) - 1]!;
     set[p.type] = { p, rows, ok: (k) => adds(p, rows, k) };
   }
+  const sets = oneOwner(all, company.name, ownOnly);
   for (const s of sets) {
     // a statement that does not give its units is in the units of the rest
     const given = Object.values(s).find((x) => x.p.units.given)?.p.units;
     if (given) for (const x of Object.values(s)) if (!x.p.units.given) x.p.units = { ...given };
     const is = s.income_statement;
     if (!is) continue;
-    const agrees = reconcile(is.p, is.rows, s.cash_flow?.p ?? null, s.cash_flow?.rows ?? []);
+    const agrees = reconcile(is.p, is.rows, s.cash_flow?.p ?? null, s.cash_flow?.rows ?? [], taxonomy);
     const base = is.ok;
     is.ok = (k) => base(k) && agrees(k);
     splitNetIncome(is.rows, taxonomy);
@@ -960,6 +1045,7 @@ export function prospectusResults(html: string, filing: ProspectusFiling, compan
         // read off the page, not off tags: the reader is told, and a 10-K or
         // 10-Q of the same period takes its place (filings.ts)
         source: 'prospectus',
+        parser: PROSPECTUS_PARSER,
         cik: filing.cik,
         companyName: company.name || null,
         form: filing.form,
@@ -984,7 +1070,9 @@ export function prospectusResults(html: string, filing: ProspectusFiling, compan
   return out;
 }
 
-const monthsOf = (p: Period): number => Math.round((Date.parse(p.end!) - Date.parse(p.start!)) / 86400000 / 30.4375);
+function monthsOf(p: Period): number {
+  return Math.round((Date.parse(p.end!) - Date.parse(p.start!)) / 86400000 / 30.4375);
+}
 
 // the fiscal year end the statements themselves show, when EDGAR has none
 function yearEndOf(sets: readonly Partial<Record<LabelledType, Located>>[]): string | null {

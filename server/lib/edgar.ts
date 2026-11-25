@@ -177,9 +177,12 @@ export async function tickerTable(client: Fetcher): Promise<TickerRow[]> {
 // else to read yet.
 const KEEP_FORMS = /^(10-|20-F|40-F|6-K)/;
 const PERIODIC = /^(10-[KQ]|20-F|40-F)/;
+// a registered fund: its prospectuses never end, and its statements are not
+// a company's
+const FUND = /^(N-CSR|N-2|N-1A|NPORT|N-CEN|N-PX)/;
 export function trimSubmissions(sub: Submissions & SubmissionTable): Submissions & SubmissionTable {
   const recent = sub.filings?.recent;
-  const young = !!recent && !(recent.form || []).some((f, i) => PERIODIC.test(f) && recent.isInlineXBRL?.[i]);
+  const young = !!recent && !(recent.form || []).some((f, i) => FUND.test(f) || (PERIODIC.test(f) && recent.isInlineXBRL?.[i]));
   const trimTable = (t: SubmissionTable): SubmissionTable => {
     const keep: number[] = [];
     for (let i = 0; i < (t.accessionNumber || []).length; i++) if (KEEP_FORMS.test(t.form![i]!) || (young && isProspectusForm(t.form![i]))) keep.push(i);

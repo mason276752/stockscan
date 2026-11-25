@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { cellNumber, namesCompany, periodIn, prospectusResults, unitsIn } from '../server/lib/prospectus.ts';
 import { collapseAmendments, edgarAccession, filingUrls, fiscalLabel, newestFirst, periodAccession, pickFiling, reportsQuarterly } from '../server/lib/filings.ts';
 import { normLabel, sectionOf } from '../server/lib/rowLabels.ts';
 import { trimSubmissions } from '../server/lib/edgar.ts';
+import type { CompanyWithFilings } from '../server/lib/edgar.ts';
+import { saveProspectus } from '../server/lib/newListings.ts';
+import { openStore, store } from '../server/lib/store.ts';
 import { scoreFilingOf } from '../server/lib/scoreModel.ts';
 import { currentView } from '../server/lib/current.ts';
 import type { Company, FilingRef, ScrapeResult, Statement } from '../server/lib/types.ts';
@@ -46,6 +52,8 @@ test('units: shares go by the money unless the line excepts them', () => {
   assert.equal(u('(Amounts in thousands of Renminbi (“RMB”))').currency, 'CNY');
   assert.equal(u('Thousands, except share counts').money, 1e3);
   assert.equal(unitsIn(['ACME, INC.']).given, false);
+  // a sentence about an amount is not the statement's unit
+  assert.equal(u('During the quarter, net loss on investments of $11.3 million was recorded in earnings').given, false);
 });
 
 test('a label is looked up without its footnotes, notes and par value, in its section', () => {
@@ -237,6 +245,41 @@ test('another company’s statements in the same pages are not mixed in', () => 
   assert.deepEqual(read(prospectus(other), FILING, { ownOnly: true }), []);
 });
 
+// A company that merged with a SPAC registers with both parties' statements.
+// The shell balances just as well: 10 of cash in trust, and no business.
+const SHELL = { balance: BALANCE.map((r) => r.replace(/>420</g, '>998<').replace(/>280</g, '>777<').replace(/>150</g, '>555<')), income: INCOME, cash: CASH };
+const inEuros = (html: string) => html.replace(/\(In thousands/g, '(In thousands of euros');
+
+test('a merger: the shell’s statements are not the company’s', () => {
+  const shell = statements({ name: 'Blank Check Acquisition Corp. III', ...SHELL });
+  // the business goes by the company's name
+  assert.equal(value(read(prospectus(shell, statements()))[0]!.statements.balance_sheet, 'us-gaap:Assets', 'i20260930'), 420_000);
+  // by no name at all, beside a shell that has one
+  const unnamed = inEuros(statements({ name: 'F-90' }));
+  const r = read(prospectus(shell, unnamed));
+  assert.equal(value(r[0]!.statements.balance_sheet, 'us-gaap:Assets', 'i20260930'), 420_000);
+  assert.equal(Object.values(r[0]!.statements.balance_sheet!.lineItems.find((li) => !li.abstract)!.values)[0]!.unit, 'EUR');
+  assert.equal(new Set(r.map((x) => Object.values(x.statements.balance_sheet!.lineItems.find((li) => !li.abstract)!.values)[0]!.unit)).size, 1, 'one company, one currency');
+  // the shell's pages talk about the merger: that does not make them the company's
+  const chatty = shell.replace('<p>Blank Check', '<p>Holders of Acme Widgets who are eligible to participate in the earnout under the agreement.</p><p>Blank Check');
+  assert.equal(value(read(prospectus(chatty, statements()))[0]!.statements.balance_sheet, 'us-gaap:Assets', 'i20260930'), 420_000);
+});
+
+test('a merger: when there is no telling whose they are, nothing is read', () => {
+  const shell = statements({ name: 'Blank Check Acquisition Corp. III', ...SHELL });
+  assert.deepEqual(read(prospectus(shell, statements({ name: 'Other Business Ltd' }))), [], 'two strangers');
+  // the new holding company, some months old, in front of a business by another name
+  const months = (rows: string[]) => rows.map((x) => x.replace('Year Ended December 31,', 'Period from March 1, 2025 (inception) through December 31,').replace('Nine Months Ended', 'Three Months Ended'));
+  const holding = statements({ income: months(INCOME), cash: months(CASH) });
+  assert.deepEqual(read(prospectus(statements({ name: 'Other Business Ltd', ...SHELL }), holding)), [], 'the holding company alone is not the business');
+  assert.ok(read(prospectus(holding)).length > 0, 'but a shell by itself is what it is');
+});
+
+test('units misread by a million do not get through', () => {
+  const huge = statements().replace('(In thousands, except per share amounts)</p><table', '(In billions)</p><table').replace(/>420</g, '>42,000<').replace(/>280</g, '>28,000<').replace(/>150</g, '>15,000<');
+  assert.deepEqual(read(prospectus(huge)), []);
+});
+
 test('nothing in it that can be read: no filings', () => {
   assert.deepEqual(read('<html><body><p>Incorporated by reference.</p></body></html>'), []);
 });
@@ -273,6 +316,7 @@ test('EDGAR’s list keeps the prospectus only of a company with nothing else to
   assert.deepEqual(trimSubmissions(sub(['4', '424B4', 'S-1', '8-A12B'], [0, 0, 1, 0])).filings!.recent.form, ['424B4', 'S-1']);
   assert.deepEqual(trimSubmissions(sub(['10-Q', '424B4', 'S-1'], [1, 0, 1])).filings!.recent.form, ['10-Q']);
   assert.deepEqual(trimSubmissions(sub(['20-F', '424B3', 'F-4'], [0, 0, 0])).filings!.recent.form, ['20-F', '424B3', 'F-4'], 'a shell report with no tags is not something to read');
+  assert.deepEqual(trimSubmissions(sub(['N-CSR', '424B3', 'N-2'], [0, 0, 0])).filings!.recent.form, [], 'a fund’s prospectuses never end');
 });
 
 test('scores and the current-period view work from what a prospectus has', async () => {
@@ -287,4 +331,38 @@ test('scores and the current-period view work from what a prospectus has', async
   assert.ok(view.notes!.some((n) => n.code === 'ytdOnly'), 'nine months are shown as year to date');
   const whole = currentView(results[1]!, company.filings[1]!, null);
   assert.equal(whole.statements.income_statement!.columns.length, 1);
+});
+
+test('what an older reader made of a prospectus is replaced, or removed', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stockscan-prospectus-'));
+  openStore(path.join(tmp, 'store'), path.join(tmp, 'cache.sqlite'));
+  try {
+    let gets = 0;
+    const client = (html: string) => ({ text: async () => (gets++, html) }) as never;
+    const doc = { ...FILING, ...filingUrls(1, FILING.accession, FILING.primaryDocument, FILING.form), reportDate: null };
+    const company = { ...COMPANY, filings: [], prospectuses: [doc] } as unknown as CompanyWithFilings;
+    const kept = () => store.filingIndex(1).map((r) => r.accession).sort();
+
+    const first = await saveProspectus(client(prospectus(statements())), { ...company, cik: 1 });
+    assert.deepEqual(first!.accessions.length, 3);
+    assert.equal(await saveProspectus(client('never read'), { ...company, cik: 1 }), null, 'saved: not downloaded again');
+    assert.equal(gets, 1);
+
+    // an older version had read one of them wrong, and one period too many
+    for (const accession of [FILING.accession, `${FILING.accession}.20200101`]) {
+      const old = store.getFiling(FILING.accession)!;
+      store.putFiling(accession, 1, { ...old, filing: { ...old.filing, accession, parser: 1 } }, 2);
+    }
+    assert.equal(kept().length, 4);
+    await saveProspectus(client(prospectus(statements())), { ...company, cik: 1 });
+    assert.deepEqual(kept(), [...first!.accessions].sort(), 'read again; the one it does not report is gone');
+
+    // ... and one it now finds nothing in (or that is no longer offered: a fund)
+    const old = store.getFiling(FILING.accession)!;
+    for (const accession of first!.accessions) store.putFiling(accession, 1, { ...old, filing: { ...old.filing, accession, parser: 1 } }, 2);
+    assert.equal(await saveProspectus(client('<html></html>'), { ...company, cik: 1, prospectuses: [] }), null);
+    assert.deepEqual(kept(), []);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

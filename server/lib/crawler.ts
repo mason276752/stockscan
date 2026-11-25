@@ -32,6 +32,7 @@ import { store } from './store.ts';
 import { getCompany, tickerTable, DEFAULT_FORMS } from './edgar.ts';
 import { filingPeriodKey, isProspectusForm } from './filings.ts';
 import { saveProspectus } from './newListings.ts';
+import { PROSPECTUS_PARSER } from './prospectus.ts';
 import { ensureStored, upgradable } from './scrape.ts';
 import { getUniverse } from './universe.ts';
 import { scoreAccession } from './score.ts';
@@ -120,7 +121,7 @@ const BACKFILL_SUBMISSIONS_TTL = 7 * 24 * 3600 * 1000; // an old day's filings: 
 // three when EDGAR shows nothing to read at all - that is mostly funds.
 const LISTING_TTL = 24 * 3600 * 1000;
 const LISTING_IDLE_TTL = 3 * LISTING_TTL;
-const LISTINGS_KEY = 'crawl:listings'; // cik -> { at, idle }
+const LISTINGS_KEY = `crawl:listings:p${PROSPECTUS_PARSER}`; // cik -> { at, idle }; a better reader looks at them all again
 const MAX_FAILS = 3; // give up on a filing that keeps failing to parse
 const LOG_EVERY = 10_000; // progress line during the sweep
 // Companies crawled at the same time. One filing is ~8 short SEC requests
@@ -410,8 +411,9 @@ export function createCrawler(client: SecClient, { prefetcher, enabled = true }:
         if (!wanted.length) {
           const p = await saveProspectus(low, company);
           if (p) saved = (await getCompany(low, String(cik))).filings.filter((f) => p.accessions.includes(f.accession));
-        }
-        await scoreSaved(saved);
+          // read anew, perhaps: the score it has may be of what it was before
+          for (const f of saved) await scoreAccession(f.accession, { force: true }).catch((err) => console.warn(`score ${f.accession}: ${(err as Error).message}`));
+        } else await scoreSaved(saved);
         for (const f of saved) {
           state.watched++;
           state.watchLog.unshift({ at: new Date().toISOString(), day: edgarDay(), ticker: company.tickers?.[0] || null, cik, form: f.form, fiscalYear: f.fiscalYear, fiscalPeriod: f.fiscalPeriod, filingDate: f.filingDate });

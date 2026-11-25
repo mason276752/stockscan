@@ -44,7 +44,7 @@ export function sectionOf(type: LabelledType, at: Section, label: string): [own:
     if (/^total current liabilities/.test(label)) return ['cl', 'ncl'];
     if (/^total (liabilities|equity) .*(equity|deficit|deficiency|capital|liabilities)/.test(label)) return ['eq', 'eq'];
     if (/^total liabilities$/.test(label)) return ['ncl', 'eq'];
-    if (/^(total )?(stockholders|shareholders|members|partners|owners).*(equity|deficit|deficiency|capital)$/.test(label)) return ['eq', 'eq'];
+    if (/^(total )?(stockholders?|shareholders?|members?|partners?|owners).*(equity|deficit|deficiency|capital)( deficit)?$/.test(label)) return ['eq', 'eq'];
     return [at, at];
   }
   if (type === 'cash_flow') {

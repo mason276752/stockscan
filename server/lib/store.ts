@@ -530,6 +530,17 @@ export const store = {
     filings.set(accession, { accession, cik: Number(cik), form, reportDate, version, file, bytes: buf.length });
     forgetByCik();
   },
+  // a filing that turned out not to be what it was saved as, and its score
+  dropFiling(accession: string): void {
+    need();
+    const f = filings.get(accession);
+    const s = scores.get(accession);
+    if (f) unlinkQuiet(f.file);
+    if (s) unlinkQuiet(s.file);
+    filings.delete(accession);
+    scores.delete(accession);
+    forgetByCik();
+  },
   filingCount(cik: number | string | null = null): number {
     need();
     if (cik == null) return filings.size;

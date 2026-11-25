@@ -230,8 +230,10 @@ export interface FilingHeader {
   thin?: boolean;
   /** the safe cover-share record chosen for this filing, when there is one */
   coverShares?: CoverShareItem | null;
-  /** 'dera' marks a filing rebuilt from SEC's quarterly datasets, not parsed */
+  /** 'dera' marks a filing rebuilt from SEC's quarterly datasets, not parsed; 'prospectus' one read off a prospectus */
   source?: string;
+  /** which version of the prospectus reader read it */
+  parser?: number;
   /** which quarterly dataset a rebuilt filing came out of */
   dataset?: string | null;
 }
