@@ -6,7 +6,7 @@ import zlib from 'node:zlib';
 
 import { store } from './store.ts';
 import { reclassify } from './statementTypes.ts';
-import { fiscalLabel } from './filings.ts';
+import { fiscalLabel, newestFirst } from './filings.ts';
 import { SCORE_VERSION, CATEGORIES, ITEMS, scoreValues, singleFilingInputs, BALANCE_AMOUNTS, FLOW_AMOUNTS, AMOUNT_FIELDS, scoreFiling, scoreFilingOf } from './scoreModel.ts';
 import { SCORE_HISTORY, asOfKept, asOfReader, asOfSubset, pickAsOf, screenAsOfColumns, screenAsOfIndex } from './screen.ts';
 import type { AsOfColumns, AsOfIndex, Company, FilingHeader, FilingRef, IsoDate, Score, ScoreRow, ScoreWithHistory, ScrapeResult } from './types.ts';
@@ -32,7 +32,7 @@ function savedCompany(cik: number, reportDate: IsoDate): Company {
     const label = fye ? fiscalLabel(form, end, fye) : { fiscalYear: h.fiscalYear ? Number(h.fiscalYear) : null, fiscalPeriod: h.fiscalPeriod || null };
     filings.push({ accession: r.accession, cik: Number(cik), form, filingDate: h.filingDate || null, reportDate: end, ...label });
   }
-  filings.sort((a, b) => (a.filingDate! < b.filingDate! ? 1 : a.filingDate! > b.filingDate! ? -1 : 0));
+  filings.sort(newestFirst);
   return { cik: Number(cik), filings };
 }
 

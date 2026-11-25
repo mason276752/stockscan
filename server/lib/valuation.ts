@@ -22,7 +22,7 @@
 //                      the reporting currency, flagged in `currency`)
 
 import { C, first, loadPoints, quarterKeys } from './indicators.ts';
-import { pickFiling } from './filings.ts';
+import { isProspectusForm, pickFiling, reportsQuarterly } from './filings.ts';
 import { coverSharesFor, indexCoverShares, mergeCoverShareIndexes } from './coverShares.ts';
 import { MODELS, cagr, clamp, impliedPrice, multiplesAt, runModels } from '../../shared/valuation.ts';
 import type { MultipleDef, Multiples, PerShare, ValuationAssumptions, ValuationInputs } from '../../shared/valuation.ts';
@@ -245,7 +245,7 @@ const stats = (xs: readonly (number | null | undefined)[]): MultipleStats | null
 
 export async function buildValuation(company: Company, { year, period, n = 20, adr = 1 }: ValuationOptions, deps: ValuationDeps) {
   const { load } = deps;
-  const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
+  const quarterly = reportsQuarterly(company.filings);
   const ticker = company.tickers?.[0] || null;
   const endQ = period === 'FY' ? 4 : Number(period.slice(1));
   const span = quarterly ? 4 : 1; // points per trailing year
@@ -273,9 +273,16 @@ export async function buildValuation(company: Company, { year, period, n = 20, a
     reportingCurrency(load, company, year, period),
   ]);
   const shares = mergeCoverShareIndexes(savedShares, externalShares);
+  // A prospectus has no cover count, and its weighted average is of the
+  // shares there were before the offering - without the ones sold in it, nor
+  // the preferred stock and notes that convert into common when it closes.
+  // Against today's price that is the wrong company: no count, and no
+  // per-share figure made with it, rather than one several times off.
+  const preOffering = (pt: QuarterPoint) => (pt.sources || []).some((a) => isProspectusForm(company.filings.find((f) => f.accession === a)?.form));
   const sharesFor = (pt: QuarterPoint): ShareCount | null => {
     const cover = coverSharesFor(shares, pt);
     if (cover) return { value: cover.value, source: cover.source };
+    if (preOffering(pt)) return null;
     const wa = quarterly && pt.period === 'Q4' ? first(pt.fy, V.dilutedShares) : first(pt.flows, V.dilutedShares);
     return wa ? { value: wa, source: 'diluted' } : null;
   };
@@ -328,7 +335,7 @@ export async function buildValuation(company: Company, { year, period, n = 20, a
     const ttm: TtmFigures = {
       revenue: sumFlows(points, i, span, C.revenue),
       netIncome: sumFlows(points, i, span, C.netIncome),
-      eps: sumPerShare(i, span, C.eps),
+      eps: points.slice(i - span + 1, i + 1).some(preOffering) ? null : sumPerShare(i, span, C.eps),
       ocf: sumFlows(points, i, span, C.ocf),
       capex: sumFlows(points, i, span, C.capex),
       dividends: sumFlows(points, i, span, C.dividends),

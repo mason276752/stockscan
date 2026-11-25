@@ -107,7 +107,9 @@ jobs:
           key: cache-sqlite-${{ github.run_id }}
           restore-keys: cache-sqlite-
 
-      # scheduled / manual runs: top the store up with the newest filings
+      # scheduled / manual runs: top the store up with the newest filings, and
+      # with what newly listed companies have (a prospectus, or the reports
+      # they filed before they were in the ticker table)
       - name: Fetch new filings from EDGAR
         if: github.event_name != 'push'
         run: npm run fetch:new

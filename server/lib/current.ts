@@ -8,6 +8,7 @@
 //   equity          opening balance, the period's movements, closing balance
 // Dimensional columns (equity components, product lines) are kept per group.
 
+import { isProspectusForm } from './filings.ts';
 import { dimKey, findColumn, months, near } from './quarters.ts';
 import type {
   Concept, CurrentCell, CurrentColumn, CurrentLineItem, CurrentNote, CurrentStatement, FilingRef, IsoDate,
@@ -294,8 +295,11 @@ function rollForward(stmt: CurrentStatement): CurrentStatement {
 export function currentView(data: ScrapeResult, filing: FilingRef, prev: PreviousFiling | null) {
   const end = filing.reportDate || data.filing.periodEnd;
   const form = (filing.form || data.filing.form || '').toUpperCase();
-  const isQuarterly = form.startsWith('10-Q');
-  const len = isQuarterly ? 3 : 12;
+  const prospectus = isProspectusForm(form);
+  const isQuarterly = prospectus ? !!filing.fiscalPeriod?.startsWith('Q') : form.startsWith('10-Q');
+  // the first year of a company in a prospectus may run from its founding
+  const told = prospectus && !isQuarterly ? longestEnding(data.statements.income_statement, '', end) : null;
+  const len = isQuarterly ? 3 : told ? months(told.period.start, told.period.end) : 12;
   // notes: what was derived, as { code, ...params } for the UI to word
   const notes: CurrentNote[] = [];
 

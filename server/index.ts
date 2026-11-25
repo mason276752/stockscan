@@ -10,6 +10,7 @@ import { createPrefetcher } from './lib/prefetch.ts';
 import { createCrawler } from './lib/crawler.ts';
 import { DEFAULT_FORMS, filingFromUrl, filingUrls, getCompany, listingOf, pickFiling, purgeDelisted, refreshTickers, searchCompanies } from './lib/edgar.ts';
 import { scrapeFiling, SCRAPE_VERSION } from './lib/scrape.ts';
+import { saveProspectus } from './lib/newListings.ts';
 import { buildQuarterly } from './lib/quarters.ts';
 import { buildIndicators } from './lib/indicators.ts';
 import { currentView } from './lib/current.ts';
@@ -146,7 +147,13 @@ const wrap = (fn: AsyncHandler) => (req: Request, res: Response, next: NextFunct
 // deliberately asking for a fresh read and is left out.
 async function companyOf(id: string | number, opts?: GetCompanyOptions): Promise<CompanyWithFilings> {
   const key = `company:${id}:${(opts?.forms || DEFAULT_FORMS).join(',')}`;
-  const c = opts?.refresh ? await getCompany(client, id, opts) : await dedupe(key, () => getCompany(client, id, opts));
+  let c = opts?.refresh ? await getCompany(client, id, opts) : await dedupe(key, () => getCompany(client, id, opts));
+  // just listed, and nothing filed since: what there is stands in the prospectus
+  if (!c.filings.length && c.prospectuses?.length) {
+    const young = c;
+    const saved = await dedupe(`prospectus:${c.cik}`, () => saveProspectus(client, young)).catch((err) => void console.warn(`prospectus CIK ${young.cik}: ${(err as Error).message}`));
+    if (saved) c = await getCompany(client, id, { ...opts, refresh: false });
+  }
   for (const f of c.filings) {
     if (!/\/A$/i.test(f.form || '')) continue;
     const s = store.getScore(f.accession, SCORE_VERSION);

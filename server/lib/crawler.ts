@@ -15,6 +15,11 @@
 //               40-F from those companies and save them as they appear - also
 //               every half hour in the middle of a sweep, so today's filings
 //               never wait for the sweep to finish
+//               (and, after each poll, the companies in the ticker table the
+//               store has nothing of: the daily index only tells of filings
+//               made once a company is in that table, so one that had filed
+//               before it was listed - or has nothing but its prospectus so
+//               far - would never be picked up)
 //   3. backfill the rest of the history: the same daily index read backwards,
 //               one day per step, for as long as the server runs. Nothing
 //               caps how many filings a company ends up with - the store
@@ -25,7 +30,8 @@
 
 import { store } from './store.ts';
 import { getCompany, tickerTable, DEFAULT_FORMS } from './edgar.ts';
-import { filingPeriodKey } from './filings.ts';
+import { filingPeriodKey, isProspectusForm } from './filings.ts';
+import { saveProspectus } from './newListings.ts';
 import { ensureStored, upgradable } from './scrape.ts';
 import { getUniverse } from './universe.ts';
 import { scoreAccession } from './score.ts';
@@ -108,6 +114,13 @@ const WATCH_MAX_DAYS = 90;
 const BACKFILL_FLOOR = (process.env.STOCKSCAN_CRAWL_FROM || '2019-01-01').slice(0, 10);
 const BACKFILL_KEY = 'crawl:backfill'; // { day } - the next (older) day to read
 const BACKFILL_SUBMISSIONS_TTL = 7 * 24 * 3600 * 1000; // an old day's filings: a filing list from this week will do
+// A company in the ticker table without a 10-K / 10-Q in the store is looked
+// up again after a day while it has a prospectus (its first report is what
+// everybody is waiting for; the final prospectus follows the draft), after
+// three when EDGAR shows nothing to read at all - that is mostly funds.
+const LISTING_TTL = 24 * 3600 * 1000;
+const LISTING_IDLE_TTL = 3 * LISTING_TTL;
+const LISTINGS_KEY = 'crawl:listings'; // cik -> { at, idle }
 const MAX_FAILS = 3; // give up on a filing that keeps failing to parse
 const LOG_EVERY = 10_000; // progress line during the sweep
 // Companies crawled at the same time. One filing is ~8 short SEC requests
@@ -367,9 +380,52 @@ export function createCrawler(client: SecClient, { prefetcher, enabled = true }:
     }
     for (const day of Object.keys(done)) if (day < edgarDay(WATCH_MAX_DAYS + 7)) delete done[day];
     store.putKV('crawl:days', done);
+    await newListings(known);
     state.lastWatch = new Date().toISOString();
     state.lastWatchDay = today;
     if (before === 'sweep' || before === 'backfill') state.phase = before;
+  }
+
+  // ---- newly listed companies ----
+  // Everything in the ticker table (`listed`) that the store has no periodic
+  // report of: the newest few when EDGAR has them, else what the company's
+  // prospectus reports.
+  async function newListings(listed: ReadonlySet<number>) {
+    const reported = store.companiesWith((form) => !isProspectusForm(form));
+    const checked: Record<string, { at: string; idle: boolean }> = store.getKV<Record<string, { at: string; idle: boolean }>>(LISTINGS_KEY)?.value || {};
+    for (const cik of Object.keys(checked)) if (!listed.has(Number(cik)) || reported.has(Number(cik))) delete checked[cik];
+    const due = [...listed].filter((cik) => {
+      const c = checked[cik];
+      return !reported.has(cik) && !(c && Date.now() - Date.parse(c.at) < (c.idle ? LISTING_IDLE_TTL : LISTING_TTL));
+    });
+    if (due.length > 50) console.log(`crawl: 代號表上有 ${n(due.length)} 家還沒有財報，逐家查 EDGAR（新上市、剛轉上市；基金沒有 10-K 會略過）`);
+    for (const cik of due) {
+      await yieldToUser();
+      try {
+        const company = await getCompany(low, String(cik), { refresh: true });
+        const wanted = newestPeriods(company.filings.filter((f) => !isProspectusForm(f.form)), FIRST_PASS);
+        const got: EdgarFiling[] = [];
+        for (const f of wanted) if (await saveLatest(company, f)) got.push(f);
+        let saved: readonly FilingRef[] = got;
+        if (!wanted.length) {
+          const p = await saveProspectus(low, company);
+          if (p) saved = (await getCompany(low, String(cik))).filings.filter((f) => p.accessions.includes(f.accession));
+        }
+        await scoreSaved(saved);
+        for (const f of saved) {
+          state.watched++;
+          state.watchLog.unshift({ at: new Date().toISOString(), day: edgarDay(), ticker: company.tickers?.[0] || null, cik, form: f.form, fiscalYear: f.fiscalYear, fiscalPeriod: f.fiscalPeriod, filingDate: f.filingDate });
+        }
+        state.watchLog.length = Math.min(state.watchLog.length, 50);
+        if (saved.length) console.log(`crawl: 新上市 ${company.tickers?.[0] || cik} ${company.name}：${saved.map((f) => `${f.form} ${f.fiscalYear} ${f.fiscalPeriod}`).join('、')}`);
+        checked[cik] = { at: new Date().toISOString(), idle: !wanted.length && !company.prospectuses?.length };
+        if (Object.keys(checked).length % 25 === 0) store.putKV(LISTINGS_KEY, checked); // a restart resumes here
+      } catch (err) {
+        state.failed++;
+        console.warn(`crawl new listing CIK ${cik}: ${(err as Error).message}`);
+      }
+    }
+    if (due.length) store.putKV(LISTINGS_KEY, checked);
   }
 
   // ---- backfill: the older filings, one EDGAR day at a time ----

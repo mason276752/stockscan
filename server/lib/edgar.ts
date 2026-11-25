@@ -3,7 +3,7 @@
 import { store } from './store.ts';
 import { barStore } from './barStore.ts';
 import { POPULAR_ETFS } from './etf.ts';
-import { DEFAULT_FORMS, filingUrls, fiscalLabel, pickFiling } from './filings.ts';
+import { DEFAULT_FORMS, filingUrls, fiscalLabel, isMergerForm, isProspectusForm, newestFirst, pickFiling } from './filings.ts';
 
 export { DEFAULT_FORMS, filingUrls, fiscalLabel, pickFiling };
 import type { Fetcher } from './secClient.ts';
@@ -61,6 +61,8 @@ export interface CompanyWithFilings extends Omit<Company, 'filings'> {
   filings: EdgarFiling[];
   filingsUpdatedAt: string;
   filingsStale: boolean;
+  /** what it went public with, best first; none once it has reported since */
+  prospectuses?: EdgarFiling[];
 }
 
 const TICKERS_URL = 'https://www.sec.gov/files/company_tickers_exchange.json';
@@ -171,11 +173,16 @@ export async function tickerTable(client: Fetcher): Promise<TickerRow[]> {
 
 // Only these forms are kept from a submissions list: the full list (every
 // 8-K, Form 4, …) is 1 MB+ for a large company and is never needed here.
+// The prospectus is kept as well, but only of a company that has nothing
+// else to read yet.
 const KEEP_FORMS = /^(10-|20-F|40-F|6-K)/;
-function trimSubmissions(sub: Submissions & SubmissionTable): Submissions & SubmissionTable {
+const PERIODIC = /^(10-[KQ]|20-F|40-F)/;
+export function trimSubmissions(sub: Submissions & SubmissionTable): Submissions & SubmissionTable {
+  const recent = sub.filings?.recent;
+  const young = !!recent && !(recent.form || []).some((f, i) => PERIODIC.test(f) && recent.isInlineXBRL?.[i]);
   const trimTable = (t: SubmissionTable): SubmissionTable => {
     const keep: number[] = [];
-    for (let i = 0; i < (t.accessionNumber || []).length; i++) if (KEEP_FORMS.test(t.form![i]!)) keep.push(i);
+    for (let i = 0; i < (t.accessionNumber || []).length; i++) if (KEEP_FORMS.test(t.form![i]!) || (young && isProspectusForm(t.form![i]))) keep.push(i);
     const pick = <T,>(arr: T[] | undefined) => (arr ? keep.map((i) => arr[i]!) : undefined);
     return { accessionNumber: pick(t.accessionNumber), form: pick(t.form), filingDate: pick(t.filingDate), reportDate: pick(t.reportDate), primaryDocument: pick(t.primaryDocument), isInlineXBRL: pick(t.isInlineXBRL) };
   };
@@ -237,6 +244,32 @@ function rowsOf(table: SubmissionTable): EdgarRow[] {
   return out;
 }
 
+// A company's prospectuses, in the order they are worth reading: the final
+// one, then its drafts, then a merger's - newest first. One filed long ago is
+// not how the company went public last month (a royalty trust that has never
+// tagged a 10-K still has its 1990s prospectus on EDGAR).
+const PROSPECTUS_DAYS = 550;
+const prospectusRank = (form: string): number => (/^424B[14]$/.test(form) ? 0 : isMergerForm(form) ? 2 : 1);
+function prospectusesOf(rows: readonly EdgarRow[]): EdgarRow[] {
+  if (rows.some((r) => PERIODIC.test(r.form) && r.isInlineXBRL)) return [];
+  const since = new Date(Date.now() - PROSPECTUS_DAYS * 86_400_000).toISOString().slice(0, 10);
+  return rows
+    .filter((r) => isProspectusForm(r.form) && /\.html?$/i.test(r.primaryDocument || '') && r.filingDate >= since)
+    .sort((a, b) => prospectusRank(a.form) - prospectusRank(b.form) || (a.filingDate < b.filingDate ? 1 : a.filingDate > b.filingDate ? -1 : 0));
+}
+
+// The periods read out of a company's prospectus (prospectus.ts), as entries
+// of its filing list: EDGAR lists the document once and knows none of them.
+function savedProspectusFilings(cik: number, fiscalYearEnd: string | null | undefined): EdgarFiling[] {
+  return store.filingIndex(cik).flatMap((r) => {
+    const h = isProspectusForm(r.form) ? store.filingHeader(r.accession) : null;
+    if (!h?.primaryDocument) return [];
+    const form = h.form!;
+    const reportDate = h.periodEnd || r.report_date;
+    return [{ cik, accession: r.accession, form, filingDate: h.filingDate || '', reportDate, primaryDocument: h.primaryDocument, isInlineXBRL: false, ...fiscalLabel(form, reportDate, fiscalYearEnd), ...filingUrls(cik, r.accession, h.primaryDocument, form) }];
+  });
+}
+
 // refresh=true bypasses the 10-minute cache (the UI's refresh button, for
 // the day a new 10-Q/10-K is filed); maxAge lengthens it (the crawler's
 // weekly sweep is happy with a list a few days old - the daily-index watch
@@ -277,8 +310,10 @@ export async function getCompany(client: Fetcher, tickerOrCik: string | number, 
       ...r,
       ...fiscalLabel(r.form, r.reportDate, sub.fiscalYearEnd),
       ...filingUrls(cik, r.accession, r.primaryDocument),
-    }))
-    .sort((a, b) => (a.filingDate < b.filingDate ? 1 : a.filingDate > b.filingDate ? -1 : 0));
+    }));
+  if (forms === DEFAULT_FORMS) filings.push(...savedProspectusFilings(cik, sub.fiscalYearEnd));
+  filings.sort(newestFirst);
+  const prospectuses = prospectusesOf(rows).map((r) => ({ cik, ...r, ...filingUrls(cik, r.accession, r.primaryDocument, r.form) }));
   return {
     cik,
     name: sub.name,
@@ -290,6 +325,7 @@ export async function getCompany(client: Fetcher, tickerOrCik: string | number, 
     filingsUpdatedAt: new Date(main.updatedAt).toISOString(),
     filingsStale: !!main.stale,
     filings,
+    ...(prospectuses.length ? { prospectuses } : {}),
   };
 }
 

@@ -16,7 +16,7 @@ import { fatten } from '../../server/lib/storeFormat.ts';
 import { currentView } from '../../server/lib/current.ts';
 import { buildQuarterly } from '../../server/lib/quarters.ts';
 import { buildIndicators } from '../../server/lib/indicators.ts';
-import { filingFile, filingUrls, pickFiling, scoreFile } from '../../server/lib/filings.ts';
+import { filingFile, filingUrls, isProspectusForm, pickFiling, scoreFile } from '../../server/lib/filings.ts';
 import { ITEMS, SCORE_VERSION, scoreFilingOf } from '../../server/lib/scoreModel.ts';
 import { SCREEN_FIELDS, asOfDate, asOfShardYears, browseCompanies, screenAsOfIndex, screenAsOfTable, screenQuery, screenTable, searchRows, wantsHistory } from '../../server/lib/screen.ts';
 import { FILER_STATUS, SIC, sicInfo } from '../../server/lib/sic.ts';
@@ -79,7 +79,7 @@ async function companyOf(id: string | number): Promise<StaticCompany> {
     // the store paths the index left out because they follow the naming
     const m = await data.meta();
     for (const f of c.filings) {
-      Object.assign(f, { cik, isInlineXBRL: true }, f.primaryDocument ? filingUrls(cik!, f.accession, f.primaryDocument) : {});
+      Object.assign(f, { cik, isInlineXBRL: !isProspectusForm(f.form) }, f.primaryDocument ? filingUrls(cik!, f.accession, f.primaryDocument, f.form) : {});
       f.file ??= filingFile(cik!, f, m.scrapeVersion as number);
       if (f.scoreFile === true) f.scoreFile = scoreFile(cik!, f, m.scoreVersion as number);
       else f.scoreFile ??= null;

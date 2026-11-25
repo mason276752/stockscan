@@ -22,7 +22,7 @@
 // once they are.
 
 import { C, ROWS, adequacyOver, first, loadPoints, quarterInputs, quarterKeys, ratios } from './indicators.ts';
-import { filingPeriodKey } from './filings.ts';
+import { filingPeriodKey, reportsQuarterly } from './filings.ts';
 import { balancesAt, costOfRevenueFromHeading, factsAt, months, noCostOfRevenue, statementOf } from './quarters.ts';
 import type { FilingLoader } from './quarters.ts';
 import type {
@@ -272,7 +272,7 @@ export function scoreFiling(data: ScrapeResult, { partial = false }: { partial?:
 export async function scoreFilingOf(load: FilingLoader, company: Company, filing: FilingRef): Promise<Score | null> {
   const own = filingPeriodKey(filing);
   company = { ...company, filings: company.filings.filter((f) => f.accession === filing.accession || filingPeriodKey(f) !== own) };
-  const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
+  const quarterly = reportsQuarterly(company.filings);
   const year = Number(filing.fiscalYear);
   const q = filing.fiscalPeriod === 'FY' ? 4 : Number(String(filing.fiscalPeriod || '').slice(1));
   if (!quarterly || !year || !(q >= 1 && q <= 4)) return scoreFiling(await load(filing));

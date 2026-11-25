@@ -611,19 +611,20 @@ onMounted(() => {
               {{ data.filing.fiscalPeriod === 'FY' ? `FY${data.filing.fiscalYear}` : `FY${data.filing.fiscalYear} ${data.filing.fiscalPeriod}` }} · {{ t('meta.periodEnd') }} {{ data.filing.periodEnd }} · {{ t('meta.filingDate') }} {{ data.filing.filingDate }}
             </div>
             <div class="links">
-              <a v-if="!data.derived" :href="data.filing.viewerUrl ?? undefined" target="_blank" rel="noopener">{{ t('meta.secLink') }}</a>
+              <a v-if="!data.derived" :href="data.filing.viewerUrl ?? undefined" target="_blank" rel="noopener">{{ t(data.filing.source === 'prospectus' ? 'meta.secDoc' : 'meta.secLink') }}</a>
               <a v-if="!isStatic" :href="jsonUrl ?? undefined" target="_blank" rel="noopener">JSON</a>
               <span class="muted small">{{ data.stats.facts }} facts<template v-if="data.stats.contexts"> · {{ data.stats.contexts }} contexts</template></span>
             </div>
           </div>
           <Note v-if="data.view === 'current' && !isIndicators && !isValuation && !isChart">
-            {{ t('note.current', { is: data.filing.form?.startsWith('10-Q') ? t('note.currentQ') : t('note.currentFY') }) }}
+            {{ t('note.current', { is: data.filing.fiscalPeriod?.startsWith('Q') ? t('note.currentQ') : t('note.currentFY') }) }}
             <template v-if="data.previous">{{ t('note.previous', { year: data.previous.fiscalYear, period: data.previous.fiscalPeriod }) }}</template>
             <template v-for="n in data.notes!.filter((x) => x.code === 'ytdOnly')" :key="n.title"> {{ t('note.ytdOnly', n) }}</template>
             {{ t('note.compare') }}
           </Note>
           <Note v-if="data.derived && !isIndicators && !isValuation && !isChart">{{ t('note.derived') }}</Note>
           <Note v-if="data.filing?.source === 'dera' && !isChart">{{ t('note.dera') }}</Note>
+          <Note v-if="data.filing?.source === 'prospectus' && !isChart">{{ t('note.prospectus', { form: data.filing.form }) }}</Note>
 
           <div class="toolbar">
             <div class="tabs">

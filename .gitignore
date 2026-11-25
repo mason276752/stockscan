@@ -6,5 +6,7 @@ web/dist/
 # 由 Pages 的 workflow 更新；本機用 `git restore --source=FETCH_HEAD -- data/store data/bars` 取回。
 # cache.sqlite、今年的 head.zst 等其他 data/ 底下的東西本來就不進 git。
 data/
+# 這條連 server/data/ 也會擋（SIC 表、zstd 字典、標籤字典），那些是程式的一部分
+!server/data/
 web/dist-static/
 tools/stockscan-static/target*/

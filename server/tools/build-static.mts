@@ -140,7 +140,7 @@ openStore();
 const { SCRAPE_VERSION } = await import('../lib/scrape.ts');
 const { SCORE_VERSION, asOfIndex, latestScores } = await import('../lib/score.ts');
 const { filerCounts, asOfShardOf, asOfSubset, screenColumns, screenRows, scoreBadge, sicCounts } = await import('../lib/screen.ts');
-const { fiscalLabel, filingFile, scoreFile, DEFAULT_FORMS } = await import('../lib/filings.ts');
+const { fiscalLabel, filingFile, scoreFile, DEFAULT_FORMS, PROSPECTUS_FORMS, newestFirst } = await import('../lib/filings.ts');
 const { PAGES_LIMIT_MB, publishBudget, publishMb } = await import('../lib/publish.ts');
 const { lookupFiler, sicInfo } = await import('../lib/universe.ts');
 const { POPULAR_ETFS } = await import('../lib/etf.ts');
@@ -340,7 +340,7 @@ console.log('build-static: reading filing headers …');
 const filingsByCik = new Map<number, ReturnType<typeof store.allFilings>>();
 for (const f of store.allFilings()) (filingsByCik.get(f.cik) || filingsByCik.set(f.cik, []).get(f.cik)!).push(f);
 const scoreFiles = new Map(store.allScores().filter((s) => s.version === SCORE_VERSION).map((s) => [s.accession, s.file]));
-const allowed = new Set(DEFAULT_FORMS.map((f) => f.toUpperCase()));
+const allowed = new Set([...DEFAULT_FORMS, ...PROSPECTUS_FORMS].map((f) => f.toUpperCase()));
 const companies: Record<number, unknown> = {};
 let headers = 0;
 for (const [cik, list] of filingsByCik) {
@@ -372,7 +372,7 @@ for (const [cik, list] of filingsByCik) {
     filings.push(f);
   }
   if (!filings.length) continue;
-  filings.sort((a, b) => (a.filingDate! < b.filingDate! ? 1 : a.filingDate! > b.filingDate! ? -1 : 0));
+  filings.sort(newestFirst);
   companies[cik] = {
     cik,
     name: sub?.name || u?.name || tickers.find((t) => t.cik === cik)?.name || String(cik),

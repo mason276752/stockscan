@@ -8,7 +8,7 @@
 //                 quarters earlier. With a Q4 end these are exactly the fiscal years.
 // Columns are ordered oldest -> newest.
 
-import { pickFiling } from './filings.ts';
+import { pickFiling, reportsQuarterly } from './filings.ts';
 import { yearQuarterPoints } from './quarters.ts';
 import { C } from './concepts.ts';
 import type { FilingLoader } from './quarters.ts';
@@ -343,7 +343,7 @@ export interface IndicatorQuery {
 }
 
 export async function buildIndicators(load: FilingLoader, company: Company, { year, period, n = 20, basis = 'x4', mode = 'quarter' }: IndicatorQuery): Promise<Indicators> {
-  const quarterly = company.filings.some((f) => f.fiscalPeriod && f.fiscalPeriod.startsWith('Q'));
+  const quarterly = reportsQuarterly(company.filings);
   const endQ = period === 'FY' ? 4 : Number(period.slice(1));
   const yearMode = mode === 'year' && quarterly;
   const sameMode = mode === 'same' && quarterly; // the chosen quarter only, one column per year

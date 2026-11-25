@@ -537,6 +537,13 @@ export const store = {
     for (const f of filings.values()) if (f.cik === Number(cik)) n++;
     return n;
   },
+  // the companies with a saved filing whose form passes (from the file names)
+  companiesWith(want: (form: string | null) => boolean): Set<number> {
+    need();
+    const out = new Set<number>();
+    for (const f of filings.values()) if (!out.has(f.cik) && want(f.form)) out.add(f.cik);
+    return out;
+  },
   // every saved filing / score (light: from the file names), with the file's
   // path relative to the store - for the static-site build
   allFilings(): FilingRecord[] {

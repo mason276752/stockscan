@@ -8,6 +8,33 @@ const ARCHIVES = 'https://www.sec.gov/Archives/edgar/data';
 
 export const DEFAULT_FORMS = ['10-K', '10-Q', '20-F', '40-F', '10-K/A', '10-Q/A', '20-F/A'];
 
+// What a company that has only just gone public has filed instead: the
+// prospectus, or the registration statement it is the final form of. Read
+// (prospectus.ts) only while there is no periodic report of the company's.
+// 424B2 and 424B5 are left out on purpose - those are takedowns by companies
+// that have been listed for years. The last group is a merger's: the
+// company's statements stand in it beside the other party's.
+const IPO_FORMS = ['424B4', '424B1', 'S-1', 'S-1/A', 'F-1', 'F-1/A', 'S-11', 'S-11/A', '10-12B', '10-12B/A', '20FR12B', '20FR12B/A'];
+const MERGER_FORMS = ['424B3', 'S-4', 'S-4/A', 'F-4', 'F-4/A'];
+export const PROSPECTUS_FORMS = [...IPO_FORMS, ...MERGER_FORMS];
+const PROSPECTUS = new Set(PROSPECTUS_FORMS);
+const MERGER = new Set(MERGER_FORMS);
+export const isProspectusForm = (form: string | null | undefined): boolean => PROSPECTUS.has(String(form || '').toUpperCase());
+export const isMergerForm = (form: string | null | undefined): boolean => MERGER.has(String(form || '').toUpperCase());
+
+// One prospectus reports several periods and the store keeps one filing per
+// accession, so the periods before the newest get a key of their own: the
+// accession with the period end after it. EDGAR's own number is always the
+// first twenty characters.
+export const periodAccession = (accession: string, end: IsoDate): string => `${accession}.${end.replace(/-/g, '')}`;
+export const edgarAccession = (accession: string): string => accession.slice(0, 20);
+
+// Whether the company reports by quarter. The interim period of a prospectus
+// does not say so: it comes with no quarter before or after it, so read as a
+// quarterly filer's the company would have no flows at all.
+export const reportsQuarterly = (filings: readonly { form?: string | null; fiscalPeriod?: string | null }[]): boolean =>
+  filings.some((f) => !!f.fiscalPeriod && f.fiscalPeriod.startsWith('Q') && !isProspectusForm(f.form));
+
 /** Where the documents of one filing live on EDGAR. */
 export interface FilingUrls {
   folderUrl: string;
@@ -16,14 +43,17 @@ export interface FilingUrls {
   indexUrl: string;
 }
 
-export function filingUrls(cik: number | string, accession: string, primaryDocument: string): FilingUrls {
-  const nodash = accession.replace(/-/g, '');
+export function filingUrls(cik: number | string, accession: string, primaryDocument: string, form: string | null = null): FilingUrls {
+  const own = edgarAccession(accession);
+  const nodash = own.replace(/-/g, '');
   const folderUrl = `${ARCHIVES}/${cik}/${nodash}`;
+  const documentUrl = `${folderUrl}/${primaryDocument}`;
   return {
     folderUrl,
-    documentUrl: `${folderUrl}/${primaryDocument}`,
-    viewerUrl: `https://www.sec.gov/ix?doc=/Archives/edgar/data/${cik}/${nodash}/${primaryDocument}`,
-    indexUrl: `${folderUrl}/${accession}-index.html`,
+    documentUrl,
+    // SEC's viewer only opens Inline XBRL
+    viewerUrl: isProspectusForm(form) ? documentUrl : `https://www.sec.gov/ix?doc=/Archives/edgar/data/${cik}/${nodash}/${primaryDocument}`,
+    indexUrl: `${folderUrl}/${own}-index.html`,
   };
 }
 
@@ -48,8 +78,10 @@ export function fiscalLabel(form: string, reportDate: IsoDate | null | undefined
   const fyeMonth = fiscalYearEnd && /^\d{4}$/.test(fiscalYearEnd) ? Number(fiscalYearEnd.slice(0, 2)) : 12;
   const fiscalYear = month <= fyeMonth ? year : year + 1;
   const base = form.toUpperCase().replace(/\/A$/, '');
-  if (base !== '10-Q') return { fiscalYear, fiscalPeriod: 'FY' };
   const monthsIntoYear = ((((month - fyeMonth - 1) % 12) + 12) % 12) + 1;
+  // a prospectus holds years and an interim period: the date says which (a
+  // 52/53-week year may end in the month before EDGAR's)
+  if (base !== '10-Q' && !(isProspectusForm(form) && monthsIntoYear < 11)) return { fiscalYear, fiscalPeriod: 'FY' };
   return { fiscalYear, fiscalPeriod: `Q${Math.ceil(monthsIntoYear / 3)}` };
 }
 
@@ -93,7 +125,11 @@ export interface AmendableFiling {
 const periodKeys = new WeakMap<AmendableFiling, string>();
 export function filingPeriodKey(f: AmendableFiling): string {
   let key = periodKeys.get(f);
-  if (key === undefined) periodKeys.set(f, (key = `${String(f.form || '').toUpperCase().replace(/\/A$/, '')}@${f.periodEnd || f.reportDate || ''}`));
+  if (key === undefined) {
+    // every prospectus of a company is a version of the same thing
+    const form = isProspectusForm(f.form) ? 'PROSPECTUS' : String(f.form || '').toUpperCase().replace(/\/A$/, '');
+    periodKeys.set(f, (key = `${form}@${f.periodEnd || f.reportDate || ''}`));
+  }
   return key;
 }
 
@@ -119,7 +155,11 @@ export function collapseAmendments<T extends AmendableFiling>(filings: readonly 
     if (i === undefined) at.set(key, out.push(f) - 1);
     else if (better(f, out[i]!)) out[i] = f;
   }
-  return out;
+  // the 10-K or 10-Q of a period takes the place of the prospectus that
+  // reported it first
+  if (!out.some((f) => isProspectusForm(f.form))) return out;
+  const reported = new Set(out.filter((f) => !isProspectusForm(f.form)).map((f) => f.periodEnd || f.reportDate));
+  return out.filter((f) => !isProspectusForm(f.form) || !reported.has(f.periodEnd || f.reportDate));
 }
 
 /** A filing row that also carries the fiscal labels the picker filters on. */
@@ -141,6 +181,13 @@ export function pickFiling<T extends PickableFiling>(filings: readonly T[], { ye
   if (year) list = list.filter((f) => f.fiscalYear === Number(year));
   if (period) list = list.filter((f) => f.fiscalPeriod === period.toUpperCase());
   return collapseAmendments(list, thin)[0] || null;
+}
+
+// A filing list's order: newest filed first, and of the periods one document
+// reports (a prospectus) the newest.
+export function newestFirst(a: { filingDate?: IsoDate | null; reportDate?: IsoDate | null }, b: { filingDate?: IsoDate | null; reportDate?: IsoDate | null }): number {
+  if ((a.filingDate || '') !== (b.filingDate || '')) return (a.filingDate || '') < (b.filingDate || '') ? 1 : -1;
+  return (a.reportDate || '') < (b.reportDate || '') ? 1 : (a.reportDate || '') > (b.reportDate || '') ? -1 : 0;
 }
 
 /** The fields the store's file naming needs off a filing. */
